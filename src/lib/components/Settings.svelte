@@ -20,6 +20,7 @@
     { id: 'accounts', label: 'Accounts' },
     { id: 'sync', label: 'Sync & Storage' },
     { id: 'reading', label: 'Reading' },
+    { id: 'compose', label: 'Compose & Reply' },
     { id: 'notifications', label: 'Notifications' },
     { id: 'shortcuts', label: 'Shortcuts' },
     { id: 'about', label: 'About' },
@@ -61,21 +62,23 @@
   ];
 
   
-  const syncFreqStops = [1, 2, 3, 5, 10, 15, 30];
+  const syncFreqStops = [5, 10, 15, 30, 60, 120, 180, 300, 600, 900, 1800];
   const threadStops = [25, 50, 100, 150, 200, 300, 500];
   const cacheStops = [250, 500, 1000, 2000, 5000, 10000, 50000];
 
   function freqToSlider(val: string): number {
-    const n = parseInt(val) || 5;
+    const n = parseInt(val) || 300;
     const idx = syncFreqStops.indexOf(n);
-    return idx >= 0 ? idx : 3;
+    return idx >= 0 ? idx : 7;
   }
   function sliderToFreq(pos: number): string {
-    return String(syncFreqStops[pos] || 5);
+    return String(syncFreqStops[pos] || 300);
   }
   function freqLabel(val: string): string {
-    const n = parseInt(val) || 5;
-    return n === 1 ? '1 minute' : `${n} minutes`;
+    const n = parseInt(val) || 300;
+    if (n < 60) return `${n} seconds`;
+    const m = n / 60;
+    return m === 1 ? '1 minute' : `${m} minutes`;
   }
   function threadToSlider(val: string): number {
     const n = parseInt(val) || 100;
@@ -103,7 +106,6 @@
 {#if show}
 
 <div class="settings-backdrop" onclick={onclose} role="button" tabindex="-1" onkeydown={(e) => { if (e.key === 'Escape') onclose(); }}>
-  
   <div class="settings-modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-label="Settings">
     <div class="settings-header">
       <h2>Settings</h2>
@@ -163,14 +165,14 @@
             <div class="setting-group">
               <div class="setting-label">
                 <span class="setting-name">Sync Frequency</span>
-                <span class="setting-hint">{settings.sync_frequency === 'manual' ? 'Manual refresh only' : `Check every ${freqLabel(settings.sync_frequency || '5')}`}</span>
+                <span class="setting-hint">{settings.sync_frequency === 'manual' ? 'Manual refresh only' : `Check every ${freqLabel(settings.sync_frequency || '15')}`}</span>
               </div>
               <div class="slider-row">
                 <input type="range" class="range-slider" min="0" max={syncFreqStops.length - 1} step="1"
-                  value={freqToSlider(settings.sync_frequency || '5')}
+                  value={freqToSlider(settings.sync_frequency || '15')}
                   disabled={settings.sync_frequency === 'manual'}
                   oninput={(e) => saveSetting('sync_frequency', sliderToFreq(parseInt(e.currentTarget.value)))} />
-                <span class="slider-value">{settings.sync_frequency === 'manual' ? '—' : freqLabel(settings.sync_frequency || '5')}</span>
+                <span class="slider-value">{settings.sync_frequency === 'manual' ? '—' : freqLabel(settings.sync_frequency || '15')}</span>
               </div>
               <label class="toggle-row compact">
                 <input type="checkbox" class="toggle" checked={settings.sync_frequency === 'manual'}
@@ -233,6 +235,38 @@
                   <button class="option-btn {(settings.mark_read_delay || '2') === val ? 'selected' : ''}" onclick={() => saveSetting('mark_read_delay', val)}>{label}</button>
                 {/each}
               </div>
+            </div>
+          </div>
+
+        {:else if activeTab === 'compose'}
+          <div class="section">
+            <div class="section-title">Compose & Reply</div>
+            <p class="section-desc">Adjust default settings for sending messages.</p>
+
+            <div class="setting-group">
+              <div class="setting-label">
+                <span class="setting-name">Default Reply Behavior</span>
+                <span class="setting-hint">Choose default action</span>
+              </div>
+              <div class="option-group">
+                {#each [['reply', 'Reply'], ['reply_all', 'Reply All']] as [val, label]}
+                  <button class="option-btn {(settings.default_reply || 'reply') === val ? 'selected' : ''}" onclick={() => saveSetting('default_reply', val)}>{label}</button>
+                {/each}
+              </div>
+            </div>
+
+            <div class="setting-group" style="flex-direction: column; align-items: flex-start; gap: 12px; border-bottom: none; border-top: 1px solid var(--border-color); padding-top: 16px; margin-top: 8px;">
+              <div class="setting-label">
+                <span class="setting-name">Email Signature</span>
+                <span class="setting-hint">Appended at the end of all outgoing messages (HTML supported)</span>
+              </div>
+              <textarea 
+                class="signature-input" 
+                placeholder="Sent from Rustymail"
+                value={settings.signature || ''}
+                oninput={(e) => { settings.signature = e.currentTarget.value; }}
+                onblur={(e) => saveSetting('signature', e.currentTarget.value)}
+              ></textarea>
             </div>
           </div>
 
@@ -391,14 +425,6 @@
     line-height: 1.4;
   }
 
-  
-  .setting-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px 0;
-    border-bottom: 1px solid var(--border-color);
-  }
   .setting-row:last-child { border-bottom: none; }
 
   .setting-group {
@@ -440,7 +466,6 @@
     color: white;
   }
 
-  
   .slider-row {
     display: flex;
     align-items: center;
@@ -511,7 +536,25 @@
   .select-input:focus { border-color: var(--accent-blue); outline: none; }
   .select-input.compact { width: auto; min-width: 120px; }
 
-  
+  .signature-input {
+    width: 100%;
+    min-height: 80px;
+    background: var(--bg-list);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 10px;
+    font-size: 13px;
+    color: var(--text-primary);
+    font-family: inherit;
+    resize: vertical;
+    outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .signature-input:focus {
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 0 3px rgba(10,132,255,0.15);
+  }
+
   .toggle-row {
     display: flex;
     justify-content: space-between;
@@ -552,7 +595,6 @@
   .toggle:checked { background: var(--accent-blue); border-color: var(--accent-blue); }
   .toggle:checked::after { transform: translateX(16px); }
 
-  
   .account-list { display: flex; flex-direction: column; gap: 8px; }
 
   .account-row {
@@ -603,7 +645,6 @@
   }
   .btn-add-account:hover { border-color: var(--accent-blue); color: var(--accent-blue); background: rgba(10,132,255,0.04); }
 
-  
   .shortcut-list { display: flex; flex-direction: column; gap: 4px; }
   .shortcut-row {
     display: flex; justify-content: space-between; align-items: center;
@@ -616,7 +657,6 @@
     min-width: 36px; text-align: center;
   }
 
-  
   .about-section {
     display: flex; flex-direction: column; align-items: center;
     text-align: center; padding-top: 40px;
