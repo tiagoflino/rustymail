@@ -2,9 +2,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
   import { isAuthenticated } from '$lib/stores/auth';
-  import { threads, isSyncing, lastSyncError, type LocalThread as StoreThread } from '$lib/stores/threads';
-  
-  interface LocalThread extends StoreThread { starred: bool; }
+  import { threads, isSyncing, lastSyncError, type LocalThread } from '$lib/stores/threads';
   import { selectedThreadId, currentMessages, isMessagesLoading, messagesError, type LocalMessage } from '$lib/stores/messages';
   import { writable } from 'svelte/store';
   import { getLabelIcon, formatLabelName, iconInbox, iconArchive, iconTrash, iconMail, iconSearch, iconRefresh, iconClose, iconSettings, iconUser, iconChevronDown, iconPlus, iconShield, iconZap, iconGlobe, iconCalendar, iconTag, iconHistory, iconStar, iconStarFilled } from '$lib/components/icons';
@@ -604,24 +602,31 @@
         <ul class="sidebar-menu">
           {#each $labels.filter(l => l.type === 'system' && !l.name.startsWith("CATEGORY_") && l.name !== "UNREAD") as label}
             <li>
-              <button class="sidebar-item {$selectedLabelId === label.id ? 'active' : ''}" onclick={() => selectLabel(label.id)}>
+              <div class="sidebar-item {$selectedLabelId === label.id ? 'active' : ''}" 
+                role="button" tabindex="0"
+                onclick={() => selectLabel(label.id)}
+                onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') selectLabel(label.id); }}>
                 <span class="icon">{@html getLabelIcon(label.name)}</span>
                 <span class="label-text">{formatLabelName(label.name)}</span>
                 {#if label.unread_count > 0}<span class="badge">{label.unread_count}</span>{/if}
-              </button>
+              </div>
             </li>
           {/each}
         </ul>
+
         {#if $labels.filter(l => l.type === 'user').length > 0}
           <h2 class="sidebar-heading">Labels</h2>
           <ul class="sidebar-menu">
             {#each $labels.filter(l => l.type === 'user') as label}
               <li>
-                <button class="sidebar-item {$selectedLabelId === label.id ? 'active' : ''}" onclick={() => selectLabel(label.id)}>
+                <div class="sidebar-item {$selectedLabelId === label.id ? 'active' : ''}" 
+                  role="button" tabindex="0"
+                  onclick={() => selectLabel(label.id)}
+                  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') selectLabel(label.id); }}>
                   <span class="icon">{@html getLabelIcon('FOLDER')}</span>
                   <span class="label-text">{label.name}</span>
                   {#if label.unread_count > 0}<span class="badge">{label.unread_count}</span>{/if}
-                </button>
+                </div>
               </li>
             {/each}
           </ul>
@@ -925,12 +930,12 @@
   .sidebar-content { flex: 1; overflow-y: auto; padding: 12px; }
   .sidebar-heading { font-size: 10px; text-transform: uppercase; color: var(--text-secondary); letter-spacing: 0.8px; margin: 14px 8px 6px; font-weight: 700; opacity: 0.7; }
   .sidebar-menu { list-style: none; margin-bottom: 8px; }
-  .sidebar-item { display: flex; align-items: center; padding: 6px 10px; margin: 1px 0; border-radius: 6px; font-size: 13px; color: var(--text-primary); cursor: pointer; width: 100%; background: none; border: none; text-align: left; font-family: var(--font-family); transition: background 0.15s ease; }
-  .sidebar-item .icon { width: 18px; height: 18px; margin-right: 8px; opacity: 0.7; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-  .sidebar-item .label-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sidebar-item { display: flex; align-items: center; padding: 6px 12px; margin: 2px 0; border-radius: 8px; font-size: 13px; color: var(--text-primary); cursor: pointer; width: 100%; background: none; border: none; text-align: left; font-family: var(--font-family); transition: background 0.1s ease; font-weight: 400; transform: translateZ(0); backface-visibility: hidden; -webkit-font-smoothing: antialiased; }
+  .sidebar-item .icon { width: 18px; height: 18px; margin-right: 10px; opacity: 0.7; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .sidebar-item .label-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }
   .sidebar-item .badge { font-size: 11px; font-weight: 600; color: var(--text-secondary); min-width: 20px; text-align: right; }
-  .sidebar-item:hover { background: var(--sidebar-hover); }
-  .sidebar-item.active { background: var(--accent-blue); color: white; }
+  .sidebar-item:hover { background: var(--sidebar-hover); font-weight: 400; }
+  .sidebar-item.active { background: var(--accent-blue); color: white; font-weight: 400; }
   .sidebar-item.active .icon { opacity: 1; color: white; }
   .sidebar-item.active .badge { color: rgba(255,255,255,0.8); }
   .sidebar-bottom { flex-shrink: 0; padding: 8px; display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--border-color); overflow: hidden; }
@@ -1002,12 +1007,13 @@
   .thread-content { flex: 1; overflow: hidden; display: flex; flex-direction: column; gap: 2px; }
   .thread-content-header { display: flex; justify-content: space-between; align-items: baseline; }
   .thread-sender { font-weight: 500; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .thread-time { font-size: 11px; color: var(--text-secondary); white-space: nowrap; margin-left: 8px; flex-shrink: 0; }
-  .thread-subject { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary); }
-  .thread-snippet { font-size: 12px; color: var(--text-secondary); opacity: 0.85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .thread-item.unread .thread-sender { font-weight: 700; color: var(--text-primary); }
-  .thread-item.unread .thread-subject { font-weight: 600; color: var(--text-primary); }
-  .thread-item.unread .thread-snippet { color: var(--text-primary); opacity: 0.95; }
+  .thread-time { font-size: 11px; color: var(--text-secondary); white-space: nowrap; margin-left: 8px; flex-shrink: 0; font-weight: 400; }
+  .thread-subject { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary); font-weight: 400; }
+  .thread-snippet { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 400; }
+  .thread-item.unread .thread-sender { font-weight: 700; color: var(--text-primary); -webkit-font-smoothing: auto; }
+  .thread-item.unread .thread-subject { font-weight: 600; color: var(--text-primary); -webkit-font-smoothing: auto; }
+  .thread-item.unread .thread-time { color: var(--text-primary); font-weight: 500; }
+  .thread-item.unread .thread-snippet { color: #3c3c3e; font-weight: 400; }
 
   .pane-view { display: flex; flex-direction: column; background: var(--bg-view); height: 100%; }
   .message-toolbar { height: 44px; display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid var(--border-color); gap: 4px; flex-shrink: 0; }

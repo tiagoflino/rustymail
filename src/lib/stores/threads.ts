@@ -5,6 +5,10 @@ export interface LocalThread {
     snippet: string;
     history_id: string;
     unread: number;
+    sender: string;
+    subject: string;
+    internal_date: number;
+    starred: boolean;
 }
 
 export const threads = writable<LocalThread[]>([]);

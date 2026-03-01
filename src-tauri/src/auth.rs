@@ -14,11 +14,6 @@ use std::env;
 
 
 
-#[derive(sqlx::FromRow, Clone)]
-struct ActiveAccount {
-    id: String,
-    access_token: String,
-}
 
 #[derive(sqlx::FromRow)]
 struct ActiveAccountFull {
@@ -28,13 +23,13 @@ struct ActiveAccountFull {
     token_expiry: Option<i64>,
 }
 
-async fn get_active_account(pool: &sqlx::SqlitePool) -> Result<ActiveAccount, String> {
+async fn get_active_account(pool: &sqlx::SqlitePool) -> Result<ActiveAccountFull, String> {
     let account = sqlx::query_as::<_, ActiveAccountFull>(
         "SELECT id, access_token, refresh_token, token_expiry FROM accounts WHERE is_active = 1 LIMIT 1"
     )
         .fetch_one(pool)
         .await
-        .map_err(|_| "No authenticated account found. Please sign in first.".to_string())?;
+        .map_err(|e| format!("No active account found: {}", e))?;
 
     let now = chrono::Utc::now().timestamp();
     let expiry = account.token_expiry.unwrap_or(0);
@@ -48,11 +43,10 @@ async fn get_active_account(pool: &sqlx::SqlitePool) -> Result<ActiveAccount, St
             refresh_tok
         };
         if !token_to_use.is_empty() {
-            if let Err(e) = refresh_and_update(pool, &account.id, &token_to_use).await {
+            if let Err(_e) = refresh_and_update(pool, &account.id, &token_to_use).await {
             } else {
-                
-                return sqlx::query_as::<_, ActiveAccount>(
-                    "SELECT id, access_token FROM accounts WHERE is_active = 1 LIMIT 1"
+                return sqlx::query_as::<_, ActiveAccountFull>(
+                    "SELECT id, access_token, refresh_token, token_expiry FROM accounts WHERE is_active = 1 LIMIT 1"
                 )
                     .fetch_one(pool)
                     .await
@@ -61,10 +55,7 @@ async fn get_active_account(pool: &sqlx::SqlitePool) -> Result<ActiveAccount, St
         }
     }
 
-    Ok(ActiveAccount {
-        id: account.id,
-        access_token: account.access_token,
-    })
+    Ok(account)
 }
 
 
@@ -597,7 +588,13 @@ pub async fn get_labels(app_handle: tauri::AppHandle) -> Result<Vec<LocalLabel>,
     #[derive(sqlx::FromRow)]
     struct LabelRow { id: String, name: Option<String>, r#type: Option<String>, unread_count: Option<i32> }
 
-    let rows: Vec<LabelRow> = sqlx::query_as("SELECT id, name, type, unread_count FROM labels WHERE account_id = ? AND id NOT IN ('YELLOW_STAR', 'Yellow star') AND name NOT IN ('Yellow star', 'YELLOW_STAR') ORDER BY name ASC")
+    let rows: Vec<LabelRow> = sqlx::query_as(
+        "SELECT id, name, type, unread_count FROM labels 
+         WHERE account_id = ? 
+         AND UPPER(id) NOT IN ('YELLOW_STAR', 'CHAT', 'VOICEMAIL')
+         AND UPPER(name) NOT IN ('YELLOW_STAR', 'YELLOW STAR', 'CHAT', 'VOICEMAIL')
+         ORDER BY CASE WHEN type = 'system' THEN 0 ELSE 1 END, name ASC"
+    )
         .bind(&account.id)
         .fetch_all(pool.inner())
         .await
