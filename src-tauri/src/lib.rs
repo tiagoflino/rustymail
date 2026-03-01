@@ -43,6 +43,7 @@ pub fn run() {
             auth::archive_thread,
             auth::move_thread_to_trash,
             auth::mark_thread_read_status,
+            crate::auth::toggle_thread_star,
             auth::search_messages,
             auth::get_hydration_progress,
             auth::ensure_threads_hydrated,

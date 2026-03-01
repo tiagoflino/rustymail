@@ -410,6 +410,14 @@ pub async fn modify_thread(
         sqlx::query("UPDATE threads SET unread = 1 WHERE id = ?")
             .bind(thread_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
     }
+
+    if remove_labels.contains(&"STARRED".to_string()) {
+        sqlx::query("DELETE FROM thread_labels WHERE thread_id = ? AND label_id = 'STARRED'")
+            .bind(thread_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    } else if add_labels.contains(&"STARRED".to_string()) {
+        sqlx::query("INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?, 'STARRED')")
+            .bind(thread_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    }
     tx.commit().await.map_err(|e| e.to_string())?;
     Ok(())
 }

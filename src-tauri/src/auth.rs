@@ -597,7 +597,7 @@ pub async fn get_labels(app_handle: tauri::AppHandle) -> Result<Vec<LocalLabel>,
     #[derive(sqlx::FromRow)]
     struct LabelRow { id: String, name: Option<String>, r#type: Option<String>, unread_count: Option<i32> }
 
-    let rows: Vec<LabelRow> = sqlx::query_as("SELECT id, name, type, unread_count FROM labels WHERE account_id = ? ORDER BY name ASC")
+    let rows: Vec<LabelRow> = sqlx::query_as("SELECT id, name, type, unread_count FROM labels WHERE account_id = ? AND id NOT IN ('YELLOW_STAR', 'Yellow star') AND name NOT IN ('Yellow star', 'YELLOW_STAR') ORDER BY name ASC")
         .bind(&account.id)
         .fetch_all(pool.inner())
         .await
@@ -620,6 +620,7 @@ pub struct LocalThread {
     pub sender: String,
     pub subject: String,
     pub internal_date: i64,
+    pub starred: bool,
 }
 
 fn clean_sender_name(raw: Option<String>) -> String {
@@ -640,17 +641,19 @@ pub async fn get_threads(app_handle: tauri::AppHandle, label_id: Option<String>,
     let off = offset.unwrap_or(0);
     
     #[derive(sqlx::FromRow)]
-    struct ThreadRow {
-        id: String, snippet: Option<String>, history_id: Option<String>,
-        unread: Option<i32>, sender: Option<String>, subject: Option<String>, msg_date: Option<i64>,
+    struct TR { 
+        id: String, snippet: Option<String>, history_id: Option<String>, unread: Option<i32>, 
+        sender: Option<String>, subject: Option<String>, msg_date: Option<i64>,
+        starred: Option<i32> 
     }
 
-    let rows: Vec<ThreadRow> = if let Some(ref lid) = label_id {
+    let rows: Vec<TR> = if let Some(ref lid) = label_id {
         sqlx::query_as(
             "SELECT t.id, t.snippet, t.history_id, t.unread,
                     (SELECT m2.sender FROM messages m2 WHERE m2.thread_id = t.id ORDER BY m2.internal_date DESC LIMIT 1) as sender,
                     (SELECT m3.subject FROM messages m3 WHERE m3.thread_id = t.id ORDER BY m3.internal_date DESC LIMIT 1) as subject,
-                    (SELECT MAX(m4.internal_date) FROM messages m4 WHERE m4.thread_id = t.id) as msg_date
+                    (SELECT MAX(m4.internal_date) FROM messages m4 WHERE m4.thread_id = t.id) as msg_date,
+                    EXISTS (SELECT 1 FROM thread_labels tl WHERE tl.thread_id = t.id AND tl.label_id = 'STARRED') as starred
              FROM threads t
              INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = ?
              WHERE t.account_id = ?
@@ -663,7 +666,8 @@ pub async fn get_threads(app_handle: tauri::AppHandle, label_id: Option<String>,
             "SELECT t.id, t.snippet, t.history_id, t.unread,
                     (SELECT m2.sender FROM messages m2 WHERE m2.thread_id = t.id ORDER BY m2.internal_date DESC LIMIT 1) as sender,
                     (SELECT m3.subject FROM messages m3 WHERE m3.thread_id = t.id ORDER BY m3.internal_date DESC LIMIT 1) as subject,
-                    (SELECT MAX(m4.internal_date) FROM messages m4 WHERE m4.thread_id = t.id) as msg_date
+                    (SELECT MAX(m4.internal_date) FROM messages m4 WHERE m4.thread_id = t.id) as msg_date,
+                    EXISTS (SELECT 1 FROM thread_labels tl WHERE tl.thread_id = t.id AND tl.label_id = 'STARRED') as starred
              FROM threads t
              WHERE t.account_id = ?
              ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
@@ -676,6 +680,7 @@ pub async fn get_threads(app_handle: tauri::AppHandle, label_id: Option<String>,
         id: r.id, snippet: r.snippet.unwrap_or_default(), history_id: r.history_id.unwrap_or_default(),
         unread: r.unread.unwrap_or(0), sender: clean_sender_name(r.sender),
         subject: r.subject.unwrap_or_else(|| "No Subject".to_string()), internal_date: r.msg_date.unwrap_or(0),
+        starred: r.starred.unwrap_or(0) == 1,
     }).collect())
 }
 
@@ -871,7 +876,8 @@ async fn fetch_threads_by_ids(pool: &sqlx::SqlitePool, ids: &[String], account_i
         "SELECT t.id, t.snippet, t.history_id, t.unread,
                 (SELECT m2.sender FROM messages m2 WHERE m2.thread_id = t.id ORDER BY m2.internal_date DESC LIMIT 1) as sender,
                 (SELECT m3.subject FROM messages m3 WHERE m3.thread_id = t.id ORDER BY m3.internal_date DESC LIMIT 1) as subject,
-                (SELECT MAX(m4.internal_date) FROM messages m4 WHERE m4.thread_id = t.id) as msg_date
+                (SELECT MAX(m4.internal_date) FROM messages m4 WHERE m4.thread_id = t.id) as msg_date,
+                EXISTS (SELECT 1 FROM thread_labels tl WHERE tl.thread_id = t.id AND tl.label_id = 'STARRED') as starred
          FROM threads t
          WHERE t.id IN ({}) AND t.account_id = ?
          ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC",
@@ -879,7 +885,11 @@ async fn fetch_threads_by_ids(pool: &sqlx::SqlitePool, ids: &[String], account_i
     );
     
     #[derive(sqlx::FromRow)]
-    struct TR { id: String, snippet: Option<String>, history_id: Option<String>, unread: Option<i32>, sender: Option<String>, subject: Option<String>, msg_date: Option<i64> }
+    struct TR { 
+        id: String, snippet: Option<String>, history_id: Option<String>, unread: Option<i32>, 
+        sender: Option<String>, subject: Option<String>, msg_date: Option<i64>,
+        starred: Option<i32> 
+    }
 
     let mut q = sqlx::query_as::<_, TR>(&sql);
     for tid in ids { q = q.bind(tid); }
@@ -890,6 +900,7 @@ async fn fetch_threads_by_ids(pool: &sqlx::SqlitePool, ids: &[String], account_i
         id: r.id, snippet: r.snippet.unwrap_or_default(), history_id: r.history_id.unwrap_or_default(),
         unread: r.unread.unwrap_or(0), sender: clean_sender_name(r.sender),
         subject: r.subject.unwrap_or_else(|| "No Subject".to_string()), internal_date: r.msg_date.unwrap_or(0),
+        starred: r.starred.unwrap_or(0) == 1,
     }).collect())
 }
 
@@ -1037,6 +1048,14 @@ pub async fn save_recent_search(app_handle: tauri::AppHandle, query: String) -> 
         .bind(&json).execute(pool.inner()).await.map_err(|e| e.to_string())?;
     
     Ok(())
+}
+
+#[tauri::command]
+pub async fn toggle_thread_star(app_handle: tauri::AppHandle, thread_id: String, starred: bool) -> Result<(), String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+    let (add, remove) = if starred { (vec!["STARRED".to_string()], vec![]) } else { (vec![], vec!["STARRED".to_string()]) };
+    crate::gmail_api::modify_thread(pool.inner(), &account.id, &account.access_token, &thread_id, add, remove).await
 }
 
 #[tauri::command]

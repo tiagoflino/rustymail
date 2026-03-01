@@ -2,10 +2,12 @@
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
   import { isAuthenticated } from '$lib/stores/auth';
-  import { threads, isSyncing, lastSyncError, type LocalThread } from '$lib/stores/threads';
+  import { threads, isSyncing, lastSyncError, type LocalThread as StoreThread } from '$lib/stores/threads';
+  
+  interface LocalThread extends StoreThread { starred: bool; }
   import { selectedThreadId, currentMessages, isMessagesLoading, messagesError, type LocalMessage } from '$lib/stores/messages';
   import { writable } from 'svelte/store';
-  import { getLabelIcon, formatLabelName, iconInbox, iconArchive, iconTrash, iconMail, iconSearch, iconRefresh, iconClose, iconSettings, iconUser, iconChevronDown, iconPlus, iconShield, iconZap, iconGlobe, iconCalendar, iconTag, iconHistory } from '$lib/components/icons';
+  import { getLabelIcon, formatLabelName, iconInbox, iconArchive, iconTrash, iconMail, iconSearch, iconRefresh, iconClose, iconSettings, iconUser, iconChevronDown, iconPlus, iconShield, iconZap, iconGlobe, iconCalendar, iconTag, iconHistory, iconStar, iconStarFilled } from '$lib/components/icons';
   import Settings from '$lib/components/Settings.svelte';
   import Compose from '$lib/components/Compose.svelte';
   import CalendarSidebar from '$lib/components/CalendarSidebar.svelte';
@@ -376,6 +378,17 @@
     } catch (e) { console.error(`${action} failed`, e); threads.set(currentList); }
   }
 
+  async function toggleStar(threadId: string, currentStarred: boolean) {
+    const newState = !currentStarred;
+    threads.update(list => list.map(t => t.id === threadId ? { ...t, starred: newState } : t));
+    try {
+      await invoke('toggle_thread_star', { threadId, starred: newState });
+    } catch (e) {
+      console.error("Failed to toggle star", e);
+      threads.update(list => list.map(t => t.id === threadId ? { ...t, starred: currentStarred } : t));
+    }
+  }
+
   async function selectThread(threadId: string) {
     selectedThreadId.set(threadId);
     isMessagesLoading.set(true);
@@ -699,8 +712,17 @@
           </div>
         {:else}
           {#each $threads as thread}
-            <button class="thread-item {thread.unread > 0 ? 'unread' : ''} {$selectedThreadId === thread.id ? 'selected' : ''}" onclick={() => selectThread(thread.id)}>
-              <div class="thread-unread-dot"></div>
+            <div class="thread-item {thread.unread > 0 ? 'unread' : ''} {$selectedThreadId === thread.id ? 'selected' : ''}" 
+              role="button" tabindex="0"
+              onclick={() => selectThread(thread.id)}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') selectThread(thread.id); }}>
+              <div class="thread-item-leading">
+                <button class="thread-star {thread.starred ? 'starred' : ''}" 
+                  onclick={(e) => { e.stopPropagation(); toggleStar(thread.id, thread.starred); }}>
+                  {@html thread.starred ? iconStarFilled : iconStar}
+                </button>
+                <div class="thread-unread-dot"></div>
+              </div>
               <div class="thread-content">
                 <div class="thread-content-header">
                   <span class="thread-sender">{thread.sender}</span>
@@ -709,7 +731,7 @@
                 <div class="thread-subject">{thread.subject}</div>
                 <div class="thread-snippet">{decodeEntities(thread.snippet)}</div>
               </div>
-            </button>
+            </div>
           {/each}
           
           {#if hasMore}
@@ -968,10 +990,14 @@
   .loading-more { display: flex; justify-content: center; padding: 12px; }
   .load-more-sentinel { min-height: 1px; }
 
-  .thread-item { display: flex; padding: 10px 14px; border-bottom: 1px solid var(--border-color); cursor: pointer; align-items: flex-start; transition: background 0.1s ease; width: 100%; background: none; border-left: none; border-right: none; border-top: none; text-align: left; font-family: var(--font-family); color: var(--text-primary); }
+  .thread-item { display: flex; padding: 10px 14px; border-bottom: 1px solid var(--border-color); cursor: pointer; align-items: flex-start; transition: background 0.1s ease; width: 100%; text-align: left; font-family: var(--font-family); color: var(--text-primary); outline: none; }
   .thread-item:hover { background-color: var(--sidebar-hover); }
   .thread-item.selected { background-color: rgba(10,132,255,0.1); }
-  .thread-unread-dot { width: 8px; height: 8px; border-radius: 50%; background-color: transparent; margin-right: 8px; margin-top: 5px; flex-shrink: 0; transition: background 0.2s; }
+  .thread-item-leading { display: flex; flex-direction: column; align-items: center; gap: 4px; margin-right: 10px; flex-shrink: 0; width: 24px; }
+  .thread-star { background: none; border: none; padding: 4px; cursor: pointer; color: var(--text-secondary); opacity: 0.4; transition: all 0.2s; display: flex; align-items: center; justify-content: center; border-radius: 4px; }
+  .thread-star:hover { opacity: 1; background: rgba(255,255,255,0.05); }
+  .thread-star.starred { color: #f2a600; opacity: 1; }
+  .thread-unread-dot { width: 8px; height: 8px; border-radius: 50%; background-color: transparent; transition: background 0.2s; }
   .thread-item.unread .thread-unread-dot { background-color: var(--accent-blue); }
   .thread-content { flex: 1; overflow: hidden; display: flex; flex-direction: column; gap: 2px; }
   .thread-content-header { display: flex; justify-content: space-between; align-items: baseline; }

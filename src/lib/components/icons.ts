@@ -4,6 +4,7 @@
 export const iconInbox = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/></svg>`;
 
 export const iconStar = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
+export const iconStarFilled = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
 
 export const iconSent = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`;
 
@@ -52,7 +53,7 @@ export const iconHistory = `<svg xmlns="http://www.w3.org/2000/svg" width="16" h
 export function getLabelIcon(name: string): string {
     const n = name.toUpperCase();
     if (n === 'INBOX') return iconInbox;
-    if (n === 'STARRED') return iconStar;
+    if (n === 'STARRED') return iconStarFilled;
     if (n === 'SENT') return iconSent;
     if (n === 'DRAFT') return iconDraft;
     if (n === 'IMPORTANT') return iconImportant;
@@ -64,5 +65,6 @@ export function getLabelIcon(name: string): string {
 
 export function formatLabelName(name: string): string {
     if (name.startsWith("CATEGORY_")) return name.replace("CATEGORY_", "").toLowerCase().replace(/^\w/, (c: string) => c.toUpperCase());
-    return name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
+    const formatted = name.replace(/_/g, " ");
+    return formatted.charAt(0).toUpperCase() + formatted.slice(1).toLowerCase();
 }
