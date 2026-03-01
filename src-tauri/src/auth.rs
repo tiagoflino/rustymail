@@ -535,18 +535,15 @@ pub async fn sync_gmail_data(app_handle: tauri::AppHandle) -> Result<(), String>
         pool.inner(), &account.id, &account.access_token,
         Some(&["INBOX"]), 100,
     ).await?;
-    println!("[Sync] INBOX threads fetched.");
 
-    
     let inbox_unhydrated = crate::gmail_api::get_unhydrated_thread_ids(pool.inner(), &account.id).await;
     if !inbox_unhydrated.is_empty() {
         let batch: Vec<String> = inbox_unhydrated.into_iter().take(100).collect();
-        println!("[Sync] Hydrating {} inbox threads...", batch.len());
         crate::gmail_api::batch_hydrate_threads(
             pool.inner(), &account.id, &account.access_token, batch
         ).await;
     }
-    println!("[Sync] INBOX ready.");
+
 
     
     let bg_pool = pool.inner().clone();
@@ -554,23 +551,13 @@ pub async fn sync_gmail_data(app_handle: tauri::AppHandle) -> Result<(), String>
     let bg_token = account.access_token.clone();
     let bg_app = app_handle.clone();
     tokio::spawn(async move {
-        let labels: &[&str] = &["SENT", "STARRED", "DRAFT", "TRASH", "IMPORTANT", "SPAM"];
-        for label in labels {
-            let _ = crate::gmail_api::fetch_and_store_threads(
-                &bg_pool, &bg_account_id, &bg_token,
-                Some(&[label]), 50,
-            ).await;
-            println!("[BG] Fetched {} threads", label);
-        }
-
-        
         let all_unhydrated = crate::gmail_api::get_unhydrated_thread_ids(&bg_pool, &bg_account_id).await;
         if !all_unhydrated.is_empty() {
-            println!("[BG] Hydrating {} remaining threads...", all_unhydrated.len());
             crate::gmail_api::batch_hydrate_threads(
                 &bg_pool, &bg_account_id, &bg_token, all_unhydrated
             ).await;
         }
+
 
         
         let app_dir = bg_app.path().app_data_dir().unwrap_or_default();
@@ -583,10 +570,8 @@ pub async fn sync_gmail_data(app_handle: tauri::AppHandle) -> Result<(), String>
             .and_then(|r| r.value.parse().ok())
             .unwrap_or(500);
         if db_size_mb > max_mb {
-            println!("[BG] DB {}MB > {}MB limit, evicting...", db_size_mb, max_mb);
             crate::gmail_api::evict_old_message_bodies(&bg_pool, &bg_account_id, 200).await;
         }
-        println!("[BG] Background sync complete.");
     });
 
     Ok(())
@@ -1058,14 +1043,15 @@ pub async fn save_recent_search(app_handle: tauri::AppHandle, query: String) -> 
 pub async fn send_message(app_handle: tauri::AppHandle, to: String, subject: String, body: String) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
-    
+
     #[derive(sqlx::FromRow)]
     struct EmailRow { email: String }
     let row = sqlx::query_as::<_, EmailRow>("SELECT email FROM accounts WHERE id = ?")
         .bind(&account.id).fetch_one(pool.inner()).await.map_err(|e| e.to_string())?;
-        
+
     crate::gmail_api::send_message(&account.id, &row.email, &account.access_token, &to, &subject, &body).await
 }
+
 
 #[tauri::command]
 pub async fn save_draft(app_handle: tauri::AppHandle, to: String, subject: String, body: String) -> Result<(), String> {

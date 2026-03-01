@@ -44,6 +44,7 @@
   let isLoadingMore = false;
   let bgSyncDone = false;
   let globalSyncInterval: ReturnType<typeof setInterval> | null = null;
+  const labelLastSyncMap: Record<string, number> = {};
 
   
   type ThemeMode = 'system' | 'light' | 'dark';
@@ -160,15 +161,21 @@
   let isLabelFetching = false;
 
   async function loadThreads(reset = false) {
-    if (reset) { threadOffset = 0; hasMore = true; threads.set([]); }
+    if (reset && $threads.length > 0 && !isLabelFetching) {
+      
+    } else if (reset) {
+      threadOffset = 0; hasMore = true; threads.set([]);
+    }
+    
     try {
       const labelId = $selectedLabelId || null;
-      const fetched: LocalThread[] = await invoke('get_threads', { labelId, offset: threadOffset, limit: THREAD_PAGE_SIZE });
+      const fetched: LocalThread[] = await invoke('get_threads', { labelId, offset: reset ? 0 : threadOffset, limit: THREAD_PAGE_SIZE });
       
       if (reset && fetched.length === 0 && labelId) {
         isLabelFetching = true;
         try {
           await invoke('fetch_label_threads', { labelId });
+          if (labelId) labelLastSyncMap[labelId] = Date.now();
           const retried: LocalThread[] = await invoke('get_threads', { labelId, offset: 0, limit: THREAD_PAGE_SIZE });
           threads.set(retried);
           hasMore = retried.length >= THREAD_PAGE_SIZE;
@@ -178,9 +185,14 @@
         return;
       }
       
-      if (reset) { threads.set(fetched); } else { threads.update(t => [...t, ...fetched]); }
+      if (reset) { 
+        threads.set(fetched);
+        threadOffset = fetched.length;
+      } else { 
+        threads.update(t => [...t, ...fetched]);
+        threadOffset += fetched.length;
+      }
       hasMore = fetched.length >= THREAD_PAGE_SIZE;
-      threadOffset += fetched.length;
     } catch (e) { console.error("Failed to load threads", e); }
     observeSentinel();
   }
@@ -223,6 +235,7 @@
   }
 
   async function selectLabel(labelId: string) {
+    const prev = $selectedLabelId;
     selectedLabelId.set(labelId);
     selectedThreadId.set(null);
     currentMessages.set([]);
@@ -230,6 +243,25 @@
     searchQuery.set('');
     showSearchSuggestions = false;
     threadOffset = 0; hasMore = true;
+
+    if (prev !== labelId) {
+      threads.set([]);
+    }
+
+    if (labelId !== 'INBOX') {
+        const lastSync = labelLastSyncMap[labelId] || 0;
+        if (Date.now() - lastSync > 300000) { 
+            isSyncing.set(true);
+            try {
+                await invoke('fetch_label_threads', { labelId });
+                labelLastSyncMap[labelId] = Date.now();
+            } catch (e) { console.error("On-demand sync failed", e); }
+            finally { isSyncing.set(false); }
+        }
+    } else {
+        labelLastSyncMap['INBOX'] = Date.now();
+    }
+
     await loadThreads(true);
   }
 
