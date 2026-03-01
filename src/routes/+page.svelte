@@ -5,7 +5,7 @@
   import { threads, isSyncing, lastSyncError, type LocalThread } from '$lib/stores/threads';
   import { selectedThreadId, currentMessages, isMessagesLoading, messagesError, type LocalMessage } from '$lib/stores/messages';
   import { writable } from 'svelte/store';
-  import { getLabelIcon, formatLabelName, iconInbox, iconArchive, iconTrash, iconMail, iconSearch, iconRefresh, iconClose, iconSettings, iconUser, iconChevronDown, iconPlus, iconShield, iconZap, iconGlobe, iconCalendar } from '$lib/components/icons';
+  import { getLabelIcon, formatLabelName, iconInbox, iconArchive, iconTrash, iconMail, iconSearch, iconRefresh, iconClose, iconSettings, iconUser, iconChevronDown, iconPlus, iconShield, iconZap, iconGlobe, iconCalendar, iconTag, iconHistory } from '$lib/components/icons';
   import Settings from '$lib/components/Settings.svelte';
   import Compose from '$lib/components/Compose.svelte';
   import CalendarSidebar from '$lib/components/CalendarSidebar.svelte';
@@ -115,8 +115,11 @@
       
       await invoke('sync_gmail_data');
       
-      threadOffset = 0; hasMore = true;
-      await loadThreads(true);
+      if (!$searchQuery) {
+        threadOffset = 0; hasMore = true;
+        await loadThreads(true);
+      }
+      
       await loadLabels();
       isSyncing.set(false);
       
@@ -161,9 +164,10 @@
   let isLabelFetching = false;
 
   async function loadThreads(reset = false) {
-    if (reset && $threads.length > 0 && !isLabelFetching) {
+    if (reset && $threads.length > 0 && !isLabelFetching && !$searchQuery) {
       
     } else if (reset) {
+      if ($searchQuery && !isLabelFetching) return; 
       threadOffset = 0; hasMore = true; threads.set([]);
     }
     
@@ -648,7 +652,7 @@
               <div class="suggestion-section">Quick Filters</div>
               {#each [['from:', 'From sender'], ['to:', 'To recipient'], ['subject:', 'Subject contains'], ['has:attachment ', 'Has attachment'], ['is:unread ', 'Is unread']] as [val, label]}
                 <button class="suggestion-item filter" onmousedown={() => { searchInput = val; onSearchInput(); }}>
-                  <span class="suggestion-icon">🔍</span>
+                  <span class="suggestion-icon">{@html iconSearch}</span>
                   <span class="suggestion-text">{label}</span>
                   <span class="suggestion-detail">{val}</span>
                 </button>
@@ -656,7 +660,12 @@
             {:else}
               {#each searchSuggestions as s}
                 <button class="suggestion-item" onmousedown={() => applySuggestion(s.text)}>
-                  <span class="suggestion-icon">{s.kind === 'recent' ? '🕐' : s.kind === 'contact' ? '👤' : '📌'}</span>
+                  <span class="suggestion-icon">
+                    {#if s.kind === 'recent'} {@html iconHistory}
+                    {:else if s.kind === 'contact'} {@html iconUser}
+                    {:else} {@html iconTag}
+                    {/if}
+                  </span>
                   <span class="suggestion-text">{s.text}</span>
                   <span class="suggestion-detail">{s.detail}</span>
                 </button>
