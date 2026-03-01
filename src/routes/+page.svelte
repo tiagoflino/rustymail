@@ -5,8 +5,11 @@
   import { threads, isSyncing, lastSyncError, type LocalThread } from '$lib/stores/threads';
   import { selectedThreadId, currentMessages, isMessagesLoading, messagesError, type LocalMessage } from '$lib/stores/messages';
   import { writable } from 'svelte/store';
-  import { getLabelIcon, formatLabelName, iconInbox, iconArchive, iconTrash, iconMail, iconSearch, iconRefresh, iconClose, iconSettings, iconUser, iconChevronDown, iconPlus, iconShield, iconZap, iconGlobe } from '$lib/components/icons';
+  import { getLabelIcon, formatLabelName, iconInbox, iconArchive, iconTrash, iconMail, iconSearch, iconRefresh, iconClose, iconSettings, iconUser, iconChevronDown, iconPlus, iconShield, iconZap, iconGlobe, iconCalendar } from '$lib/components/icons';
   import Settings from '$lib/components/Settings.svelte';
+  import Compose from '$lib/components/Compose.svelte';
+  import CalendarSidebar from '$lib/components/CalendarSidebar.svelte';
+  import Toasts from '$lib/components/Toasts.svelte';
 
   interface LocalLabel { id: string; name: string; type: string; unread_count: number; }
   interface AccountInfo { id: string; email: string; display_name: string; avatar_url: string; is_active: boolean; }
@@ -22,7 +25,8 @@
   let showAccountDropdown = false;
   let showSettings = false;
   let isLoading = false;
-  let errorMsg = '';
+  let showCompose = false;
+  let showCalendar = false;
   let searchInput = '';
   let searchTimeout: ReturnType<typeof setTimeout> | null = null;
   let showSearchSuggestions = false;
@@ -39,6 +43,7 @@
   let hasMore = true;
   let isLoadingMore = false;
   let bgSyncDone = false;
+  let globalSyncInterval: ReturnType<typeof setInterval> | null = null;
 
   
   type ThemeMode = 'system' | 'light' | 'dark';
@@ -52,7 +57,7 @@
     const root = document.documentElement;
     if (mode === 'light') root.setAttribute('data-theme', 'light');
     else if (mode === 'dark') root.setAttribute('data-theme', 'dark');
-    else root.removeAttribute('data-theme'); 
+    else root.removeAttribute('data-theme');
     localStorage.setItem('rustymail-theme', mode);
   }
   function cycleTheme() {
@@ -76,14 +81,16 @@
   async function login() {
     try {
       isLoading = true;
-      errorMsg = '';
       await invoke('authenticate_gmail');
       isAuthenticated.set(true);
       await refreshAccountState();
       appState = 'authenticated';
       await performSync();
-    } catch (e) { errorMsg = String(e); }
-    finally { isLoading = false; }
+    } catch (e: any) {
+      console.error(e);
+      addToast(String(e), 'error', 6000);
+      isLoading = false;
+    }
   }
 
   async function refreshAccountState() {
@@ -133,6 +140,21 @@
     setTimeout(() => { bgSyncDone = true; clearInterval(interval); }, 120000);
   }
 
+  async function checkAndSetupSync() {
+    if (globalSyncInterval) clearInterval(globalSyncInterval);
+    try {
+      const freqStr = await invoke<string>('get_setting', { key: 'sync_frequency' });
+      if (freqStr && freqStr !== 'manual') {
+        const secs = parseInt(freqStr);
+        if (secs > 0) {
+          globalSyncInterval = setInterval(async () => {
+             if (!$isSyncing) await performSync();
+          }, secs * 1000);
+        }
+      }
+    } catch (e) { console.error("Could not fetch sync freq", e); }
+  }
+
   
 
   let isLabelFetching = false;
@@ -142,7 +164,6 @@
     try {
       const labelId = $selectedLabelId || null;
       const fetched: LocalThread[] = await invoke('get_threads', { labelId, offset: threadOffset, limit: THREAD_PAGE_SIZE });
-      
       
       if (reset && fetched.length === 0 && labelId) {
         isLabelFetching = true;
@@ -177,7 +198,6 @@
       hasMore = fetched.length >= THREAD_PAGE_SIZE;
       threadOffset += fetched.length;
     } else if (labelId) {
-      
       try {
         await invoke('fetch_label_threads', { labelId });
         const retried: LocalThread[] = await invoke('get_threads', { labelId, offset: threadOffset, limit: THREAD_PAGE_SIZE }).catch(() => []);
@@ -387,7 +407,6 @@
   
 
   onMount(async () => {
-    
     const saved = localStorage.getItem('rustymail-theme') as ThemeMode | null;
     if (saved) applyTheme(saved);
 
@@ -395,6 +414,7 @@
     if (appState === 'authenticated') {
       await loadLabels();
       await loadThreads(true);
+      await checkAndSetupSync();
     }
     
     setTimeout(() => setupIntersectionObserver(), 100);
@@ -470,7 +490,6 @@
         </div>
         <h1 class="onboard-title">Sign In</h1>
         <p class="onboard-tagline">Connect your Google account to get started.<br/>Rustymail never sees your password.</p>
-        {#if errorMsg}<div class="error">{errorMsg}</div>{/if}
         <button class="btn-google" onclick={login} disabled={isLoading}>
           <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
           {isLoading ? 'Connecting…' : 'Continue with Google'}
@@ -482,7 +501,6 @@
 
 {:else}
   <div class="app-container">
-    
     <aside class="pane-sidebar">
       <div class="sidebar-brand">
         <button class="account-switcher" onclick={() => showAccountDropdown = !showAccountDropdown}>
@@ -521,6 +539,15 @@
             <button class="dropdown-item add-item" onclick={addAccount}>{@html iconPlus} Add Account</button>
           </div>
         {/if}
+      </div>
+
+      <div class="sidebar-compose" style="padding: 12px 12px 4px 12px; display: flex; gap: 8px;">
+        <button class="btn-sidebar flex-grow" onclick={() => showCompose = true} style="font-size: 13px; font-weight: 500; padding: 8px; background: var(--accent-blue); color: white; border: none; box-shadow: 0 2px 5px rgba(10,132,255,0.3);">
+          <span class="icon">{@html iconPlus}</span> Compose
+        </button>
+        <button class="btn-sidebar" onclick={() => showCalendar = !showCalendar} title="Toggle Calendar" style="width: 36px; padding: 0; display: flex; align-items: center; justify-content: center; background: var(--bg-view); border: 1px solid var(--border-color);">
+          {@html iconCalendar}
+        </button>
       </div>
 
       <div class="sidebar-content">
@@ -655,7 +682,6 @@
       </div>
     </section>
 
-    
     <main class="pane-view">
       {#if $selectedThreadId}
         <div class="message-toolbar">
@@ -737,15 +763,24 @@
 
   <Settings bind:show={showSettings}
     accounts={allAccounts}
-    onclose={() => showSettings = false}
+    onclose={() => { showSettings = false; checkAndSetupSync(); }}
     onAccountSwitch={switchAccount}
     onAccountAdd={addAccount}
     onAccountRemove={removeAccount}
   />
 {/if}
 
+{#if showCompose}
+  <Compose onClose={() => showCompose = false} />
+{/if}
+
+{#if showCalendar}
+  <CalendarSidebar onClose={() => showCalendar = false} />
+{/if}
+
+<Toasts />
+
 <style>
-  
   .loading-container { display: flex; align-items: center; justify-content: center; height: 100vh; width: 100vw; background: var(--bg-view); }
 
   
@@ -798,9 +833,8 @@
   .btn-google:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
   .btn-link { background: none; border: none; color: rgba(255,255,255,0.3); font-size: 13px; font-weight: 300; cursor: pointer; padding: 8px; font-family: inherit; letter-spacing: 0.2px; transition: color 0.2s; }
   .btn-link:hover { color: rgba(255,255,255,0.6); }
-  .error { color: #ff453a; margin-bottom: 16px; font-size: 12px; font-weight: 300; }
+  .error { color: #ff453a; margin-bottom: 166px; font-size: 12px; font-weight: 300; }
 
-  
   .account-switcher { display: flex; align-items: center; gap: 8px; padding: 10px 12px; width: 100%; background: none; border: none; cursor: pointer; color: var(--text-primary); text-align: left; border-radius: 0; transition: background 0.1s; border-bottom: 1px solid var(--border-color); font-family: var(--font-family); }
   .account-switcher:hover { background: var(--sidebar-hover); }
   .account-avatar-small { width: 28px; height: 28px; flex-shrink: 0; }
@@ -824,7 +858,6 @@
   .dropdown-divider { height: 1px; background: var(--border-color); margin: 4px 0; }
   .add-item { color: var(--accent-blue); gap: 6px; }
 
-  
   .pane-sidebar { position: relative; }
   .sidebar-content { flex: 1; overflow-y: auto; padding: 12px; }
   .sidebar-heading { font-size: 10px; text-transform: uppercase; color: var(--text-secondary); letter-spacing: 0.8px; margin: 14px 8px 6px; font-weight: 700; opacity: 0.7; }
@@ -847,7 +880,6 @@
   .sidebar-error { margin-top: 8px; font-size: 11px; padding: 0 4px; }
   .spin { animation: spin 0.8s linear infinite; }
 
-  
   .search-container { padding: 10px 12px 0; position: relative; }
   .search-bar { display: flex; align-items: center; background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 8px; padding: 0 10px; height: 34px; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
   .search-bar:focus-within { border-color: var(--accent-blue); box-shadow: 0 0 0 3px rgba(10,132,255,0.15); }
@@ -866,7 +898,6 @@
   .suggestion-text { flex: 1; font-weight: 500; }
   .suggestion-detail { font-size: 11px; color: var(--text-secondary); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-  
   .skeleton-thread { display: flex; padding: 12px 14px; gap: 8px; border-bottom: 1px solid var(--border-color); }
   .skeleton-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border-color); margin-top: 5px; flex-shrink: 0; animation: shimmer 1.5s infinite; }
   .skeleton-content { flex: 1; display: flex; flex-direction: column; gap: 6px; }
@@ -878,7 +909,6 @@
   .skeleton-message { padding: 20px; margin: 16px 20px; border: 1px solid var(--border-color); border-radius: 10px; display: flex; flex-direction: column; gap: 8px; }
   .skeleton-msg-header { display: flex; justify-content: space-between; margin-bottom: 4px; gap: 20px; }
 
-  
   .list-header { padding: 8px 16px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; height: 36px; }
   .list-header h3 { font-weight: 600; font-size: 13px; color: var(--text-primary); }
   .thread-count { font-size: 11px; color: var(--text-secondary); font-weight: 500; }
@@ -912,7 +942,6 @@
   .thread-item.unread .thread-subject { font-weight: 600; color: var(--text-primary); }
   .thread-item.unread .thread-snippet { color: var(--text-primary); opacity: 0.95; }
 
-  
   .pane-view { display: flex; flex-direction: column; background: var(--bg-view); height: 100%; }
   .message-toolbar { height: 44px; display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid var(--border-color); gap: 4px; flex-shrink: 0; }
   .toolbar-btn { background: transparent; border: none; border-radius: 6px; padding: 6px 10px; font-size: 12px; color: var(--text-secondary); cursor: pointer; display: flex; align-items: center; gap: 5px; transition: all 0.1s ease; font-family: var(--font-family); }
