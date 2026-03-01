@@ -1,0 +1,412 @@
+<script lang="ts">
+  import { invoke } from '@tauri-apps/api/core';
+  import { onMount } from 'svelte';
+  import { iconClose, iconTrash, iconSent, iconCheck } from './icons';
+  import { fly } from 'svelte/transition';
+  import { addToast } from '$lib/stores/toast';
+
+  let { onClose }: { onClose: () => void } = $props();
+  let isMinimized = $state(false);
+  let isExpanded = $state(false);
+  let isSending = $state(false);
+  
+  let to = $state('');
+  let cc = $state('');
+  let bcc = $state('');
+  let subject = $state('');
+  let bodyHTML = $state('');
+
+  let showCc = $state(false);
+  let showBcc = $state(false);
+
+  let editorEl: HTMLDivElement;
+
+  function format(command: string, value: string | undefined = undefined) {
+    document.execCommand(command, false, value);
+    editorEl.focus();
+  }
+
+  onMount(async () => {
+    try {
+      const sig = await invoke('get_setting', { key: 'signature' }) as string;
+      if (sig) {
+        editorEl.innerHTML = `<br><br><div class="rustymail-signature" style="color: var(--text-secondary); opacity: 0.8; font-size: 13px;">${sig}</div>`;
+        const range = document.createRange();
+        const sel = window.getSelection();
+        range.setStart(editorEl, 0);
+        range.collapse(true);
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+      }
+    } catch (e) {
+      // no signature or error
+    }
+  });
+
+  async function send() {
+    if (!to) { addToast("Please specify at least one recipient.", "info"); return; }
+    isSending = true;
+    try {
+      await invoke('send_message', { 
+        to: `${to}${cc ? ',' + cc : ''}${bcc ? ',' + bcc : ''}`, 
+        subject, 
+        body: editorEl.innerHTML 
+      });
+      addToast("Message sent successfully.", "success", 5000);
+      onClose();
+    } catch (e) {
+      addToast(`Failed to send: ${e}`, "error", 7000);
+    } finally {
+      isSending = false;
+    }
+  }
+
+  async function saveDraft() {
+    try {
+      await invoke('save_draft', { 
+        to: `${to}${cc ? ',' + cc : ''}${bcc ? ',' + bcc : ''}`, 
+        subject, 
+        body: editorEl.innerHTML 
+      });
+      addToast("Draft saved.", "success");
+      onClose();
+    } catch (e) {
+      addToast(`Failed to save draft: ${e}`, "error", 7000);
+    }
+  }
+
+  const iconMinimize = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+  const iconMaximize = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>`;
+  const iconBold = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4h8a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z"></path><path d="M6 12h9a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z"></path></svg>`;
+  const iconItalic = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="4" x2="10" y2="4"></line><line x1="14" y1="20" x2="5" y2="20"></line><line x1="15" y1="4" x2="9" y2="20"></line></svg>`;
+  const iconUnderline = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v7a6 6 0 0 0 6 6 6 6 0 0 0 6-6V3"></path><line x1="4" y1="21" x2="20" y2="21"></line></svg>`;
+
+</script>
+
+<div 
+  class="compose-window" 
+  class:minimized={isMinimized} 
+  class:expanded={isExpanded}
+  transition:fly={{ y: 20, duration: 250 }}
+>
+  <header class="compose-header" onclick={() => isMinimized = !isMinimized}>
+    <span class="title">New Message</span>
+    <div class="header-actions" onclick={(e) => e.stopPropagation()}>
+      <button class="action-btn" onclick={() => isMinimized = !isMinimized}>
+        {@html iconMinimize}
+      </button>
+      <button class="action-btn" onclick={() => { isExpanded = !isExpanded; isMinimized = false; }}>
+        {@html iconMaximize}
+      </button>
+      <button class="action-btn close-btn" onclick={saveDraft}>
+        {@html iconClose}
+      </button>
+    </div>
+  </header>
+
+  {#if !isMinimized}
+    <div class="compose-scroll-area">
+      <div class="compose-fields">
+        <div class="field-row">
+          <span class="field-label">To</span>
+          <input type="text" class="field-input" bind:value={to} placeholder="Recipients" />
+          <div class="cc-bcc-toggles">
+            {#if !showCc}<button onclick={() => showCc = true}>Cc</button>{/if}
+            {#if !showBcc}<button onclick={() => showBcc = true}>Bcc</button>{/if}
+          </div>
+        </div>
+        
+        {#if showCc}
+        <div class="field-row">
+          <span class="field-label">Cc</span>
+          <input type="text" class="field-input" bind:value={cc} />
+        </div>
+        {/if}
+
+        
+        {#if showBcc}
+        <div class="field-row">
+          <span class="field-label">Bcc</span>
+          <input type="text" class="field-input" bind:value={bcc} />
+        </div>
+        {/if}
+
+        
+        <div class="field-row subject-row">
+          <input type="text" class="field-input" bind:value={subject} placeholder="Subject" />
+        </div>
+      </div>
+
+      
+      <div class="body-editor-container">
+        <div 
+          class="rich-text-editor" 
+          contenteditable="true" 
+          bind:this={editorEl}
+          oninput={(e) => bodyHTML = e.currentTarget.innerHTML}
+        ></div>
+      </div>
+    </div>
+
+    
+    <footer class="compose-toolbar">
+      <div class="formatting-tools">
+        <button class="send-btn" onclick={send} disabled={isSending}>
+          {#if isSending} <div class="spinner"></div> {:else} Send {/if}
+        </button>
+        <div class="divider"></div>
+        <button class="format-btn" title="Bold" onclick={() => format('bold')}>{@html iconBold}</button>
+        <button class="format-btn" title="Italic" onclick={() => format('italic')}>{@html iconItalic}</button>
+        <button class="format-btn" title="Underline" onclick={() => format('underline')}>{@html iconUnderline}</button>
+      </div>
+      <div class="trailing-actions">
+        <button class="trash-btn" title="Discard" onclick={onClose}>{@html iconTrash}</button>
+      </div>
+    </footer>
+  {/if}
+</div>
+
+<style>
+  .compose-window {
+    position: fixed;
+    bottom: 0;
+    right: 80px;
+    width: 500px;
+    height: 550px;
+    background: var(--bg-view, #ffffff);
+    border-radius: 12px 12px 0 0;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15), 0 0 1px rgba(0,0,0,0.2);
+    display: flex;
+    flex-direction: column;
+    z-index: 9999;
+    overflow: hidden;
+    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    color: var(--text-primary);
+  }
+
+  .compose-window.minimized {
+    height: 40px;
+  }
+  
+  .compose-window.expanded {
+    width: 80vw;
+    height: 80vh;
+    right: 10vw;
+    bottom: 10vh;
+    border-radius: 12px;
+  }
+
+  .compose-header {
+    height: 40px;
+    background: var(--bg-panel);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 12px 0 16px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .compose-header .title {
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .action-btn {
+    background: transparent;
+    border: none;
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .action-btn:hover {
+    background: rgba(0,0,0,0.05);
+  }
+
+  .close-btn:hover {
+    background: #ff3b30;
+    color: white;
+  }
+
+  .compose-scroll-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; /* Scroll inside the editor container */
+  }
+
+  .compose-fields {
+    padding: 0 16px;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .field-row {
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid var(--border-color);
+    min-height: 38px;
+  }
+
+  .field-row:last-child {
+    border-bottom: none;
+  }
+
+  .field-label {
+    color: var(--text-secondary);
+    font-size: 14px;
+    width: 40px;
+    flex-shrink: 0;
+  }
+
+  .field-input {
+    flex: 1;
+    border: none;
+    background: transparent;
+    font-size: 14px;
+    color: var(--text-primary);
+    outline: none;
+    padding: 8px 0;
+  }
+
+  .subject-row .field-input {
+    font-weight: 500;
+  }
+
+  .cc-bcc-toggles {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+  }
+
+  .cc-bcc-toggles button {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 13px;
+    cursor: pointer;
+    padding: 2px;
+  }
+  .cc-bcc-toggles button:hover {
+    text-decoration: underline;
+  }
+
+  .body-editor-container {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+  }
+
+  .rich-text-editor {
+    min-height: 100%;
+    outline: none;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .compose-toolbar {
+    height: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    background: var(--bg-panel);
+    border-top: 1px solid var(--border-color);
+  }
+
+  .formatting-tools {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .send-btn {
+    background: var(--accent-blue, #0A84FF);
+    color: white;
+    font-weight: 500;
+    font-size: 14px;
+    border: none;
+    border-radius: 16px;
+    padding: 0 20px;
+    height: 32px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 80px;
+    transition: opacity 0.2s;
+  }
+
+  .send-btn:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+
+  .send-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .divider {
+    width: 1px;
+    height: 20px;
+    background: var(--border-color);
+    margin: 0 6px;
+  }
+
+  .format-btn {
+    width: 32px;
+    height: 32px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+
+  .format-btn:hover {
+    background: var(--sidebar-hover);
+    color: var(--text-primary);
+  }
+
+  .trash-btn {
+    width: 36px;
+    height: 36px;
+    background: transparent;
+    border: none;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+
+  .trash-btn:hover {
+    background: var(--sidebar-hover);
+    color: #ff3b30;
+  }
+
+  .spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255,255,255,0.4);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+</style>

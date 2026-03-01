@@ -36,11 +36,9 @@ async fn get_active_account(pool: &sqlx::SqlitePool) -> Result<ActiveAccount, St
         .await
         .map_err(|_| "No authenticated account found. Please sign in first.".to_string())?;
 
-    
     let now = chrono::Utc::now().timestamp();
     let expiry = account.token_expiry.unwrap_or(0);
     if expiry > 0 && expiry - 300 < now {
-        println!("[Auth] Token expired or expiring soon, refreshing...");
         let refresh_tok = account.refresh_token.clone().unwrap_or_default();
         let token_to_use = if refresh_tok.is_empty() {
             keyring::Entry::new("rustymail", &account.id)
@@ -51,9 +49,7 @@ async fn get_active_account(pool: &sqlx::SqlitePool) -> Result<ActiveAccount, St
         };
         if !token_to_use.is_empty() {
             if let Err(e) = refresh_and_update(pool, &account.id, &token_to_use).await {
-                println!("[Auth] Token refresh failed: {}", e);
             } else {
-                println!("[Auth] Token refreshed successfully.");
                 
                 return sqlx::query_as::<_, ActiveAccount>(
                     "SELECT id, access_token FROM accounts WHERE is_active = 1 LIMIT 1"
@@ -81,12 +77,10 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
     let client_secret = env::var("RUSTYMAIL_CLIENT_SECRET")
         .map_err(|_| "RUSTYMAIL_CLIENT_SECRET not found in environment".to_string())?;
 
-    println!("[OAuth] Starting flow...");
-
     let listener = TcpListener::bind("127.0.0.1:0").await.map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let redirect_url = format!("http://127.0.0.1:{}", port);
-    println!("[OAuth] Listening on port {}", port);
+
 
     let client = BasicClient::new(
         ClientId::new(client_id),
@@ -107,14 +101,12 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
         .add_scope(oauth2::Scope::new("https://www.googleapis.com/auth/gmail.modify".to_string()))
         .add_scope(oauth2::Scope::new("https://www.googleapis.com/auth/gmail.send".to_string()))
         .add_scope(oauth2::Scope::new("https://www.googleapis.com/auth/gmail.labels".to_string()))
+        .add_scope(oauth2::Scope::new("https://www.googleapis.com/auth/calendar.readonly".to_string()))
         .set_pkce_challenge(pkce_challenge)
         .add_extra_param("access_type", "offline")
         .add_extra_param("prompt", "consent")
         .url();
 
-    println!("[OAuth] Opening browser...");
-    println!("[OAuth] URL: {}", auth_url);
-    
     match tauri_plugin_opener::open_url(auth_url.as_str(), None::<&str>) {
         Ok(_) => println!("[OAuth] Browser opened successfully"),
         Err(e) => {
@@ -125,7 +117,6 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
 
     println!("[OAuth] Waiting for callback...");
     let (mut stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
-    println!("[OAuth] Callback received!");
     let mut reader = BufReader::new(&mut stream);
     let mut request_line = String::new();
     reader.read_line(&mut request_line).await.map_err(|e| e.to_string())?;
@@ -162,8 +153,6 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
         .request_async(async_http_client)
         .await
         .map_err(|e| e.to_string())?;
-
-    println!("[OAuth] Token exchange successful!");
 
     let access_token = token_result.access_token().secret().to_string();
     let refresh_token = token_result.refresh_token().map(|r| r.secret().clone()).unwrap_or_default();
@@ -819,7 +808,6 @@ pub async fn search_messages(app_handle: tauri::AppHandle, query: String) -> Res
         }
     }
 
-    
     #[derive(sqlx::FromRow)]
     struct LikeRow { thread_id: Option<String> }
     let pattern = format!("%{}%", query);
@@ -833,13 +821,11 @@ pub async fn search_messages(app_handle: tauri::AppHandle, query: String) -> Res
         }
     }
 
-    
     let api_ids = search_gmail_api(&account.access_token, &query).await;
     for tid in api_ids {
         if seen.insert(tid.clone()) { all_thread_ids.push(tid); }
     }
 
-    
     let mut need_hydrate: Vec<String> = Vec::new();
     for tid in &all_thread_ids {
         #[derive(sqlx::FromRow)]
@@ -847,7 +833,6 @@ pub async fn search_messages(app_handle: tauri::AppHandle, query: String) -> Res
         let cnt = sqlx::query_as::<_, C>("SELECT COUNT(*) as cnt FROM messages WHERE thread_id = ?")
             .bind(tid).fetch_one(pool.inner()).await.map(|r| r.cnt).unwrap_or(0);
         if cnt == 0 {
-            
             let _ = sqlx::query("INSERT OR IGNORE INTO threads (id, account_id, snippet, history_id, unread) VALUES (?, ?, '', '', 0)")
                 .bind(tid).bind(&account.id)
                 .execute(pool.inner()).await;
@@ -967,9 +952,7 @@ pub async fn ensure_threads_hydrated(app_handle: tauri::AppHandle, thread_ids: V
             need_hydration.push(tid.clone());
         }
     }
-    
     if !need_hydration.is_empty() {
-        println!("[Hydrate] On-demand hydrating {} threads", need_hydration.len());
         crate::gmail_api::batch_hydrate_threads(
             pool.inner(), &account.id, &account.access_token, need_hydration
         ).await;
@@ -994,8 +977,7 @@ pub async fn get_search_suggestions(app_handle: tauri::AppHandle, partial: Strin
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
     let mut suggestions = Vec::new();
-    
-    
+
     #[derive(sqlx::FromRow)]
     struct SettingRow { value: String }
     if let Ok(Some(row)) = sqlx::query_as::<_, SettingRow>("SELECT value FROM settings WHERE key = 'recent_searches'")
@@ -1012,9 +994,8 @@ pub async fn get_search_suggestions(app_handle: tauri::AppHandle, partial: Strin
             }
         }
     }
-    
+
     if partial.len() >= 2 {
-        
         #[derive(sqlx::FromRow)]
         struct SenderRow { sender: String }
         let pattern = format!("%{}%", partial);
@@ -1030,8 +1011,7 @@ pub async fn get_search_suggestions(app_handle: tauri::AppHandle, partial: Strin
                 detail: c.sender.clone(),
             });
         }
-        
-        
+
         #[derive(sqlx::FromRow)]
         struct SubjectRow { subject: String }
         let subjects: Vec<SubjectRow> = sqlx::query_as(
@@ -1072,4 +1052,37 @@ pub async fn save_recent_search(app_handle: tauri::AppHandle, query: String) -> 
         .bind(&json).execute(pool.inner()).await.map_err(|e| e.to_string())?;
     
     Ok(())
+}
+
+#[tauri::command]
+pub async fn send_message(app_handle: tauri::AppHandle, to: String, subject: String, body: String) -> Result<(), String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+    
+    #[derive(sqlx::FromRow)]
+    struct EmailRow { email: String }
+    let row = sqlx::query_as::<_, EmailRow>("SELECT email FROM accounts WHERE id = ?")
+        .bind(&account.id).fetch_one(pool.inner()).await.map_err(|e| e.to_string())?;
+        
+    crate::gmail_api::send_message(&account.id, &row.email, &account.access_token, &to, &subject, &body).await
+}
+
+#[tauri::command]
+pub async fn save_draft(app_handle: tauri::AppHandle, to: String, subject: String, body: String) -> Result<(), String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+    
+    #[derive(sqlx::FromRow)]
+    struct EmailRow { email: String }
+    let row = sqlx::query_as::<_, EmailRow>("SELECT email FROM accounts WHERE id = ?")
+        .bind(&account.id).fetch_one(pool.inner()).await.map_err(|e| e.to_string())?;
+        
+    crate::gmail_api::save_draft(&account.id, &row.email, &account.access_token, &to, &subject, &body).await
+}
+
+#[tauri::command]
+pub async fn get_upcoming_events(app_handle: tauri::AppHandle) -> Result<Vec<crate::calendar_api::CalendarEvent>, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+    crate::calendar_api::get_upcoming_events(&account.access_token).await
 }

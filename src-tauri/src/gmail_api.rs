@@ -188,7 +188,6 @@ pub async fn fetch_and_store_threads(
             .bind(&thread.history_id).bind(0)
             .execute(&mut *tx).await.map_err(|e| e.to_string())?;
 
-            
             if let Some(labels) = &label_ids {
                 for lid in labels.iter() {
                     let _ = sqlx::query("INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?, ?)")
@@ -255,7 +254,6 @@ async fn store_thread_messages(pool: &SqlitePool, account_id: &str, thread_detai
             .bind(&body_plain).bind(&body_html).bind(0)
             .execute(&mut *tx).await.map_err(|e| e.to_string())?;
 
-            
             if let Some(ref label_ids) = msg.label_ids {
                 for label_id in label_ids {
                     let _ = sqlx::query("INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?, ?)")
@@ -269,7 +267,6 @@ async fn store_thread_messages(pool: &SqlitePool, account_id: &str, thread_detai
                 }
             }
 
-            
             let _ = sqlx::query(
                 "INSERT OR REPLACE INTO messages_fts(rowid, sender, subject, body_plain) 
                  SELECT rowid, sender, subject, body_plain FROM messages WHERE id = ?"
@@ -295,7 +292,6 @@ pub async fn batch_hydrate_threads(
     let total = thread_ids.len();
     let mut completed = 0usize;
 
-    
     let results: Vec<Result<(), String>> = stream::iter(thread_ids)
         .map(|tid| {
             let client = Arc::clone(&client);
@@ -349,7 +345,6 @@ pub async fn get_unhydrated_thread_ids(pool: &SqlitePool, account_id: &str) -> V
 
 
 pub async fn evict_old_message_bodies(pool: &SqlitePool, account_id: &str, max_cached: i32) {
-    
     let result = sqlx::query(
         "UPDATE messages SET body_html = '', body_plain = '' 
          WHERE account_id = ? AND thread_id NOT IN (
@@ -439,5 +434,73 @@ pub async fn trash_thread(
     sqlx::query("DELETE FROM threads WHERE id = ?").bind(thread_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
     sqlx::query("DELETE FROM messages WHERE thread_id = ?").bind(thread_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
     tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn build_mime_message(from: &str, to: &str, subject: &str, body: &str) -> Result<String, String> {
+    use lettre::message::{Message, header::ContentType, Mailbox};
+    use std::str::FromStr;
+    
+    let to_mailbox = Mailbox::from_str(to).map_err(|_| "Invalid To address")?;
+    let from_mailbox = Mailbox::from_str(from).map_err(|_| "Invalid From address")?;
+    
+    let email = Message::builder()
+        .from(from_mailbox)
+        .to(to_mailbox)
+        .subject(subject)
+        .header(ContentType::TEXT_HTML)
+        .body(body.to_string())
+        .map_err(|e| e.to_string())?;
+        
+    let formatted = email.formatted();
+    Ok(base64::encode_config(formatted, base64::URL_SAFE_NO_PAD))
+}
+
+pub async fn send_message(
+    _account_id: &str,
+    account_email: &str,
+    access_token: &str,
+    to: &str,
+    subject: &str,
+    body: &str,
+) -> Result<(), String> {
+    let raw = build_mime_message(account_email, to, subject, body)?;
+    let client = reqwest::Client::new();
+    let body_json = serde_json::json!({ "raw": raw });
+
+    let res = client
+        .post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .json(&body_json)
+        .send().await.map_err(|e| e.to_string())?;
+
+    if !res.status().is_success() {
+        return Err(format!("Failed to send email: {}", res.status()));
+    }
+    Ok(())
+}
+
+pub async fn save_draft(
+    _account_id: &str,
+    account_email: &str,
+    access_token: &str,
+    to: &str,
+    subject: &str,
+    body: &str,
+) -> Result<(), String> {
+    let raw = build_mime_message(account_email, to, subject, body)?;
+    let client = reqwest::Client::new();
+    let message_json = serde_json::json!({ "raw": raw });
+    let body_json = serde_json::json!({ "message": message_json });
+
+    let res = client
+        .post("https://gmail.googleapis.com/gmail/v1/users/me/drafts")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .json(&body_json)
+        .send().await.map_err(|e| e.to_string())?;
+
+    if !res.status().is_success() {
+        return Err(format!("Failed to save draft: {}", res.status()));
+    }
     Ok(())
 }
