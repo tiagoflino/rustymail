@@ -19,6 +19,66 @@
   let showCc = $state(false);
   let showBcc = $state(false);
 
+  let suggestions = $state<any[]>([]);
+  let suggestionIndex = $state(0);
+  let activeField = $state<'to' | 'cc' | 'bcc' | null>(null);
+  let suggestionDebounce: any;
+
+  async function handleInput(field: 'to' | 'cc' | 'bcc', val: string) {
+    activeField = field;
+    if (suggestionDebounce) clearTimeout(suggestionDebounce);
+    
+    const lastPart = val.split(',').pop()?.trim() || '';
+    if (lastPart.length < 2) {
+      suggestions = [];
+      return;
+    }
+
+    suggestionDebounce = setTimeout(async () => {
+      try {
+        suggestions = await invoke('search_contacts', { query: lastPart });
+        suggestionIndex = 0;
+      } catch (e) {
+        suggestions = [];
+      }
+    }, 200);
+  }
+
+  function selectSuggestion(suggestion: any) {
+    if (!activeField) return;
+    
+    let currentVal = activeField === 'to' ? to : activeField === 'cc' ? cc : bcc;
+    const parts = currentVal.split(',').map(p => p.trim());
+    parts.pop(); // remove the partial
+    
+    const formatted = suggestion.name ? `${suggestion.name} <${suggestion.email}>` : suggestion.email;
+    parts.push(formatted);
+    
+    const newVal = parts.join(', ') + ', ';
+    if (activeField === 'to') to = newVal;
+    else if (activeField === 'cc') cc = newVal;
+    else bcc = newVal;
+
+    suggestions = [];
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (suggestions.length === 0) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      suggestionIndex = (suggestionIndex + 1) % suggestions.length;
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      suggestionIndex = (suggestionIndex - 1 + suggestions.length) % suggestions.length;
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      selectSuggestion(suggestions[suggestionIndex]);
+    } else if (e.key === 'Escape') {
+      suggestions = [];
+    }
+  }
+
   let editorEl: HTMLDivElement;
 
   function format(command: string, value: string | undefined = undefined) {
@@ -109,7 +169,31 @@
       <div class="compose-fields">
         <div class="field-row">
           <span class="field-label">To</span>
-          <input type="text" class="field-input" bind:value={to} placeholder="Recipients" />
+          <div class="input-container">
+            <input 
+              type="text" 
+              class="field-input" 
+              bind:value={to} 
+              placeholder="Recipients" 
+              oninput={() => handleInput('to', to)}
+              onkeydown={handleKeydown}
+              onblur={() => setTimeout(() => { if (activeField === 'to') suggestions = [] }, 200)}
+            />
+            {#if activeField === 'to' && suggestions.length > 0}
+              <div class="suggestions-dropdown">
+                {#each suggestions as s, i}
+                  <button 
+                    class="suggestion-item" 
+                    class:active={i === suggestionIndex}
+                    onclick={() => selectSuggestion(s)}
+                  >
+                    <div class="s-name">{s.name || s.email}</div>
+                    {#if s.name}<div class="s-email">{s.email}</div>{/if}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
           <div class="cc-bcc-toggles">
             {#if !showCc}<button onclick={() => showCc = true}>Cc</button>{/if}
             {#if !showBcc}<button onclick={() => showBcc = true}>Bcc</button>{/if}
@@ -119,15 +203,60 @@
         {#if showCc}
         <div class="field-row">
           <span class="field-label">Cc</span>
-          <input type="text" class="field-input" bind:value={cc} />
+          <div class="input-container">
+            <input 
+              type="text" 
+              class="field-input" 
+              bind:value={cc} 
+              oninput={() => handleInput('cc', cc)}
+              onkeydown={handleKeydown}
+              onblur={() => setTimeout(() => { if (activeField === 'cc') suggestions = [] }, 200)}
+            />
+            {#if activeField === 'cc' && suggestions.length > 0}
+              <div class="suggestions-dropdown">
+                {#each suggestions as s, i}
+                  <button 
+                    class="suggestion-item" 
+                    class:active={i === suggestionIndex}
+                    onclick={() => selectSuggestion(s)}
+                  >
+                    <div class="s-name">{s.name || s.email}</div>
+                    {#if s.name}<div class="s-email">{s.email}</div>{/if}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
         </div>
         {/if}
 
-        
         {#if showBcc}
         <div class="field-row">
           <span class="field-label">Bcc</span>
-          <input type="text" class="field-input" bind:value={bcc} />
+          <div class="input-container">
+            <input 
+              type="text" 
+              class="field-input" 
+              bind:value={bcc} 
+              oninput={() => handleInput('bcc', bcc)}
+              onkeydown={handleKeydown}
+              onblur={() => setTimeout(() => { if (activeField === 'bcc') suggestions = [] }, 200)}
+            />
+            {#if activeField === 'bcc' && suggestions.length > 0}
+              <div class="suggestions-dropdown">
+                {#each suggestions as s, i}
+                  <button 
+                    class="suggestion-item" 
+                    class:active={i === suggestionIndex}
+                    onclick={() => selectSuggestion(s)}
+                  >
+                    <div class="s-name">{s.name || s.email}</div>
+                    {#if s.name}<div class="s-email">{s.email}</div>{/if}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
         </div>
         {/if}
 
@@ -279,6 +408,55 @@
     color: var(--text-primary);
     outline: none;
     padding: 8px 0;
+    width: 100%;
+  }
+
+  .input-container {
+    flex: 1;
+    position: relative;
+    display: flex;
+  }
+
+  .suggestions-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--bg-view);
+    border: 1px solid var(--border-color);
+    border-top: none;
+    border-radius: 0 0 8px 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    z-index: 1000;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  .suggestion-item {
+    width: 100%;
+    padding: 8px 12px;
+    border: none;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .suggestion-item:hover, .suggestion-item.active {
+    background: var(--sidebar-hover);
+  }
+
+  .s-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  .s-email {
+    font-size: 11px;
+    color: var(--text-secondary);
   }
 
   .subject-row .field-input {

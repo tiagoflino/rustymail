@@ -2,6 +2,7 @@
 mod db;
 mod auth;
 mod gmail_api;
+pub mod calendar_api;
 
 use tauri::Manager;
 
@@ -48,7 +49,11 @@ pub fn run() {
             auth::get_search_suggestions,
             auth::save_recent_search,
             auth::fetch_label_threads,
-            auth::get_setting
+            auth::get_setting,
+            auth::send_message,
+            auth::save_draft,
+            auth::get_upcoming_events,
+            auth::search_contacts
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

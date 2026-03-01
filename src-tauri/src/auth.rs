@@ -1052,6 +1052,62 @@ pub async fn send_message(app_handle: tauri::AppHandle, to: String, subject: Str
     crate::gmail_api::send_message(&account.id, &row.email, &account.access_token, &to, &subject, &body).await
 }
 
+#[derive(serde::Serialize)]
+pub struct ContactSuggestion {
+    pub name: String,
+    pub email: String,
+    pub raw: String,
+}
+
+#[tauri::command]
+pub async fn search_contacts(app_handle: tauri::AppHandle, query: String) -> Result<Vec<ContactSuggestion>, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+    let pattern = format!("%{}%", query);
+
+    #[derive(sqlx::FromRow)]
+    struct RawContact { contact: String }
+
+    let rows: Vec<RawContact> = sqlx::query_as(
+        "SELECT DISTINCT sender as contact FROM messages WHERE account_id = ? AND sender LIKE ?
+         UNION
+         SELECT DISTINCT recipients as contact FROM messages WHERE account_id = ? AND recipients LIKE ?
+         LIMIT 20"
+    )
+    .bind(&account.id).bind(&pattern)
+    .bind(&account.id).bind(&pattern)
+    .fetch_all(pool.inner()).await.unwrap_or_default();
+
+    let mut seen = std::collections::HashSet::new();
+    let mut suggestions = Vec::new();
+
+    for row in rows {
+        let parts: Vec<&str> = row.contact.split(',').collect();
+        for p in parts {
+            let p = p.trim();
+            if p.is_empty() || !p.to_lowercase().contains(&query.to_lowercase()) { continue; }
+            if !seen.insert(p.to_string()) { continue; }
+
+            let (name, email) = if let Some(bracket_start) = p.find('<') {
+                let name = p[..bracket_start].trim().trim_matches('"').to_string();
+                let email = p[bracket_start+1..].trim_matches('>').trim().to_string();
+                (name, email)
+            } else {
+                ("".to_string(), p.to_string())
+            };
+
+            suggestions.push(ContactSuggestion {
+                name,
+                email,
+                raw: p.to_string(),
+            });
+        }
+    }
+
+    suggestions.sort_by(|a, b| a.email.len().cmp(&b.email.len()));
+    suggestions.truncate(10);
+    Ok(suggestions)
+}
 
 #[tauri::command]
 pub async fn save_draft(app_handle: tauri::AppHandle, to: String, subject: String, body: String) -> Result<(), String> {
