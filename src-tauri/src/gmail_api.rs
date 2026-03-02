@@ -512,3 +512,118 @@ pub async fn save_draft(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+    use tempfile::tempdir;
+    use sqlx::sqlite::SqliteConnectOptions;
+    use sqlx::SqlitePool;
+
+    #[test]
+    fn test_get_header() {
+        let headers = vec![
+            MessagePartHeader { name: "Subject".to_string(), value: "Hello".to_string() },
+            MessagePartHeader { name: "From".to_string(), value: "me@example.com".to_string() },
+        ];
+        assert_eq!(get_header(&headers, "Subject"), Some("Hello"));
+        assert_eq!(get_header(&headers, "From"), Some("me@example.com"));
+        assert_eq!(get_header(&headers, "To"), None);
+    }
+
+    #[test]
+    fn test_extract_body() {
+        // base64 for "Hello World" is SGVsbG8gV29ybGQ=
+        let data = "SGVsbG8gV29ybGQ=".to_string();
+        let part = MessagePart {
+            part_id: Some("0".to_string()),
+            mime_type: "text/plain".to_string(),
+            filename: None,
+            headers: None,
+            body: Some(MessagePartBody {
+                size: 11,
+                data: Some(data),
+            }),
+            parts: None,
+        };
+        assert_eq!(extract_body(&part, "text/plain"), Some("Hello World".to_string()));
+        assert_eq!(extract_body(&part, "text/html"), None);
+    }
+
+    #[test]
+    fn test_build_mime_message() {
+        let res = build_mime_message("me@test.com", "you@test.com", "Hi", "Body");
+        assert!(res.is_ok());
+        let encoded = res.unwrap();
+        let decoded = base64::decode_config(&encoded, base64::URL_SAFE_NO_PAD)
+            .expect("Should be valid base64");
+        let mime = String::from_utf8(decoded).expect("Should be valid UTF-8");
+        
+        assert!(mime.contains("From: me@test.com"));
+        assert!(mime.contains("To: you@test.com"));
+        assert!(mime.contains("Subject: Hi"));
+        assert!(mime.contains("Body"));
+    }
+
+    #[tokio::test]
+    async fn test_store_thread_messages() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_store.db");
+        let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.to_string_lossy()))
+            .unwrap()
+            .create_if_missing(true);
+        let pool = SqlitePool::connect_with(options).await.unwrap();
+
+        // Create tables needed
+        sqlx::query("CREATE TABLE messages (id TEXT PRIMARY KEY, thread_id TEXT, account_id TEXT, sender TEXT, recipients TEXT, subject TEXT, snippet TEXT, internal_date INTEGER, body_plain TEXT, body_html TEXT, has_attachments INTEGER)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE thread_labels (thread_id TEXT, label_id TEXT, PRIMARY KEY(thread_id, label_id))")
+            .execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE message_labels (message_id TEXT, label_id TEXT, PRIMARY KEY(message_id, label_id))")
+            .execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE threads (id TEXT PRIMARY KEY, account_id TEXT, snippet TEXT, history_id TEXT, unread INTEGER)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("CREATE VIRTUAL TABLE messages_fts USING fts5(sender, subject, body_plain, content=messages, content_rowid=rowid)")
+            .execute(&pool).await.unwrap();
+
+        let thread_details = ThreadDetailsResponse {
+            id: "t1".to_string(),
+            messages: Some(vec![
+                GmailMessage {
+                    id: "m1".to_string(),
+                    thread_id: "t1".to_string(),
+                    label_ids: Some(vec!["INBOX".to_string(), "UNREAD".to_string()]),
+                    snippet: Some("Snippet 1".to_string()),
+                    internal_date: "1614556800000".to_string(),
+                    payload: Some(MessagePart {
+                        part_id: Some("0".to_string()),
+                        mime_type: "text/plain".to_string(),
+                        filename: None,
+                        headers: Some(vec![
+                            MessagePartHeader { name: "From".to_string(), value: "sender@test.com".to_string() },
+                            MessagePartHeader { name: "To".to_string(), value: "me@test.com".to_string() },
+                            MessagePartHeader { name: "Subject".to_string(), value: "Hello".to_string() },
+                        ]),
+                        body: Some(MessagePartBody { size: 5, data: Some("SGVsbG8=".to_string()) }), // "Hello"
+                        parts: None,
+                    }),
+                }
+            ]),
+        };
+
+        store_thread_messages(&pool, "acc1", &thread_details).await.unwrap();
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages").fetch_one(&pool).await.unwrap();
+        assert_eq!(count.0, 1);
+
+        let msg: (String, String) = sqlx::query_as("SELECT sender, body_plain FROM messages WHERE id='m1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(msg.0, "sender@test.com");
+        assert_eq!(msg.1, "Hello");
+
+        let labels: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM message_labels WHERE message_id='m1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(labels.0, 2);
+    }
+}

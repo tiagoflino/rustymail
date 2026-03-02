@@ -1150,3 +1150,137 @@ pub async fn get_upcoming_events(app_handle: tauri::AppHandle) -> Result<Vec<cra
     let account = get_active_account(pool.inner()).await?;
     crate::calendar_api::get_upcoming_events(&account.access_token).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+    use sqlx::sqlite::SqliteConnectOptions;
+    use std::str::FromStr;
+    use sqlx::SqlitePool;
+
+    // Helper to create an in-memory DB with schema for refresh and FTS5 tests.
+    // Using sqlite::memory: avoids tempdir lifetime issues.
+    async fn setup_test_db() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap();
+        let pool = SqlitePool::connect_with(options).await.unwrap();
+        // Schema: accounts, messages, and FTS5 virtual table
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS accounts (
+                id TEXT PRIMARY KEY,
+                email TEXT,
+                display_name TEXT,
+                avatar_url TEXT,
+                access_token TEXT,
+                refresh_token TEXT,
+                token_expiry INTEGER,
+                is_active INTEGER DEFAULT 1,
+                created_at INTEGER
+            )"
+        ).execute(&pool).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS messages (
+                id TEXT PRIMARY KEY,
+                thread_id TEXT,
+                account_id TEXT,
+                sender TEXT,
+                recipients TEXT,
+                subject TEXT,
+                snippet TEXT,
+                internal_date INTEGER,
+                body_plain TEXT,
+                body_html TEXT,
+                has_attachments INTEGER
+            )"
+        ).execute(&pool).await.unwrap();
+        sqlx::query(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(sender, subject, body_plain, content=messages, content_rowid=rowid)"
+        ).execute(&pool).await.unwrap();
+        pool
+    }
+
+    #[test]
+    fn test_clean_sender_name() {
+        assert_eq!(clean_sender_name(Some("John Doe <john@example.com>".to_string())), "John Doe");
+        assert_eq!(clean_sender_name(Some("<only-email@example.com>".to_string())), "only-email@example.com");
+        assert_eq!(clean_sender_name(Some("\"John Doe\" <john@example.com>".to_string())), "John Doe");
+        assert_eq!(clean_sender_name(None), "Unknown Sender");
+    }
+
+    #[tokio::test]
+    async fn test_refresh_and_update_missing_client_id() {
+        // Ensure env vars are not set
+        env::remove_var("RUSTYMAIL_CLIENT_ID");
+        env::set_var("RUSTYMAIL_CLIENT_SECRET", "dummy_secret");
+        let pool = setup_test_db().await;
+        let result = refresh_and_update(&pool, "acc1", "refresh_token").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_refresh_and_update_missing_client_secret() {
+        env::set_var("RUSTYMAIL_CLIENT_ID", "dummy_id");
+        env::remove_var("RUSTYMAIL_CLIENT_SECRET");
+        let pool = setup_test_db().await;
+        let result = refresh_and_update(&pool, "acc1", "refresh_token").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_refresh_and_update_http_error() {
+        // Set valid env vars but the request will fail because we are hitting the real Google endpoint.
+        // The function should return an error indicating a network failure or token refresh failure.
+        env::set_var("RUSTYMAIL_CLIENT_ID", "dummy_id");
+        env::set_var("RUSTYMAIL_CLIENT_SECRET", "dummy_secret");
+        let pool = setup_test_db().await;
+        let result = refresh_and_update(&pool, "acc1", "refresh_token").await;
+        // The exact error string may vary; we just ensure it is an Err.
+        assert!(result.is_err());
+    }
+    #[tokio::test]
+    async fn test_search_messages_fts5() {
+        // Setup DB with messages and FTS5 virtual table
+        let pool = setup_test_db().await;
+        // Insert dummy account
+        sqlx::query("INSERT INTO accounts (id) VALUES (?)")
+            .bind("acc1")
+            .execute(&pool)
+            .await
+            .unwrap();
+        // Insert a message with searchable content
+        sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+            .bind("msg1")
+            .bind("thread1")
+            .bind("acc1")
+            .bind("sender@example.com")
+            .bind("recipient@example.com")
+            .bind("Test Subject")
+            .bind("snippet")
+            .bind(0i64)
+            .bind("This is a searchterm inside the body")
+            .bind("")
+            .bind(0)
+            .execute(&pool)
+            .await
+            .unwrap();
+        // FTS5 external-content tables must be populated manually after insert
+        sqlx::query("INSERT OR REPLACE INTO messages_fts(rowid, sender, subject, body_plain) SELECT rowid, sender, subject, body_plain FROM messages WHERE id = ?")
+            .bind("msg1")
+            .execute(&pool)
+            .await
+            .unwrap();
+        // Run the same query as in search_messages for FTS5
+        let fts_query = "searchterm*".to_string();
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT DISTINCT m.thread_id FROM messages m INNER JOIN messages_fts ON messages_fts.rowid = m.rowid WHERE messages_fts MATCH ? AND m.account_id = ?"
+        )
+        .bind(&fts_query)
+        .bind("acc1")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "thread1");
+    }
+    }

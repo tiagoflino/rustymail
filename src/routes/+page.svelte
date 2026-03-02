@@ -10,6 +10,7 @@
   import Compose from '$lib/components/Compose.svelte';
   import CalendarSidebar from '$lib/components/CalendarSidebar.svelte';
   import Toasts from '$lib/components/Toasts.svelte';
+  import { formatTime, decodeEntities } from '$lib/utils/formatters.js';
 
   interface LocalLabel { id: string; name: string; type: string; unread_count: number; }
   interface AccountInfo { id: string; email: string; display_name: string; avatar_url: string; is_active: boolean; }
@@ -25,6 +26,7 @@
   let showAccountDropdown = false;
   let showSettings = false;
   let isLoading = false;
+  let isLoadingThreads = false;
   let showCompose = false;
   let showCalendar = false;
   let searchInput = '';
@@ -320,7 +322,7 @@
     if (scrollObserver) scrollObserver.disconnect();
     scrollObserver = new IntersectionObserver(
       (entries) => {
-        if (entries[0]?.isIntersecting && hasMore && !isLoadingMore) {
+        if (entries && entries[0]?.isIntersecting && hasMore && !isLoadingMore) {
           loadMoreThreads();
         }
       },
@@ -380,16 +382,6 @@
     handleSearch();
   }
 
-  function decodeEntities(str: string) {
-    if (!str) return '';
-    return str.replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(dec as any))
-      .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&nbsp;/g, ' ');
-  }
 
   function clearSearch() {
     searchInput = '';
@@ -512,14 +504,6 @@
 
   
 
-  function formatTime(ts: number): string {
-    if (!ts) return "";
-    const d = new Date(ts);
-    const now = new Date();
-    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    if (now.getTime() - d.getTime() < 7 * 86400000) return d.toLocaleDateString([], { weekday: 'short' });
-    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
-  }
 
   function getActiveLabelName(): string {
     const label = $labels.find(l => l.id === $selectedLabelId);

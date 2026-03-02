@@ -43,3 +43,6 @@ AGENT.md
 .gemini
 _agent
 clean_comments.js
+
+# Test coverage
+coverage/

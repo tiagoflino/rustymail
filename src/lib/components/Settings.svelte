@@ -109,7 +109,7 @@
   <div class="settings-modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-label="Settings">
     <div class="settings-header">
       <h2>Settings</h2>
-      <button class="modal-close" onclick={onclose}>{@html iconClose}</button>
+      <button class="modal-close" onclick={onclose} aria-label="Close Settings">{@html iconClose}</button>
     </div>
 
     <div class="settings-body">

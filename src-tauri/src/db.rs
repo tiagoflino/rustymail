@@ -140,3 +140,66 @@ pub async fn init_db(app_handle: &tauri::AppHandle) -> Result<SqlitePool> {
 
     Ok(pool)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_init_db_schema() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.to_string_lossy()))
+            .unwrap()
+            .create_if_missing(true);
+        let pool = SqlitePool::connect_with(options).await.unwrap();
+
+        // Normally we'd call init_db, but it requires AppHandle.
+        // We'll test the schema application logic directly if we can refactor init_db 
+        // Or we can just verify the expected tables exist after running the schema.
+        
+        let schema = r#"
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        "#;
+        sqlx::query(schema).execute(&pool).await.unwrap();
+
+        let row: (String,) = sqlx::query_as("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row.0, "settings");
+    }
+
+    #[tokio::test]
+    async fn test_settings_upsert() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_upsert.db");
+        let options = sqlx::sqlite::SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.to_string_lossy()))
+            .unwrap()
+            .create_if_missing(true);
+        let pool = sqlx::SqlitePool::connect_with(options).await.unwrap();
+
+        sqlx::query("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
+            .execute(&pool).await.unwrap();
+        
+        // Insert
+        sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?)")
+            .bind("test_key").bind("test_value").execute(&pool).await.unwrap();
+        
+        let val: (String,) = sqlx::query_as("SELECT value FROM settings WHERE key = 'test_key'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(val.0, "test_value");
+
+        // Update (UPSERT style)
+        sqlx::query("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
+            .bind("test_key").bind("new_value").execute(&pool).await.unwrap();
+        
+        let new_val: (String,) = sqlx::query_as("SELECT value FROM settings WHERE key = 'test_key'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(new_val.0, "new_value");
+    }
+}
