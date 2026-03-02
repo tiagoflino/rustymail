@@ -1,12 +1,8 @@
+use futures::stream::{self, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use futures::stream::{self, StreamExt};
 use std::sync::Arc;
-
-
-
-
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct GmailLabel {
@@ -80,10 +76,6 @@ pub struct ThreadDetailsResponse {
     pub messages: Option<Vec<GmailMessage>>,
 }
 
-
-
-
-
 fn extract_body(part: &MessagePart, target_mime_type: &str) -> Option<String> {
     if part.mime_type == target_mime_type {
         if let Some(body) = &part.body {
@@ -105,19 +97,24 @@ fn extract_body(part: &MessagePart, target_mime_type: &str) -> Option<String> {
 }
 
 fn get_header<'a>(headers: &'a [MessagePartHeader], name: &str) -> Option<&'a str> {
-    headers.iter().find(|h| h.name.eq_ignore_ascii_case(name)).map(|h| h.value.as_str())
+    headers
+        .iter()
+        .find(|h| h.name.eq_ignore_ascii_case(name))
+        .map(|h| h.value.as_str())
 }
 
-
-
-
-
-pub async fn fetch_and_store_labels(pool: &SqlitePool, account_id: &str, access_token: &str) -> Result<(), String> {
+pub async fn fetch_and_store_labels(
+    pool: &SqlitePool,
+    account_id: &str,
+    access_token: &str,
+) -> Result<(), String> {
     let client = Client::new();
     let res = client
         .get("https://gmail.googleapis.com/gmail/v1/users/me/labels")
         .header("Authorization", format!("Bearer {}", access_token))
-        .send().await.map_err(|e| e.to_string())?;
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
 
     if !res.status().is_success() {
         return Err(format!("Failed to fetch labels: {}", res.status()));
@@ -130,20 +127,21 @@ pub async fn fetch_and_store_labels(pool: &SqlitePool, account_id: &str, access_
         sqlx::query(
             "INSERT INTO labels (id, account_id, name, type, unread_count)
              VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET name=excluded.name, unread_count=excluded.unread_count"
+             ON CONFLICT(id) DO UPDATE SET name=excluded.name, unread_count=excluded.unread_count",
         )
-        .bind(&label.id).bind(account_id).bind(&label.name)
-        .bind(&label.r#type).bind(label.messages_unread.unwrap_or(0))
-        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        .bind(&label.id)
+        .bind(account_id)
+        .bind(&label.name)
+        .bind(&label.r#type)
+        .bind(label.messages_unread.unwrap_or(0))
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
     }
 
     tx.commit().await.map_err(|e| e.to_string())?;
     Ok(())
 }
-
-
-
-
 
 pub async fn fetch_and_store_threads(
     pool: &SqlitePool,
@@ -156,7 +154,10 @@ pub async fn fetch_and_store_threads(
 
     let mut params: Vec<(&str, String)> = vec![
         ("maxResults", max_results.to_string()),
-        ("fields", "threads(id,snippet,historyId),nextPageToken".to_string()),
+        (
+            "fields",
+            "threads(id,snippet,historyId),nextPageToken".to_string(),
+        ),
     ];
     if let Some(labels) = &label_ids {
         for lid in labels.iter() {
@@ -168,7 +169,9 @@ pub async fn fetch_and_store_threads(
         .get("https://gmail.googleapis.com/gmail/v1/users/me/threads")
         .query(&params)
         .header("Authorization", format!("Bearer {}", access_token))
-        .send().await.map_err(|e| e.to_string())?;
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
 
     if !res.status().is_success() {
         return Err(format!("Failed to fetch threads: {}", res.status()));
@@ -190,9 +193,13 @@ pub async fn fetch_and_store_threads(
 
             if let Some(labels) = &label_ids {
                 for lid in labels.iter() {
-                    let _ = sqlx::query("INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?, ?)")
-                        .bind(&thread.id).bind(lid)
-                        .execute(&mut *tx).await;
+                    let _ = sqlx::query(
+                        "INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?, ?)",
+                    )
+                    .bind(&thread.id)
+                    .bind(lid)
+                    .execute(&mut *tx)
+                    .await;
                 }
             }
         }
@@ -202,26 +209,40 @@ pub async fn fetch_and_store_threads(
     Ok(())
 }
 
-
-
-
-
-pub async fn fetch_messages_for_thread(pool: &SqlitePool, account_id: &str, access_token: &str, thread_id: &str) -> Result<(), String> {
+pub async fn fetch_messages_for_thread(
+    pool: &SqlitePool,
+    account_id: &str,
+    access_token: &str,
+    thread_id: &str,
+) -> Result<(), String> {
     let client = Client::new();
     let res = client
-        .get(&format!("https://gmail.googleapis.com/gmail/v1/users/me/threads/{}", thread_id))
+        .get(&format!(
+            "https://gmail.googleapis.com/gmail/v1/users/me/threads/{}",
+            thread_id
+        ))
         .header("Authorization", format!("Bearer {}", access_token))
-        .send().await.map_err(|e| e.to_string())?;
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
 
     if !res.status().is_success() {
-        return Err(format!("Failed to fetch thread {}: {}", thread_id, res.status()));
+        return Err(format!(
+            "Failed to fetch thread {}: {}",
+            thread_id,
+            res.status()
+        ));
     }
 
     let thread_details: ThreadDetailsResponse = res.json().await.map_err(|e| e.to_string())?;
     store_thread_messages(pool, account_id, &thread_details).await
 }
 
-async fn store_thread_messages(pool: &SqlitePool, account_id: &str, thread_details: &ThreadDetailsResponse) -> Result<(), String> {
+async fn store_thread_messages(
+    pool: &SqlitePool,
+    account_id: &str,
+    thread_details: &ThreadDetailsResponse,
+) -> Result<(), String> {
     if let Some(messages) = &thread_details.messages {
         let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
 
@@ -256,31 +277,42 @@ async fn store_thread_messages(pool: &SqlitePool, account_id: &str, thread_detai
 
             if let Some(ref label_ids) = msg.label_ids {
                 for label_id in label_ids {
-                    let _ = sqlx::query("INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?, ?)")
-                        .bind(&msg.thread_id).bind(label_id).execute(&mut *tx).await;
-                    let _ = sqlx::query("INSERT OR IGNORE INTO message_labels (message_id, label_id) VALUES (?, ?)")
-                        .bind(&msg.id).bind(label_id).execute(&mut *tx).await;
+                    let _ = sqlx::query(
+                        "INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?, ?)",
+                    )
+                    .bind(&msg.thread_id)
+                    .bind(label_id)
+                    .execute(&mut *tx)
+                    .await;
+                    let _ = sqlx::query(
+                        "INSERT OR IGNORE INTO message_labels (message_id, label_id) VALUES (?, ?)",
+                    )
+                    .bind(&msg.id)
+                    .bind(label_id)
+                    .execute(&mut *tx)
+                    .await;
                 }
                 if label_ids.contains(&"UNREAD".to_string()) {
                     let _ = sqlx::query("UPDATE threads SET unread = 1 WHERE id = ?")
-                        .bind(&msg.thread_id).execute(&mut *tx).await;
+                        .bind(&msg.thread_id)
+                        .execute(&mut *tx)
+                        .await;
                 }
             }
 
             let _ = sqlx::query(
                 "INSERT OR REPLACE INTO messages_fts(rowid, sender, subject, body_plain) 
-                 SELECT rowid, sender, subject, body_plain FROM messages WHERE id = ?"
-            ).bind(&msg.id).execute(&mut *tx).await;
+                 SELECT rowid, sender, subject, body_plain FROM messages WHERE id = ?",
+            )
+            .bind(&msg.id)
+            .execute(&mut *tx)
+            .await;
         }
 
         tx.commit().await.map_err(|e| e.to_string())?;
     }
     Ok(())
 }
-
-
-
-
 
 pub async fn batch_hydrate_threads(
     pool: &SqlitePool,
@@ -300,9 +332,14 @@ pub async fn batch_hydrate_threads(
             let aid = account_id.to_string();
             async move {
                 let res = client
-                    .get(&format!("https://gmail.googleapis.com/gmail/v1/users/me/threads/{}", tid))
+                    .get(&format!(
+                        "https://gmail.googleapis.com/gmail/v1/users/me/threads/{}",
+                        tid
+                    ))
                     .header("Authorization", format!("Bearer {}", token))
-                    .send().await.map_err(|e| e.to_string())?;
+                    .send()
+                    .await
+                    .map_err(|e| e.to_string())?;
                 if !res.status().is_success() {
                     return Err(format!("HTTP {}", res.status()));
                 }
@@ -315,34 +352,33 @@ pub async fn batch_hydrate_threads(
         .await;
 
     for r in &results {
-        if r.is_ok() { completed += 1; }
+        if r.is_ok() {
+            completed += 1;
+        }
     }
 
     println!("[Hydrate] Completed {}/{} threads", completed, total);
     (total, completed)
 }
 
-
 pub async fn get_unhydrated_thread_ids(pool: &SqlitePool, account_id: &str) -> Vec<String> {
     #[derive(sqlx::FromRow)]
-    struct TId { id: String }
+    struct TId {
+        id: String,
+    }
     sqlx::query_as::<_, TId>(
         "SELECT t.id FROM threads t 
          LEFT JOIN messages m ON t.id = m.thread_id 
-         WHERE t.account_id = ? AND m.id IS NULL"
+         WHERE t.account_id = ? AND m.id IS NULL",
     )
     .bind(account_id)
     .fetch_all(pool)
     .await
     .unwrap_or_default()
-    .into_iter().map(|r| r.id).collect()
+    .into_iter()
+    .map(|r| r.id)
+    .collect()
 }
-
-
-
-
-
-
 
 pub async fn evict_old_message_bodies(pool: &SqlitePool, account_id: &str, max_cached: i32) {
     let result = sqlx::query(
@@ -360,16 +396,16 @@ pub async fn evict_old_message_bodies(pool: &SqlitePool, account_id: &str, max_c
     match result {
         Ok(r) => {
             if r.rows_affected() > 0 {
-                println!("[Cache] Evicted bodies from {} messages (keeping {} recent threads)", r.rows_affected(), max_cached);
+                println!(
+                    "[Cache] Evicted bodies from {} messages (keeping {} recent threads)",
+                    r.rows_affected(),
+                    max_cached
+                );
             }
         }
         Err(e) => println!("[Cache] Eviction error: {}", e),
     }
 }
-
-
-
-
 
 #[derive(serde::Serialize)]
 struct ModifyThreadRequest {
@@ -394,9 +430,15 @@ pub async fn modify_thread(
     };
 
     let res = client
-        .post(&format!("https://gmail.googleapis.com/gmail/v1/users/me/threads/{}/modify", thread_id))
+        .post(&format!(
+            "https://gmail.googleapis.com/gmail/v1/users/me/threads/{}/modify",
+            thread_id
+        ))
         .header("Authorization", format!("Bearer {}", access_token))
-        .json(&payload).send().await.map_err(|e| e.to_string())?;
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
 
     if !res.status().is_success() {
         return Err(format!("Failed to modify thread: {}", res.status()));
@@ -405,18 +447,32 @@ pub async fn modify_thread(
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
     if remove_labels.contains(&"UNREAD".to_string()) {
         sqlx::query("UPDATE threads SET unread = 0 WHERE id = ?")
-            .bind(thread_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+            .bind(thread_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
     } else if add_labels.contains(&"UNREAD".to_string()) {
         sqlx::query("UPDATE threads SET unread = 1 WHERE id = ?")
-            .bind(thread_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+            .bind(thread_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
     }
 
     if remove_labels.contains(&"STARRED".to_string()) {
         sqlx::query("DELETE FROM thread_labels WHERE thread_id = ? AND label_id = 'STARRED'")
-            .bind(thread_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+            .bind(thread_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
     } else if add_labels.contains(&"STARRED".to_string()) {
-        sqlx::query("INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?, 'STARRED')")
-            .bind(thread_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?, 'STARRED')",
+        )
+        .bind(thread_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
     }
     tx.commit().await.map_err(|e| e.to_string())?;
     Ok(())
@@ -430,17 +486,30 @@ pub async fn trash_thread(
 ) -> Result<(), String> {
     let client = reqwest::Client::new();
     let res = client
-        .post(&format!("https://gmail.googleapis.com/gmail/v1/users/me/threads/{}/trash", thread_id))
+        .post(&format!(
+            "https://gmail.googleapis.com/gmail/v1/users/me/threads/{}/trash",
+            thread_id
+        ))
         .header("Authorization", format!("Bearer {}", access_token))
-        .send().await.map_err(|e| e.to_string())?;
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
 
     if !res.status().is_success() {
         return Err(format!("Failed to trash thread: {}", res.status()));
     }
 
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-    sqlx::query("DELETE FROM threads WHERE id = ?").bind(thread_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
-    sqlx::query("DELETE FROM messages WHERE thread_id = ?").bind(thread_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM threads WHERE id = ?")
+        .bind(thread_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM messages WHERE thread_id = ?")
+        .bind(thread_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
     tx.commit().await.map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -467,14 +536,21 @@ fn parse_to_mailbox(raw: &str) -> Result<lettre::message::Mailbox, String> {
         })
     } else {
         // No angle brackets — treat the whole thing as a plain email address
-        let address = Address::from_str(raw)
-            .map_err(|e| format!("Invalid To address '{}': {}", raw, e))?;
+        let address =
+            Address::from_str(raw).map_err(|e| format!("Invalid To address '{}': {}", raw, e))?;
         Ok(Mailbox::new(None, address))
     }
 }
 
-fn build_mime_message(from: &str, to: &str, subject: &str, body: &str) -> Result<String, String> {
-    use lettre::message::{Message, header::ContentType, Mailbox};
+fn build_mime_message(
+    from: &str,
+    to: &str,
+    subject: &str,
+    body: &str,
+    in_reply_to: Option<&str>,
+    references: Option<&str>,
+) -> Result<String, String> {
+    use lettre::message::{header::ContentType, Mailbox, Message};
     use std::str::FromStr;
 
     let from_mailbox = Mailbox::from_str(from).map_err(|_| "Invalid From address")?;
@@ -492,9 +568,19 @@ fn build_mime_message(from: &str, to: &str, subject: &str, body: &str) -> Result
         return Err("No valid recipients".to_string());
     }
 
-    let mut builder = Message::builder()
-        .from(from_mailbox)
-        .subject(subject);
+    let mut builder = Message::builder().from(from_mailbox).subject(subject);
+
+    if let Some(irt) = in_reply_to {
+        if !irt.is_empty() {
+            builder = builder.header(lettre::message::header::InReplyTo::from(irt.to_string()));
+        }
+    }
+    if let Some(refs) = references {
+        if !refs.is_empty() {
+            builder = builder.header(lettre::message::header::References::from(refs.to_string()));
+        }
+    }
+
     for mailbox in recipients {
         builder = builder.to(mailbox);
     }
@@ -514,16 +600,27 @@ pub async fn send_message(
     to: &str,
     subject: &str,
     body: &str,
+    thread_id: Option<&str>,
+    in_reply_to: Option<&str>,
+    references: Option<&str>,
 ) -> Result<(), String> {
-    let raw = build_mime_message(account_email, to, subject, body)?;
+    let raw = build_mime_message(account_email, to, subject, body, in_reply_to, references)?;
     let client = reqwest::Client::new();
-    let body_json = serde_json::json!({ "raw": raw });
+    let mut body_json = serde_json::json!({ "raw": raw });
+
+    if let Some(tid) = thread_id {
+        if !tid.is_empty() {
+            body_json["threadId"] = serde_json::json!(tid);
+        }
+    }
 
     let res = client
         .post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send")
         .header("Authorization", format!("Bearer {}", access_token))
         .json(&body_json)
-        .send().await.map_err(|e| e.to_string())?;
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
 
     if !res.status().is_success() {
         return Err(format!("Failed to send email: {}", res.status()));
@@ -538,17 +635,29 @@ pub async fn save_draft(
     to: &str,
     subject: &str,
     body: &str,
+    thread_id: Option<&str>,
+    in_reply_to: Option<&str>,
+    references: Option<&str>,
 ) -> Result<(), String> {
-    let raw = build_mime_message(account_email, to, subject, body)?;
+    let raw = build_mime_message(account_email, to, subject, body, in_reply_to, references)?;
     let client = reqwest::Client::new();
-    let message_json = serde_json::json!({ "raw": raw });
+    let mut message_json = serde_json::json!({ "raw": raw });
+
+    if let Some(tid) = thread_id {
+        if !tid.is_empty() {
+            message_json["threadId"] = serde_json::json!(tid);
+        }
+    }
+
     let body_json = serde_json::json!({ "message": message_json });
 
     let res = client
         .post("https://gmail.googleapis.com/gmail/v1/users/me/drafts")
         .header("Authorization", format!("Bearer {}", access_token))
         .json(&body_json)
-        .send().await.map_err(|e| e.to_string())?;
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
 
     if !res.status().is_success() {
         return Err(format!("Failed to save draft: {}", res.status()));
@@ -559,16 +668,22 @@ pub async fn save_draft(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::str::FromStr;
-    use tempfile::tempdir;
     use sqlx::sqlite::SqliteConnectOptions;
     use sqlx::SqlitePool;
+    use std::str::FromStr;
+    use tempfile::tempdir;
 
     #[test]
     fn test_get_header() {
         let headers = vec![
-            MessagePartHeader { name: "Subject".to_string(), value: "Hello".to_string() },
-            MessagePartHeader { name: "From".to_string(), value: "me@example.com".to_string() },
+            MessagePartHeader {
+                name: "Subject".to_string(),
+                value: "Hello".to_string(),
+            },
+            MessagePartHeader {
+                name: "From".to_string(),
+                value: "me@example.com".to_string(),
+            },
         ];
         assert_eq!(get_header(&headers, "Subject"), Some("Hello"));
         assert_eq!(get_header(&headers, "From"), Some("me@example.com"));
@@ -590,7 +705,10 @@ mod tests {
             }),
             parts: None,
         };
-        assert_eq!(extract_body(&part, "text/plain"), Some("Hello World".to_string()));
+        assert_eq!(
+            extract_body(&part, "text/plain"),
+            Some("Hello World".to_string())
+        );
         assert_eq!(extract_body(&part, "text/html"), None);
     }
 
@@ -620,13 +738,13 @@ mod tests {
     #[test]
     fn test_build_mime_message() {
         // Single recipient
-        let res = build_mime_message("me@test.com", "you@test.com", "Hi", "Body");
+        let res = build_mime_message("me@test.com", "you@test.com", "Hi", "Body", None, None);
         assert!(res.is_ok());
         let encoded = res.unwrap();
         let decoded = base64::decode_config(&encoded, base64::URL_SAFE_NO_PAD)
             .expect("Should be valid base64");
         let mime = String::from_utf8(decoded).expect("Should be valid UTF-8");
-        
+
         assert!(mime.contains("From: me@test.com"));
         assert!(mime.contains("To: you@test.com"));
         assert!(mime.contains("Subject: Hi"));
@@ -637,12 +755,14 @@ mod tests {
             "me@test.com",
             "🇦🇺Fernandinha <fernanda@test.com>, \"Bob\" <bob@test.com>, plain@test.com",
             "Multi Test",
-            "Body"
+            "Body",
+            None,
+            None,
         );
         let encoded2 = res2.unwrap();
         let decoded2 = base64::decode_config(&encoded2, base64::URL_SAFE_NO_PAD).unwrap();
         let mime2 = String::from_utf8(decoded2).unwrap();
-        
+
         // Lettre formats the To header with commas between recipients
         // display names generally get =?utf-8?b?...?= encoded in the headers,
         // so we just check for the plain addresses.
@@ -655,9 +775,10 @@ mod tests {
     async fn test_store_thread_messages() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test_store.db");
-        let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.to_string_lossy()))
-            .unwrap()
-            .create_if_missing(true);
+        let options =
+            SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.to_string_lossy()))
+                .unwrap()
+                .create_if_missing(true);
         let pool = SqlitePool::connect_with(options).await.unwrap();
 
         // Create tables needed
@@ -674,41 +795,62 @@ mod tests {
 
         let thread_details = ThreadDetailsResponse {
             id: "t1".to_string(),
-            messages: Some(vec![
-                GmailMessage {
-                    id: "m1".to_string(),
-                    thread_id: "t1".to_string(),
-                    label_ids: Some(vec!["INBOX".to_string(), "UNREAD".to_string()]),
-                    snippet: Some("Snippet 1".to_string()),
-                    internal_date: "1614556800000".to_string(),
-                    payload: Some(MessagePart {
-                        part_id: Some("0".to_string()),
-                        mime_type: "text/plain".to_string(),
-                        filename: None,
-                        headers: Some(vec![
-                            MessagePartHeader { name: "From".to_string(), value: "sender@test.com".to_string() },
-                            MessagePartHeader { name: "To".to_string(), value: "me@test.com".to_string() },
-                            MessagePartHeader { name: "Subject".to_string(), value: "Hello".to_string() },
-                        ]),
-                        body: Some(MessagePartBody { size: 5, data: Some("SGVsbG8=".to_string()) }), // "Hello"
-                        parts: None,
-                    }),
-                }
-            ]),
+            messages: Some(vec![GmailMessage {
+                id: "m1".to_string(),
+                thread_id: "t1".to_string(),
+                label_ids: Some(vec!["INBOX".to_string(), "UNREAD".to_string()]),
+                snippet: Some("Snippet 1".to_string()),
+                internal_date: "1614556800000".to_string(),
+                payload: Some(MessagePart {
+                    part_id: Some("0".to_string()),
+                    mime_type: "text/plain".to_string(),
+                    filename: None,
+                    headers: Some(vec![
+                        MessagePartHeader {
+                            name: "From".to_string(),
+                            value: "sender@test.com".to_string(),
+                        },
+                        MessagePartHeader {
+                            name: "To".to_string(),
+                            value: "me@test.com".to_string(),
+                        },
+                        MessagePartHeader {
+                            name: "Subject".to_string(),
+                            value: "Hello".to_string(),
+                        },
+                    ]),
+                    body: Some(MessagePartBody {
+                        size: 5,
+                        data: Some("SGVsbG8=".to_string()),
+                    }), // "Hello"
+                    parts: None,
+                }),
+            }]),
         };
 
-        store_thread_messages(&pool, "acc1", &thread_details).await.unwrap();
+        store_thread_messages(&pool, "acc1", &thread_details)
+            .await
+            .unwrap();
 
-        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages").fetch_one(&pool).await.unwrap();
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(count.0, 1);
 
-        let msg: (String, String) = sqlx::query_as("SELECT sender, body_plain FROM messages WHERE id='m1'")
-            .fetch_one(&pool).await.unwrap();
+        let msg: (String, String) =
+            sqlx::query_as("SELECT sender, body_plain FROM messages WHERE id='m1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(msg.0, "sender@test.com");
         assert_eq!(msg.1, "Hello");
 
-        let labels: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM message_labels WHERE message_id='m1'")
-            .fetch_one(&pool).await.unwrap();
+        let labels: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM message_labels WHERE message_id='m1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(labels.0, 2);
     }
 }

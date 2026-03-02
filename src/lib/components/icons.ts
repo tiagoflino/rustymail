@@ -49,6 +49,9 @@ export const iconGlobe = `<svg xmlns="http://www.w3.org/2000/svg" width="16" hei
 export const iconCalendar = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>`;
 
 export const iconHistory = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
+export const iconReply = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17L4 12L9 7"/><path d="M20 18V16C20 13.7909 18.2091 12 16 12H4"/></svg>`;
+export const iconReplyAll = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L2 12L7 7"/><path d="M12 17L7 12L12 7"/><path d="M22 18V16C22 13.7909 20.2091 12 18 12H7"/></svg>`;
+export const iconForward = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 17L20 12L15 7"/><path d="M4 18V16C4 13.7909 5.79086 12 8 12H20"/></svg>`;
 
 export function getLabelIcon(name: string): string {
     const n = name.toUpperCase();

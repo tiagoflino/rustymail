@@ -1069,7 +1069,15 @@ pub async fn toggle_thread_star(app_handle: tauri::AppHandle, thread_id: String,
 }
 
 #[tauri::command]
-pub async fn send_message(app_handle: tauri::AppHandle, to: String, subject: String, body: String) -> Result<(), String> {
+pub async fn send_message(
+    app_handle: tauri::AppHandle,
+    to: String,
+    subject: String,
+    body: String,
+    thread_id: Option<String>,
+    in_reply_to: Option<String>,
+    references: Option<String>,
+) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
 
@@ -1078,7 +1086,17 @@ pub async fn send_message(app_handle: tauri::AppHandle, to: String, subject: Str
     let row = sqlx::query_as::<_, EmailRow>("SELECT email FROM accounts WHERE id = ?")
         .bind(&account.id).fetch_one(pool.inner()).await.map_err(|e| e.to_string())?;
 
-    crate::gmail_api::send_message(&account.id, &row.email, &account.access_token, &to, &subject, &body).await
+    crate::gmail_api::send_message(
+        &account.id,
+        &row.email,
+        &account.access_token,
+        &to,
+        &subject,
+        &body,
+        thread_id.as_deref(),
+        in_reply_to.as_deref(),
+        references.as_deref(),
+    ).await
 }
 
 #[derive(serde::Serialize)]
@@ -1139,7 +1157,15 @@ pub async fn search_contacts(app_handle: tauri::AppHandle, query: String) -> Res
 }
 
 #[tauri::command]
-pub async fn save_draft(app_handle: tauri::AppHandle, to: String, subject: String, body: String) -> Result<(), String> {
+pub async fn save_draft(
+    app_handle: tauri::AppHandle,
+    to: String,
+    subject: String,
+    body: String,
+    thread_id: Option<String>,
+    in_reply_to: Option<String>,
+    references: Option<String>,
+) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
     
@@ -1148,7 +1174,17 @@ pub async fn save_draft(app_handle: tauri::AppHandle, to: String, subject: Strin
     let row = sqlx::query_as::<_, EmailRow>("SELECT email FROM accounts WHERE id = ?")
         .bind(&account.id).fetch_one(pool.inner()).await.map_err(|e| e.to_string())?;
         
-    crate::gmail_api::save_draft(&account.id, &row.email, &account.access_token, &to, &subject, &body).await
+    crate::gmail_api::save_draft(
+        &account.id,
+        &row.email,
+        &account.access_token,
+        &to,
+        &subject,
+        &body,
+        thread_id.as_deref(),
+        in_reply_to.as_deref(),
+        references.as_deref(),
+    ).await
 }
 
 #[tauri::command]

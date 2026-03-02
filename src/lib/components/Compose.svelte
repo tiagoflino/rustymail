@@ -5,18 +5,37 @@
   import { fly } from 'svelte/transition';
   import { addToast } from '$lib/stores/toast';
 
-  let { onClose }: { onClose: () => void } = $props();
+  let { 
+    onClose, 
+    initialTo = '', 
+    initialCc = '', 
+    initialSubject = '', 
+    initialBodyHTML = '', 
+    threadId = null, 
+    inReplyTo = null, 
+    references = null 
+  }: { 
+    onClose: () => void, 
+    initialTo?: string, 
+    initialCc?: string, 
+    initialSubject?: string, 
+    initialBodyHTML?: string, 
+    threadId?: string | null, 
+    inReplyTo?: string | null, 
+    references?: string | null 
+  } = $props();
+
   let isMinimized = $state(false);
   let isExpanded = $state(false);
   let isSending = $state(false);
   
-  let to = $state('');
-  let cc = $state('');
+  let to = $state(initialTo);
+  let cc = $state(initialCc);
   let bcc = $state('');
-  let subject = $state('');
-  let bodyHTML = $state('');
+  let subject = $state(initialSubject);
+  let bodyHTML = $state(initialBodyHTML);
 
-  let showCc = $state(false);
+  let showCc = $state(initialCc.length > 0);
   let showBcc = $state(false);
 
   let suggestions = $state<any[]>([]);
@@ -89,17 +108,24 @@
   onMount(async () => {
     try {
       const sig = await invoke('get_setting', { key: 'signature' }) as string;
+      let newHtml = initialBodyHTML;
       if (sig) {
-        editorEl.innerHTML = `<br><br><div class="rustymail-signature" style="color: var(--text-secondary); opacity: 0.8; font-size: 13px;">${sig}</div>`;
-        const range = document.createRange();
-        const sel = window.getSelection();
-        range.setStart(editorEl, 0);
-        range.collapse(true);
-        sel?.removeAllRanges();
-        sel?.addRange(range);
+        newHtml = `<br><br><div class="rustymail-signature" style="color: var(--text-secondary); opacity: 0.8; font-size: 13px;">${sig}</div>` + (initialBodyHTML ? `<br>${initialBodyHTML}` : '');
       }
+      if (newHtml) {
+        editorEl.innerHTML = newHtml;
+      }
+      
+      const range = document.createRange();
+      const sel = window.getSelection();
+      range.setStart(editorEl, 0);
+      range.collapse(true);
+      sel?.removeAllRanges();
+      sel?.addRange(range);
     } catch (e) {
-      // no signature or error
+      if (initialBodyHTML) {
+        editorEl.innerHTML = initialBodyHTML;
+      }
     }
   });
 
@@ -110,7 +136,10 @@
       await invoke('send_message', { 
         to: `${to}${cc ? ',' + cc : ''}${bcc ? ',' + bcc : ''}`, 
         subject, 
-        body: editorEl.innerHTML 
+        body: editorEl.innerHTML,
+        threadId,
+        inReplyTo,
+        references
       });
       addToast("Message sent successfully.", "success", 5000);
       onClose();
@@ -126,7 +155,10 @@
       await invoke('save_draft', { 
         to: `${to}${cc ? ',' + cc : ''}${bcc ? ',' + bcc : ''}`, 
         subject, 
-        body: editorEl.innerHTML 
+        body: editorEl.innerHTML,
+        threadId,
+        inReplyTo,
+        references
       });
       addToast("Draft saved.", "success");
       onClose();
