@@ -65,8 +65,10 @@ async fn get_active_account(pool: &sqlx::SqlitePool) -> Result<ActiveAccountFull
 pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String> {
     let client_id = env::var("RUSTYMAIL_CLIENT_ID")
         .map_err(|_| "RUSTYMAIL_CLIENT_ID not found in environment".to_string())?;
+    let client_id = client_id.trim().to_string();
     let client_secret = env::var("RUSTYMAIL_CLIENT_SECRET")
         .map_err(|_| "RUSTYMAIL_CLIENT_SECRET not found in environment".to_string())?;
+    let client_secret = client_secret.trim().to_string();
 
     let listener = TcpListener::bind("127.0.0.1:0").await.map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
@@ -138,12 +140,17 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
         return Err("CSRF token mismatch".to_string());
     }
 
+    println!("[OAuth] Exchanging code for tokens...");
     let token_result = client
         .exchange_code(AuthorizationCode::new(code))
         .set_pkce_verifier(pkce_verifier)
         .request_async(async_http_client)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            println!("[OAuth] Token exchange failed: {}", e);
+            e.to_string()
+        })?;
+    println!("[OAuth] Token exchange succeeded.");
 
     let access_token = token_result.access_token().secret().to_string();
     let refresh_token = token_result.refresh_token().map(|r| r.secret().clone()).unwrap_or_default();
