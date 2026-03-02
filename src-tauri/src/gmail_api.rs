@@ -445,21 +445,64 @@ pub async fn trash_thread(
     Ok(())
 }
 
+/// Parse an RFC 5322-ish address like `Display Name <email@example.com>` or
+/// just `email@example.com` into a lettre `Mailbox`. Display names containing
+/// emoji or other non-ASCII are supported because we handle them ourselves
+/// rather than delegating to `Mailbox::from_str`.
+fn parse_to_mailbox(raw: &str) -> Result<lettre::message::Mailbox, String> {
+    use lettre::message::Mailbox;
+    use lettre::Address;
+    use std::str::FromStr;
+
+    let raw = raw.trim();
+    if let (Some(start), Some(end)) = (raw.find('<'), raw.rfind('>')) {
+        let email_part = raw[start + 1..end].trim();
+        let display_part = raw[..start].trim().trim_matches('"').trim();
+        let address = Address::from_str(email_part)
+            .map_err(|e| format!("Invalid email address '{}': {}", email_part, e))?;
+        Ok(if display_part.is_empty() {
+            Mailbox::new(None, address)
+        } else {
+            Mailbox::new(Some(display_part.to_string()), address)
+        })
+    } else {
+        // No angle brackets — treat the whole thing as a plain email address
+        let address = Address::from_str(raw)
+            .map_err(|e| format!("Invalid To address '{}': {}", raw, e))?;
+        Ok(Mailbox::new(None, address))
+    }
+}
+
 fn build_mime_message(from: &str, to: &str, subject: &str, body: &str) -> Result<String, String> {
     use lettre::message::{Message, header::ContentType, Mailbox};
     use std::str::FromStr;
-    
-    let to_mailbox = Mailbox::from_str(to).map_err(|_| "Invalid To address")?;
+
     let from_mailbox = Mailbox::from_str(from).map_err(|_| "Invalid From address")?;
-    
-    let email = Message::builder()
+
+    // Parse all comma-separated recipient addresses, each potentially containing
+    // a display name with emoji or other non-ASCII characters.
+    let recipients: Vec<lettre::message::Mailbox> = to
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(parse_to_mailbox)
+        .collect::<Result<_, _>>()?;
+
+    if recipients.is_empty() {
+        return Err("No valid recipients".to_string());
+    }
+
+    let mut builder = Message::builder()
         .from(from_mailbox)
-        .to(to_mailbox)
-        .subject(subject)
+        .subject(subject);
+    for mailbox in recipients {
+        builder = builder.to(mailbox);
+    }
+    let email = builder
         .header(ContentType::TEXT_HTML)
         .body(body.to_string())
         .map_err(|e| e.to_string())?;
-        
+
     let formatted = email.formatted();
     Ok(base64::encode_config(formatted, base64::URL_SAFE_NO_PAD))
 }
@@ -552,7 +595,31 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_to_mailbox() {
+        // Plain email
+        let m1 = parse_to_mailbox("test@example.com").unwrap();
+        assert_eq!(m1.name, None);
+        assert_eq!(m1.email.to_string(), "test@example.com");
+
+        // Display name with angle brackets
+        let m2 = parse_to_mailbox("John Doe <john@example.com>").unwrap();
+        assert_eq!(m2.name, Some("John Doe".to_string()));
+        assert_eq!(m2.email.to_string(), "john@example.com");
+
+        // Display name with quotes
+        let m3 = parse_to_mailbox("\"Jane Doe\" <jane@example.com>").unwrap();
+        assert_eq!(m3.name, Some("Jane Doe".to_string()));
+        assert_eq!(m3.email.to_string(), "jane@example.com");
+
+        // Display name with emoji (the initially failing case)
+        let m4 = parse_to_mailbox("🇦🇺Fernandinha <fernanda@example.com>").unwrap();
+        assert_eq!(m4.name, Some("🇦🇺Fernandinha".to_string()));
+        assert_eq!(m4.email.to_string(), "fernanda@example.com");
+    }
+
+    #[test]
     fn test_build_mime_message() {
+        // Single recipient
         let res = build_mime_message("me@test.com", "you@test.com", "Hi", "Body");
         assert!(res.is_ok());
         let encoded = res.unwrap();
@@ -564,6 +631,24 @@ mod tests {
         assert!(mime.contains("To: you@test.com"));
         assert!(mime.contains("Subject: Hi"));
         assert!(mime.contains("Body"));
+
+        // Multiple recipients with emoji
+        let res2 = build_mime_message(
+            "me@test.com",
+            "🇦🇺Fernandinha <fernanda@test.com>, \"Bob\" <bob@test.com>, plain@test.com",
+            "Multi Test",
+            "Body"
+        );
+        let encoded2 = res2.unwrap();
+        let decoded2 = base64::decode_config(&encoded2, base64::URL_SAFE_NO_PAD).unwrap();
+        let mime2 = String::from_utf8(decoded2).unwrap();
+        
+        // Lettre formats the To header with commas between recipients
+        // display names generally get =?utf-8?b?...?= encoded in the headers,
+        // so we just check for the plain addresses.
+        assert!(mime2.contains("fernanda@test.com"));
+        assert!(mime2.contains("bob@test.com"));
+        assert!(mime2.contains("plain@test.com"));
     }
 
     #[tokio::test]
