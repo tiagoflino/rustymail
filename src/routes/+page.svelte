@@ -44,6 +44,7 @@
   let isLoadingMore = false;
   let bgSyncDone = false;
   let globalSyncInterval: ReturnType<typeof setInterval> | null = null;
+  let currentBgInterval: ReturnType<typeof setInterval> | null = null;
   const labelLastSyncMap: Record<string, number> = {};
 
   
@@ -86,7 +87,7 @@
       isAuthenticated.set(true);
       await refreshAccountState();
       appState = 'authenticated';
-      await performSync();
+      await performSync(true);
     } catch (e: any) {
       console.error(e);
       addToast(String(e), 'error', 6000);
@@ -108,16 +109,22 @@
     } catch (e) { appState = 'onboarding'; }
   }
 
-  async function performSync() {
+  async function performSync(isManual = false) {
     try {
       isSyncing.set(true);
       lastSyncError.set(null);
       
-      await invoke('sync_gmail_data');
+      const labelId = $selectedLabelId || "INBOX";
+      await invoke('sync_gmail_data', { labelId });
       
       if (!$searchQuery) {
-        threadOffset = 0; hasMore = true;
-        await loadThreads(true);
+        if (isManual) {
+          threadOffset = 0; hasMore = true;
+          await loadThreads(true);
+        } else {
+          // Background sync: update silently without reset
+          await loadThreads(true, true);
+        }
       }
       
       await loadLabels();
@@ -129,19 +136,28 @@
 
   async function pollBackgroundSync() {
     bgSyncDone = false;
+    if (currentBgInterval) clearInterval(currentBgInterval);
     
-    const interval = setInterval(async () => {
+    currentBgInterval = setInterval(async () => {
       try {
         await loadLabels();
         const progress: { total: number; hydrated: number } = await invoke('get_hydration_progress');
         if (progress.total > 0 && progress.hydrated >= progress.total) {
           bgSyncDone = true;
-          clearInterval(interval);
+          if (currentBgInterval) clearInterval(currentBgInterval);
+          currentBgInterval = null;
         }
-      } catch (_) { clearInterval(interval); }
+      } catch (_) { 
+        if (currentBgInterval) clearInterval(currentBgInterval); 
+        currentBgInterval = null;
+      }
     }, 3000);
     
-    setTimeout(() => { bgSyncDone = true; clearInterval(interval); }, 120000);
+    setTimeout(() => { 
+      bgSyncDone = true; 
+      if (currentBgInterval) clearInterval(currentBgInterval);
+      currentBgInterval = null;
+    }, 120000);
   }
 
   async function checkAndSetupSync() {
@@ -149,10 +165,10 @@
     try {
       const freqStr = await invoke<string>('get_setting', { key: 'sync_frequency' });
       if (freqStr && freqStr !== 'manual') {
-        const secs = parseInt(freqStr);
+        const secs = parseInt(freqStr) || 30;
         if (secs > 0) {
           globalSyncInterval = setInterval(async () => {
-             if (!$isSyncing) await performSync();
+             if (!$isSyncing) await performSync(false);
           }, secs * 1000);
         }
       }
@@ -163,10 +179,13 @@
 
   let isLabelFetching = false;
 
-  async function loadThreads(reset = false) {
-    if (reset && $threads.length > 0 && !isLabelFetching && !$searchQuery) {
+  async function loadThreads(reset = false, silent = false) {
+    if (isLoadingThreads && !silent) return;
+    if (!silent) isLoadingThreads = true;
+
+    if (reset && $threads.length > 0 && !isLabelFetching && !$searchQuery && !silent) {
       
-    } else if (reset) {
+    } else if (reset && !silent) {
       if ($searchQuery && !isLabelFetching) return; 
       threadOffset = 0; hasMore = true; threads.set([]);
     }
@@ -175,7 +194,7 @@
       const labelId = $selectedLabelId || null;
       const fetched: LocalThread[] = await invoke('get_threads', { labelId, offset: reset ? 0 : threadOffset, limit: THREAD_PAGE_SIZE });
       
-      if (reset && fetched.length === 0 && labelId) {
+      if (reset && fetched.length === 0 && labelId && !silent) {
         isLabelFetching = true;
         try {
           await invoke('fetch_label_threads', { labelId });
@@ -189,7 +208,30 @@
         return;
       }
       
-      if (reset) { 
+      if (silent) {
+        threads.update(current => {
+          const map = new Map(current.map(t => [t.id, t]));
+          let hasNew = false;
+          const updated = [...current];
+          const newOnes: LocalThread[] = [];
+          
+          for (const f of fetched) {
+            const existing = map.get(f.id);
+            if (existing) {
+              // Only update if something changed to avoid unnecessary re-renders
+              if (existing.unread !== f.unread || existing.starred !== f.starred || existing.snippet !== f.snippet) {
+                Object.assign(existing, f);
+              }
+            } else {
+              newOnes.push(f);
+              hasNew = true;
+            }
+          }
+          
+          if (!hasNew) return updated;
+          return [...newOnes, ...updated];
+        });
+      } else if (reset) { 
         threads.set(fetched);
         threadOffset = fetched.length;
       } else { 
@@ -198,6 +240,7 @@
       }
       hasMore = fetched.length >= THREAD_PAGE_SIZE;
     } catch (e) { console.error("Failed to load threads", e); }
+    finally { if (!silent) isLoadingThreads = false; }
     observeSentinel();
   }
 
@@ -417,7 +460,7 @@
     try {
       await invoke('switch_account', { accountId });
       await refreshAccountState();
-      await performSync();
+      await performSync(true);
     } catch (e) { console.error("Switch account failed", e); }
   }
 
@@ -434,7 +477,7 @@
       if (allAccounts.length === 0) {
         appState = 'onboarding';
         isAuthenticated.set(false);
-      } else { await performSync(); }
+      } else { await performSync(true); }
     } catch (e) { console.error("Remove account failed", e); }
   }
 
@@ -635,7 +678,7 @@
 
       <div class="sidebar-bottom">
         <div class="sidebar-bottom-row">
-          <button onclick={performSync} disabled={$isSyncing} class="btn-sidebar flex-grow">
+          <button onclick={() => performSync(true)} disabled={$isSyncing} class="btn-sidebar flex-grow">
             <span class="icon {$isSyncing ? 'spin' : ''}">{@html iconRefresh}</span>
             {$isSyncing ? 'Syncing…' : 'Refresh'}
           </button>
@@ -716,7 +759,7 @@
             {:else}No messages here.{/if}
           </div>
         {:else}
-          {#each $threads as thread}
+          {#each $threads as thread (thread.id)}
             <div class="thread-item {thread.unread > 0 ? 'unread' : ''} {$selectedThreadId === thread.id ? 'selected' : ''}" 
               role="button" tabindex="0"
               onclick={() => selectThread(thread.id)}
@@ -980,7 +1023,7 @@
   .list-header { padding: 8px 16px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; height: 36px; }
   .list-header h3 { font-weight: 600; font-size: 13px; color: var(--text-primary); }
   .thread-count { font-size: 11px; color: var(--text-secondary); font-weight: 500; }
-  .thread-scroll-area { flex: 1; overflow-y: auto; }
+  .thread-scroll-area { flex: 1; overflow-y: auto; overflow-anchor: auto; }
 
   .empty-state { padding: 2rem; text-align: center; color: var(--text-secondary); font-size: 13px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
   .centered-empty { height: 100%; justify-content: center; }

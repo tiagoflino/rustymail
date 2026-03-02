@@ -512,7 +512,7 @@ pub async fn update_setting(app_handle: tauri::AppHandle, key: String, value: St
 
 
 #[tauri::command]
-pub async fn sync_gmail_data(app_handle: tauri::AppHandle) -> Result<(), String> {
+pub async fn sync_gmail_data(app_handle: tauri::AppHandle, label_id: Option<String>) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
 
@@ -522,14 +522,20 @@ pub async fn sync_gmail_data(app_handle: tauri::AppHandle) -> Result<(), String>
     crate::gmail_api::fetch_and_store_labels(pool.inner(), &account.id, &account.access_token).await?;
 
     
+    let target_labels = if let Some(ref lid) = label_id {
+        vec![lid.as_str()]
+    } else {
+        vec!["INBOX"]
+    };
+
     crate::gmail_api::fetch_and_store_threads(
         pool.inner(), &account.id, &account.access_token,
-        Some(&["INBOX"]), 100,
+        Some(&target_labels), 100,
     ).await?;
 
-    let inbox_unhydrated = crate::gmail_api::get_unhydrated_thread_ids(pool.inner(), &account.id).await;
-    if !inbox_unhydrated.is_empty() {
-        let batch: Vec<String> = inbox_unhydrated.into_iter().take(100).collect();
+    let unhydrated = crate::gmail_api::get_unhydrated_thread_ids(pool.inner(), &account.id).await;
+    if !unhydrated.is_empty() {
+        let batch: Vec<String> = unhydrated.into_iter().take(100).collect();
         crate::gmail_api::batch_hydrate_threads(
             pool.inner(), &account.id, &account.access_token, batch
         ).await;

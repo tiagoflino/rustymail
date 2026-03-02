@@ -124,7 +124,7 @@ pub async fn init_db(app_handle: &tauri::AppHandle) -> Result<SqlitePool> {
         ("reply_position", "above"),
         ("notifications_enabled", "true"),
         ("notifications_sound", "true"),
-        ("sync_frequency", "15"),
+        ("sync_frequency", "30"),
         ("max_threads_sync", "100"),
         ("max_cache_mb", "500"),
         ("mark_read_delay", "2"),

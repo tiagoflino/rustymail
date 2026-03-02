@@ -67,15 +67,15 @@
   const cacheStops = [250, 500, 1000, 2000, 5000, 10000, 50000];
 
   function freqToSlider(val: string): number {
-    const n = parseInt(val) || 300;
+    const n = parseInt(val) || 30;
     const idx = syncFreqStops.indexOf(n);
-    return idx >= 0 ? idx : 7;
+    return idx >= 0 ? idx : 3;
   }
   function sliderToFreq(pos: number): string {
-    return String(syncFreqStops[pos] || 300);
+    return String(syncFreqStops[pos] || 30);
   }
   function freqLabel(val: string): string {
-    const n = parseInt(val) || 300;
+    const n = parseInt(val) || 30;
     if (n < 60) return `${n} seconds`;
     const m = n / 60;
     return m === 1 ? '1 minute' : `${m} minutes`;
@@ -165,18 +165,18 @@
             <div class="setting-group">
               <div class="setting-label">
                 <span class="setting-name">Sync Frequency</span>
-                <span class="setting-hint">{settings.sync_frequency === 'manual' ? 'Manual refresh only' : `Check every ${freqLabel(settings.sync_frequency || '15')}`}</span>
+                <span class="setting-hint">{settings.sync_frequency === 'manual' ? 'Manual refresh only' : `Check every ${freqLabel(settings.sync_frequency || '30')}`}</span>
               </div>
               <div class="slider-row">
                 <input type="range" class="range-slider" min="0" max={syncFreqStops.length - 1} step="1"
-                  value={freqToSlider(settings.sync_frequency || '15')}
+                  value={freqToSlider(settings.sync_frequency || '30')}
                   disabled={settings.sync_frequency === 'manual'}
                   oninput={(e) => saveSetting('sync_frequency', sliderToFreq(parseInt(e.currentTarget.value)))} />
-                <span class="slider-value">{settings.sync_frequency === 'manual' ? '—' : freqLabel(settings.sync_frequency || '15')}</span>
+                <span class="slider-value">{settings.sync_frequency === 'manual' ? '—' : freqLabel(settings.sync_frequency || '30')}</span>
               </div>
               <label class="toggle-row compact">
                 <input type="checkbox" class="toggle" checked={settings.sync_frequency === 'manual'}
-                  onchange={(e) => saveSetting('sync_frequency', e.currentTarget.checked ? 'manual' : '5')} />
+                  onchange={(e) => saveSetting('sync_frequency', e.currentTarget.checked ? 'manual' : '30')} />
                 <span class="setting-hint">Manual only</span>
               </label>
             </div>
