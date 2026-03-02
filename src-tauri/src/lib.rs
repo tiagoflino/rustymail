@@ -1,8 +1,7 @@
-
-mod db;
 mod auth;
-mod gmail_api;
 pub mod calendar_api;
+mod db;
+mod gmail_api;
 
 use tauri::Manager;
 
@@ -14,14 +13,13 @@ fn greet(name: &str) -> String {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     dotenvy::dotenv().ok();
-    
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let handle = app.handle().clone();
-            let pool = tauri::async_runtime::block_on(async {
-                db::init_db(&handle).await
-            }).expect("Failed to initialize database");
+            let pool = tauri::async_runtime::block_on(async { db::init_db(&handle).await })
+                .expect("Failed to initialize database");
             handle.manage(pool);
             println!("Database initialized successfully!");
             Ok(())
@@ -53,6 +51,7 @@ pub fn run() {
             auth::get_setting,
             auth::send_message,
             auth::save_draft,
+            auth::delete_draft,
             auth::get_upcoming_events,
             auth::search_contacts
         ])

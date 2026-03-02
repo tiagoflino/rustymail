@@ -46,7 +46,12 @@
   import Compose from "$lib/components/Compose.svelte";
   import CalendarSidebar from "$lib/components/CalendarSidebar.svelte";
   import Toasts from "$lib/components/Toasts.svelte";
-  import { formatTime, decodeEntities } from "$lib/utils/formatters.js";
+  import { addToast } from "$lib/stores/toast";
+  import {
+    formatTime,
+    decodeEntities,
+    prepareQuotedHtml,
+  } from "$lib/utils/formatters.js";
 
   interface LocalLabel {
     id: string;
@@ -689,13 +694,14 @@
     const to = msg.sender || "";
 
     let quote = ``;
-    if (msg.body_plain) {
+    if (msg.body_html) {
+      const quotedContent = prepareQuotedHtml(msg.body_html);
+      quote = `<br><br><div>On ${formatTime(msg.internal_date)}, ${msg.sender.replace(/</g, "&lt;").replace(/>/g, "&gt;")} wrote:</div>${quotedContent}`;
+    } else if (msg.body_plain) {
       quote =
         `\n\nOn ${formatTime(msg.internal_date)}, ${msg.sender} wrote:\n> ` +
         msg.body_plain.replace(/\n/g, "\n> ");
       quote = `<pre>${quote}</pre>`;
-    } else if (msg.body_html) {
-      quote = `<br><br><div class="gmail_quote" style="border-left:1px solid #ccc; margin-left:1ex; padding-left:1ex">On ${formatTime(msg.internal_date)}, ${msg.sender.replace(/</g, "&lt;").replace(/>/g, "&gt;")} wrote:<br><br>${msg.body_html}</div>`;
     }
 
     openCompose({
@@ -729,13 +735,14 @@
     const to = allRecipients.join(", ");
 
     let quote = ``;
-    if (msg.body_plain) {
+    if (msg.body_html) {
+      const quotedContent = prepareQuotedHtml(msg.body_html);
+      quote = `<br><br><div>On ${formatTime(msg.internal_date)}, ${msg.sender.replace(/</g, "&lt;").replace(/>/g, "&gt;")} wrote:</div>${quotedContent}`;
+    } else if (msg.body_plain) {
       quote =
         `\n\nOn ${formatTime(msg.internal_date)}, ${msg.sender} wrote:\n> ` +
         msg.body_plain.replace(/\n/g, "\n> ");
       quote = `<pre>${quote}</pre>`;
-    } else if (msg.body_html) {
-      quote = `<br><br><div class="gmail_quote" style="border-left:1px solid #ccc; margin-left:1ex; padding-left:1ex">On ${formatTime(msg.internal_date)}, ${msg.sender.replace(/</g, "&lt;").replace(/>/g, "&gt;")} wrote:<br><br>${msg.body_html}</div>`;
     }
 
     openCompose({
@@ -756,11 +763,12 @@
     let quote = ``;
     let headerStr = `---------- Forwarded message ---------\nFrom: ${msg.sender}\nDate: ${formatTime(msg.internal_date)}\nSubject: ${msg.subject}\nTo: ${msg.recipients || ""}\n\n`;
 
-    if (msg.body_plain) {
-      quote = `<pre>${headerStr}${msg.body_plain}</pre>`;
-    } else if (msg.body_html) {
+    if (msg.body_html) {
       let htmlHeader = `<div>---------- Forwarded message ---------<br>From: ${msg.sender.replace(/</g, "&lt;").replace(/>/g, "&gt;")}<br>Date: ${formatTime(msg.internal_date)}<br>Subject: ${msg.subject}<br>To: ${msg.recipients || ""}<br><br></div>`;
-      quote = `<br><br><div class="gmail_quote" style="border-left:1px solid #ccc; margin-left:1ex; padding-left:1ex">${htmlHeader}${msg.body_html}</div>`;
+      const quotedContent = prepareQuotedHtml(msg.body_html);
+      quote = `<br><br>${htmlHeader}${quotedContent}`;
+    } else if (msg.body_plain) {
+      quote = `<pre>${headerStr}${msg.body_plain}</pre>`;
     }
 
     openCompose({

@@ -549,6 +549,7 @@ fn build_mime_message(
     body: &str,
     in_reply_to: Option<&str>,
     references: Option<&str>,
+    allow_empty_to: bool,
 ) -> Result<String, String> {
     use lettre::message::{header::ContentType, Mailbox, Message};
     use std::str::FromStr;
@@ -564,11 +565,29 @@ fn build_mime_message(
         .map(parse_to_mailbox)
         .collect::<Result<_, _>>()?;
 
-    if recipients.is_empty() {
-        return Err("No valid recipients".to_string());
-    }
+    let mut builder = Message::builder()
+        .from(from_mailbox.clone())
+        .subject(subject);
 
-    let mut builder = Message::builder().from(from_mailbox).subject(subject);
+    if recipients.is_empty() {
+        if allow_empty_to {
+            // Dummy envelope to satisfy lettre's validation
+            // Gmail API ignores the envelope when saving a draft/sending raw
+            // but lettre requires at least one recipient in the envelope.
+            let from_addr = from_mailbox.email.clone();
+            let envelope = lettre::address::Envelope::new(Some(from_addr.clone()), vec![from_addr])
+                .map_err(|e| e.to_string())?;
+            builder = builder.envelope(envelope);
+        } else {
+            return Err(
+                "No valid recipients. Please specify at least one recipient to send.".to_string(),
+            );
+        }
+    } else {
+        for mailbox in recipients {
+            builder = builder.to(mailbox);
+        }
+    }
 
     if let Some(irt) = in_reply_to {
         if !irt.is_empty() {
@@ -581,9 +600,6 @@ fn build_mime_message(
         }
     }
 
-    for mailbox in recipients {
-        builder = builder.to(mailbox);
-    }
     let email = builder
         .header(ContentType::TEXT_HTML)
         .body(body.to_string())
@@ -604,7 +620,15 @@ pub async fn send_message(
     in_reply_to: Option<&str>,
     references: Option<&str>,
 ) -> Result<(), String> {
-    let raw = build_mime_message(account_email, to, subject, body, in_reply_to, references)?;
+    let raw = build_mime_message(
+        account_email,
+        to,
+        subject,
+        body,
+        in_reply_to,
+        references,
+        false,
+    )?;
     let client = reqwest::Client::new();
     let mut body_json = serde_json::json!({ "raw": raw });
 
@@ -638,8 +662,17 @@ pub async fn save_draft(
     thread_id: Option<&str>,
     in_reply_to: Option<&str>,
     references: Option<&str>,
-) -> Result<(), String> {
-    let raw = build_mime_message(account_email, to, subject, body, in_reply_to, references)?;
+    draft_id: Option<&str>,
+) -> Result<String, String> {
+    let raw = build_mime_message(
+        account_email,
+        to,
+        subject,
+        body,
+        in_reply_to,
+        references,
+        true,
+    )?;
     let client = reqwest::Client::new();
     let mut message_json = serde_json::json!({ "raw": raw });
 
@@ -651,8 +684,22 @@ pub async fn save_draft(
 
     let body_json = serde_json::json!({ "message": message_json });
 
-    let res = client
-        .post("https://gmail.googleapis.com/gmail/v1/users/me/drafts")
+    let url = if let Some(did) = draft_id {
+        format!(
+            "https://gmail.googleapis.com/gmail/v1/users/me/drafts/{}",
+            did
+        )
+    } else {
+        "https://gmail.googleapis.com/gmail/v1/users/me/drafts".to_string()
+    };
+
+    let request = if draft_id.is_some() {
+        client.put(&url)
+    } else {
+        client.post(&url)
+    };
+
+    let res = request
         .header("Authorization", format!("Bearer {}", access_token))
         .json(&body_json)
         .send()
@@ -661,6 +708,35 @@ pub async fn save_draft(
 
     if !res.status().is_success() {
         return Err(format!("Failed to save draft: {}", res.status()));
+    }
+
+    let response_json: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+    let id = response_json["id"]
+        .as_str()
+        .ok_or("No draft ID returned")?
+        .to_string();
+    Ok(id)
+}
+
+pub async fn delete_draft(
+    _account_id: &str,
+    _account_email: &str,
+    access_token: &str,
+    draft_id: &str,
+) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let res = client
+        .delete(&format!(
+            "https://gmail.googleapis.com/gmail/v1/users/me/drafts/{}",
+            draft_id
+        ))
+        .header("Authorization", format!("Bearer {}", access_token))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !res.status().is_success() {
+        return Err(format!("Failed to delete draft: {}", res.status()));
     }
     Ok(())
 }
@@ -738,7 +814,15 @@ mod tests {
     #[test]
     fn test_build_mime_message() {
         // Single recipient
-        let res = build_mime_message("me@test.com", "you@test.com", "Hi", "Body", None, None);
+        let res = build_mime_message(
+            "me@test.com",
+            "you@test.com",
+            "Hi",
+            "Body",
+            None,
+            None,
+            false,
+        );
         assert!(res.is_ok());
         let encoded = res.unwrap();
         let decoded = base64::decode_config(&encoded, base64::URL_SAFE_NO_PAD)
@@ -758,6 +842,7 @@ mod tests {
             "Body",
             None,
             None,
+            false,
         );
         let encoded2 = res2.unwrap();
         let decoded2 = base64::decode_config(&encoded2, base64::URL_SAFE_NO_PAD).unwrap();

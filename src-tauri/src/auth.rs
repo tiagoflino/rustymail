@@ -1,19 +1,14 @@
+use keyring::Entry;
 use oauth2::basic::BasicClient;
 use oauth2::reqwest::async_http_client;
 use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
-    RedirectUrl, TokenResponse, TokenUrl,
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge, RedirectUrl,
+    TokenResponse, TokenUrl,
 };
+use std::env;
+use tauri::Manager;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
-use keyring::Entry;
-use tauri::Manager;
-use std::env;
-
-
-
-
-
 
 #[derive(sqlx::FromRow)]
 struct ActiveAccountFull {
@@ -58,10 +53,6 @@ async fn get_active_account(pool: &sqlx::SqlitePool) -> Result<ActiveAccountFull
     Ok(account)
 }
 
-
-
-
-
 pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String> {
     let client_id = env::var("RUSTYMAIL_CLIENT_ID")
         .map_err(|_| "RUSTYMAIL_CLIENT_ID not found in environment".to_string())?;
@@ -70,10 +61,11 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
         .map_err(|_| "RUSTYMAIL_CLIENT_SECRET not found in environment".to_string())?;
     let client_secret = client_secret.trim().to_string();
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.map_err(|e| e.to_string())?;
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let redirect_url = format!("http://127.0.0.1:{}", port);
-
 
     let client = BasicClient::new(
         ClientId::new(client_id),
@@ -90,11 +82,21 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
         .add_scope(oauth2::Scope::new("openid".to_string()))
         .add_scope(oauth2::Scope::new("email".to_string()))
         .add_scope(oauth2::Scope::new("profile".to_string()))
-        .add_scope(oauth2::Scope::new("https://www.googleapis.com/auth/gmail.readonly".to_string()))
-        .add_scope(oauth2::Scope::new("https://www.googleapis.com/auth/gmail.modify".to_string()))
-        .add_scope(oauth2::Scope::new("https://www.googleapis.com/auth/gmail.send".to_string()))
-        .add_scope(oauth2::Scope::new("https://www.googleapis.com/auth/gmail.labels".to_string()))
-        .add_scope(oauth2::Scope::new("https://www.googleapis.com/auth/calendar.readonly".to_string()))
+        .add_scope(oauth2::Scope::new(
+            "https://www.googleapis.com/auth/gmail.readonly".to_string(),
+        ))
+        .add_scope(oauth2::Scope::new(
+            "https://www.googleapis.com/auth/gmail.modify".to_string(),
+        ))
+        .add_scope(oauth2::Scope::new(
+            "https://www.googleapis.com/auth/gmail.send".to_string(),
+        ))
+        .add_scope(oauth2::Scope::new(
+            "https://www.googleapis.com/auth/gmail.labels".to_string(),
+        ))
+        .add_scope(oauth2::Scope::new(
+            "https://www.googleapis.com/auth/calendar.readonly".to_string(),
+        ))
         .set_pkce_challenge(pkce_challenge)
         .add_extra_param("access_type", "offline")
         .add_extra_param("prompt", "consent")
@@ -112,11 +114,14 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
     let (mut stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
     let mut reader = BufReader::new(&mut stream);
     let mut request_line = String::new();
-    reader.read_line(&mut request_line).await.map_err(|e| e.to_string())?;
+    reader
+        .read_line(&mut request_line)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let mut code = String::new();
     let mut state = String::new();
-    
+
     if request_line.starts_with("GET") {
         let parts: Vec<&str> = request_line.split_whitespace().collect();
         if parts.len() > 1 {
@@ -125,8 +130,11 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
                 for param in query.split('&') {
                     let mut kv = param.split('=');
                     if let (Some(k), Some(v)) = (kv.next(), kv.next()) {
-                        if k == "code" { code = v.to_string(); }
-                        else if k == "state" { state = v.to_string(); }
+                        if k == "code" {
+                            code = v.to_string();
+                        } else if k == "state" {
+                            state = v.to_string();
+                        }
                     }
                 }
             }
@@ -153,11 +161,13 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
     println!("[OAuth] Token exchange succeeded.");
 
     let access_token = token_result.access_token().secret().to_string();
-    let refresh_token = token_result.refresh_token().map(|r| r.secret().clone()).unwrap_or_default();
-    
+    let refresh_token = token_result
+        .refresh_token()
+        .map(|r| r.secret().clone())
+        .unwrap_or_default();
+
     println!("Tokens acquired successfully!");
 
-    
     let http_client = reqwest::Client::new();
     let (email, display_name, avatar_url) = match http_client
         .get("https://www.googleapis.com/oauth2/v2/userinfo")
@@ -168,18 +178,28 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
         Ok(res) => {
             if let Ok(body) = res.json::<serde_json::Value>().await {
                 (
-                    body["email"].as_str().unwrap_or("unknown@gmail.com").to_string(),
+                    body["email"]
+                        .as_str()
+                        .unwrap_or("unknown@gmail.com")
+                        .to_string(),
                     body["name"].as_str().unwrap_or("").to_string(),
                     body["picture"].as_str().unwrap_or("").to_string(),
                 )
             } else {
-                ("unknown@gmail.com".to_string(), String::new(), String::new())
+                (
+                    "unknown@gmail.com".to_string(),
+                    String::new(),
+                    String::new(),
+                )
             }
         }
-        Err(_) => ("unknown@gmail.com".to_string(), String::new(), String::new()),
+        Err(_) => (
+            "unknown@gmail.com".to_string(),
+            String::new(),
+            String::new(),
+        ),
     };
 
-    
     let account_id = email.clone();
 
     if !refresh_token.is_empty() {
@@ -190,8 +210,9 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
 
     let pool = app_handle.state::<sqlx::SqlitePool>();
 
-    
-    let _ = sqlx::query("UPDATE accounts SET is_active = 0").execute(pool.inner()).await;
+    let _ = sqlx::query("UPDATE accounts SET is_active = 0")
+        .execute(pool.inner())
+        .await;
 
     let sql = "INSERT INTO accounts (id, email, display_name, avatar_url, access_token, refresh_token, token_expiry, is_active, created_at) 
                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
@@ -224,10 +245,6 @@ pub async fn authenticate_gmail(app_handle: tauri::AppHandle) -> Result<(), Stri
     start_oauth_flow(app_handle).await
 }
 
-
-
-
-
 #[derive(serde::Serialize, Clone)]
 pub struct AccountInfo {
     pub id: String,
@@ -247,7 +264,7 @@ pub struct AuthStatus {
 #[tauri::command]
 pub async fn check_auth_status(app_handle: tauri::AppHandle) -> Result<AuthStatus, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
-    
+
     #[derive(sqlx::FromRow)]
     struct AccountRow {
         id: String,
@@ -265,23 +282,28 @@ pub async fn check_auth_status(app_handle: tauri::AppHandle) -> Result<AuthStatu
         .map_err(|e| e.to_string())?;
 
     if all_accounts.is_empty() {
-        return Ok(AuthStatus { authenticated: false, active_account: None, accounts: vec![] });
+        return Ok(AuthStatus {
+            authenticated: false,
+            active_account: None,
+            accounts: vec![],
+        });
     }
 
-    let accounts_info: Vec<AccountInfo> = all_accounts.iter().map(|a| AccountInfo {
-        id: a.id.clone(),
-        email: a.email.clone().unwrap_or_default(),
-        display_name: a.display_name.clone().unwrap_or_default(),
-        avatar_url: a.avatar_url.clone().unwrap_or_default(),
-        is_active: a.is_active.unwrap_or(0) == 1,
-    }).collect();
+    let accounts_info: Vec<AccountInfo> = all_accounts
+        .iter()
+        .map(|a| AccountInfo {
+            id: a.id.clone(),
+            email: a.email.clone().unwrap_or_default(),
+            display_name: a.display_name.clone().unwrap_or_default(),
+            avatar_url: a.avatar_url.clone().unwrap_or_default(),
+            is_active: a.is_active.unwrap_or(0) == 1,
+        })
+        .collect();
 
-    
     let active = all_accounts.iter().find(|a| a.is_active.unwrap_or(0) == 1);
     let active = match active {
         Some(a) => a,
         None => {
-            
             let first_id = &all_accounts[0].id;
             let _ = sqlx::query("UPDATE accounts SET is_active = 1 WHERE id = ?")
                 .bind(first_id)
@@ -294,9 +316,11 @@ pub async fn check_auth_status(app_handle: tauri::AppHandle) -> Result<AuthStatu
     let now = chrono::Utc::now().timestamp();
     let expiry = active.token_expiry.unwrap_or(0);
 
-    
     if expiry > now {
-        let active_info = accounts_info.iter().find(|a| a.is_active).cloned()
+        let active_info = accounts_info
+            .iter()
+            .find(|a| a.is_active)
+            .cloned()
             .unwrap_or_else(|| accounts_info[0].clone());
         return Ok(AuthStatus {
             authenticated: true,
@@ -305,7 +329,6 @@ pub async fn check_auth_status(app_handle: tauri::AppHandle) -> Result<AuthStatu
         });
     }
 
-    
     let refresh_token = active.refresh_token.clone().unwrap_or_default();
     let token_to_use = if refresh_token.is_empty() {
         Entry::new("rustymail", &active.id)
@@ -316,12 +339,19 @@ pub async fn check_auth_status(app_handle: tauri::AppHandle) -> Result<AuthStatu
     };
 
     if token_to_use.is_empty() {
-        return Ok(AuthStatus { authenticated: false, active_account: None, accounts: accounts_info });
+        return Ok(AuthStatus {
+            authenticated: false,
+            active_account: None,
+            accounts: accounts_info,
+        });
     }
 
     match refresh_and_update(pool.inner(), &active.id, &token_to_use).await {
         Ok(_) => {
-            let active_info = accounts_info.iter().find(|a| a.is_active).cloned()
+            let active_info = accounts_info
+                .iter()
+                .find(|a| a.is_active)
+                .cloned()
                 .unwrap_or_else(|| accounts_info[0].clone());
             Ok(AuthStatus {
                 authenticated: true,
@@ -329,11 +359,19 @@ pub async fn check_auth_status(app_handle: tauri::AppHandle) -> Result<AuthStatu
                 accounts: accounts_info,
             })
         }
-        Err(_) => Ok(AuthStatus { authenticated: false, active_account: None, accounts: accounts_info }),
+        Err(_) => Ok(AuthStatus {
+            authenticated: false,
+            active_account: None,
+            accounts: accounts_info,
+        }),
     }
 }
 
-async fn refresh_and_update(pool: &sqlx::SqlitePool, account_id: &str, refresh_token: &str) -> Result<(), String> {
+async fn refresh_and_update(
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
+    refresh_token: &str,
+) -> Result<(), String> {
     let client_id = std::env::var("RUSTYMAIL_CLIENT_ID")
         .map_err(|_| "RUSTYMAIL_CLIENT_ID not found".to_string())?;
     let client_secret = std::env::var("RUSTYMAIL_CLIENT_SECRET")
@@ -361,7 +399,6 @@ async fn refresh_and_update(pool: &sqlx::SqlitePool, account_id: &str, refresh_t
     let expires_in = body["expires_in"].as_i64().unwrap_or(3500);
     let new_expiry = chrono::Utc::now().timestamp() + expires_in;
 
-    
     let http = reqwest::Client::new();
     if let Ok(profile_res) = http
         .get("https://www.googleapis.com/oauth2/v2/userinfo")
@@ -398,14 +435,10 @@ async fn refresh_and_update(pool: &sqlx::SqlitePool, account_id: &str, refresh_t
     Ok(())
 }
 
-
-
-
-
 #[tauri::command]
 pub async fn get_accounts(app_handle: tauri::AppHandle) -> Result<Vec<AccountInfo>, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
-    
+
     #[derive(sqlx::FromRow)]
     struct Row {
         id: String,
@@ -420,19 +453,28 @@ pub async fn get_accounts(app_handle: tauri::AppHandle) -> Result<Vec<AccountInf
         .await
         .map_err(|e| e.to_string())?;
 
-    Ok(rows.into_iter().map(|r| AccountInfo {
-        id: r.id,
-        email: r.email.unwrap_or_default(),
-        display_name: r.display_name.unwrap_or_default(),
-        avatar_url: r.avatar_url.unwrap_or_default(),
-        is_active: r.is_active.unwrap_or(0) == 1,
-    }).collect())
+    Ok(rows
+        .into_iter()
+        .map(|r| AccountInfo {
+            id: r.id,
+            email: r.email.unwrap_or_default(),
+            display_name: r.display_name.unwrap_or_default(),
+            avatar_url: r.avatar_url.unwrap_or_default(),
+            is_active: r.is_active.unwrap_or(0) == 1,
+        })
+        .collect())
 }
 
 #[tauri::command]
-pub async fn switch_account(app_handle: tauri::AppHandle, account_id: String) -> Result<(), String> {
+pub async fn switch_account(
+    app_handle: tauri::AppHandle,
+    account_id: String,
+) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
-    sqlx::query("UPDATE accounts SET is_active = 0").execute(pool.inner()).await.map_err(|e| e.to_string())?;
+    sqlx::query("UPDATE accounts SET is_active = 0")
+        .execute(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
     sqlx::query("UPDATE accounts SET is_active = 1 WHERE id = ?")
         .bind(&account_id)
         .execute(pool.inner())
@@ -442,33 +484,45 @@ pub async fn switch_account(app_handle: tauri::AppHandle, account_id: String) ->
 }
 
 #[tauri::command]
-pub async fn remove_account(app_handle: tauri::AppHandle, account_id: String) -> Result<(), String> {
+pub async fn remove_account(
+    app_handle: tauri::AppHandle,
+    account_id: String,
+) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
-    
-    
+
     if let Ok(entry) = Entry::new("rustymail", &account_id) {
         let _ = entry.delete_password();
     }
 
-    
     let mut tx = pool.inner().begin().await.map_err(|e| e.to_string())?;
-    sqlx::query("DELETE FROM messages WHERE account_id = ?").bind(&account_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
-    sqlx::query("DELETE FROM threads WHERE account_id = ?").bind(&account_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
-    sqlx::query("DELETE FROM labels WHERE account_id = ?").bind(&account_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
-    sqlx::query("DELETE FROM accounts WHERE id = ?").bind(&account_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM messages WHERE account_id = ?")
+        .bind(&account_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM threads WHERE account_id = ?")
+        .bind(&account_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM labels WHERE account_id = ?")
+        .bind(&account_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM accounts WHERE id = ?")
+        .bind(&account_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
     tx.commit().await.map_err(|e| e.to_string())?;
 
-    
     let _ = sqlx::query("UPDATE accounts SET is_active = 1 WHERE rowid = (SELECT MIN(rowid) FROM accounts WHERE is_active = 0)")
         .execute(pool.inner())
         .await;
 
     Ok(())
 }
-
-
-
-
 
 #[derive(serde::Serialize)]
 pub struct SettingEntry {
@@ -479,16 +533,25 @@ pub struct SettingEntry {
 #[tauri::command]
 pub async fn get_settings(app_handle: tauri::AppHandle) -> Result<Vec<SettingEntry>, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
-    
+
     #[derive(sqlx::FromRow)]
-    struct Row { key: String, value: String }
+    struct Row {
+        key: String,
+        value: String,
+    }
 
     let rows: Vec<Row> = sqlx::query_as("SELECT key, value FROM settings")
         .fetch_all(pool.inner())
         .await
         .map_err(|e| e.to_string())?;
 
-    Ok(rows.into_iter().map(|r| SettingEntry { key: r.key, value: r.value }).collect())
+    Ok(rows
+        .into_iter()
+        .map(|r| SettingEntry {
+            key: r.key,
+            value: r.value,
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -503,7 +566,11 @@ pub async fn get_setting(app_handle: tauri::AppHandle, key: String) -> Result<St
 }
 
 #[tauri::command]
-pub async fn update_setting(app_handle: tauri::AppHandle, key: String, value: String) -> Result<(), String> {
+pub async fn update_setting(
+    app_handle: tauri::AppHandle,
+    key: String,
+    value: String,
+) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
         .bind(&key)
@@ -514,21 +581,19 @@ pub async fn update_setting(app_handle: tauri::AppHandle, key: String, value: St
     Ok(())
 }
 
-
-
-
-
 #[tauri::command]
-pub async fn sync_gmail_data(app_handle: tauri::AppHandle, label_id: Option<String>) -> Result<(), String> {
+pub async fn sync_gmail_data(
+    app_handle: tauri::AppHandle,
+    label_id: Option<String>,
+) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
 
     println!("[Sync] Starting fast sync for: {}", account.id);
 
-    
-    crate::gmail_api::fetch_and_store_labels(pool.inner(), &account.id, &account.access_token).await?;
+    crate::gmail_api::fetch_and_store_labels(pool.inner(), &account.id, &account.access_token)
+        .await?;
 
-    
     let target_labels = if let Some(ref lid) = label_id {
         vec![lid.as_str()]
     } else {
@@ -536,43 +601,59 @@ pub async fn sync_gmail_data(app_handle: tauri::AppHandle, label_id: Option<Stri
     };
 
     crate::gmail_api::fetch_and_store_threads(
-        pool.inner(), &account.id, &account.access_token,
-        Some(&target_labels), 100,
-    ).await?;
+        pool.inner(),
+        &account.id,
+        &account.access_token,
+        Some(&target_labels),
+        100,
+    )
+    .await?;
 
     let unhydrated = crate::gmail_api::get_unhydrated_thread_ids(pool.inner(), &account.id).await;
     if !unhydrated.is_empty() {
         let batch: Vec<String> = unhydrated.into_iter().take(100).collect();
         crate::gmail_api::batch_hydrate_threads(
-            pool.inner(), &account.id, &account.access_token, batch
-        ).await;
+            pool.inner(),
+            &account.id,
+            &account.access_token,
+            batch,
+        )
+        .await;
     }
 
-
-    
     let bg_pool = pool.inner().clone();
     let bg_account_id = account.id.clone();
     let bg_token = account.access_token.clone();
     let bg_app = app_handle.clone();
     tokio::spawn(async move {
-        let all_unhydrated = crate::gmail_api::get_unhydrated_thread_ids(&bg_pool, &bg_account_id).await;
+        let all_unhydrated =
+            crate::gmail_api::get_unhydrated_thread_ids(&bg_pool, &bg_account_id).await;
         if !all_unhydrated.is_empty() {
             crate::gmail_api::batch_hydrate_threads(
-                &bg_pool, &bg_account_id, &bg_token, all_unhydrated
-            ).await;
+                &bg_pool,
+                &bg_account_id,
+                &bg_token,
+                all_unhydrated,
+            )
+            .await;
         }
 
-
-        
         let app_dir = bg_app.path().app_data_dir().unwrap_or_default();
         let db_path = app_dir.join("rustymail.db");
-        let db_size_mb = std::fs::metadata(&db_path).map(|m| m.len() / (1024 * 1024)).unwrap_or(0);
+        let db_size_mb = std::fs::metadata(&db_path)
+            .map(|m| m.len() / (1024 * 1024))
+            .unwrap_or(0);
         #[derive(sqlx::FromRow)]
-        struct S { value: String }
-        let max_mb: u64 = sqlx::query_as::<_, S>("SELECT value FROM settings WHERE key = 'max_cache_mb'")
-            .fetch_optional(&bg_pool).await.unwrap_or(None)
-            .and_then(|r| r.value.parse().ok())
-            .unwrap_or(500);
+        struct S {
+            value: String,
+        }
+        let max_mb: u64 =
+            sqlx::query_as::<_, S>("SELECT value FROM settings WHERE key = 'max_cache_mb'")
+                .fetch_optional(&bg_pool)
+                .await
+                .unwrap_or(None)
+                .and_then(|r| r.value.parse().ok())
+                .unwrap_or(500);
         if db_size_mb > max_mb {
             crate::gmail_api::evict_old_message_bodies(&bg_pool, &bg_account_id, 200).await;
         }
@@ -580,10 +661,6 @@ pub async fn sync_gmail_data(app_handle: tauri::AppHandle, label_id: Option<Stri
 
     Ok(())
 }
-
-
-
-
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct LocalLabel {
@@ -597,28 +674,36 @@ pub struct LocalLabel {
 pub async fn get_labels(app_handle: tauri::AppHandle) -> Result<Vec<LocalLabel>, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
-    
+
     #[derive(sqlx::FromRow)]
-    struct LabelRow { id: String, name: Option<String>, r#type: Option<String>, unread_count: Option<i32> }
+    struct LabelRow {
+        id: String,
+        name: Option<String>,
+        r#type: Option<String>,
+        unread_count: Option<i32>,
+    }
 
     let rows: Vec<LabelRow> = sqlx::query_as(
         "SELECT id, name, type, unread_count FROM labels 
          WHERE account_id = ? 
          AND UPPER(id) NOT IN ('YELLOW_STAR', 'CHAT', 'VOICEMAIL')
          AND UPPER(name) NOT IN ('YELLOW_STAR', 'YELLOW STAR', 'CHAT', 'VOICEMAIL')
-         ORDER BY CASE WHEN type = 'system' THEN 0 ELSE 1 END, name ASC"
+         ORDER BY CASE WHEN type = 'system' THEN 0 ELSE 1 END, name ASC",
     )
-        .bind(&account.id)
-        .fetch_all(pool.inner())
-        .await
-        .map_err(|e| e.to_string())?;
+    .bind(&account.id)
+    .fetch_all(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
 
-    Ok(rows.into_iter().map(|r| LocalLabel {
-        id: r.id,
-        name: r.name.unwrap_or_default(),
-        r#type: r.r#type.unwrap_or_default(),
-        unread_count: r.unread_count.unwrap_or(0),
-    }).collect())
+    Ok(rows
+        .into_iter()
+        .map(|r| LocalLabel {
+            id: r.id,
+            name: r.name.unwrap_or_default(),
+            r#type: r.r#type.unwrap_or_default(),
+            unread_count: r.unread_count.unwrap_or(0),
+        })
+        .collect())
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
@@ -637,24 +722,37 @@ fn clean_sender_name(raw: Option<String>) -> String {
     let mut s = raw.unwrap_or_else(|| "Unknown Sender".to_string());
     if let Some(idx) = s.find('<') {
         let name = s[..idx].trim();
-        if !name.is_empty() { s = name.to_string(); }
-        else { s = s.replace("<", "").replace(">", "").trim().to_string(); }
+        if !name.is_empty() {
+            s = name.to_string();
+        } else {
+            s = s.replace("<", "").replace(">", "").trim().to_string();
+        }
     }
     s.replace("\"", "")
 }
 
 #[tauri::command]
-pub async fn get_threads(app_handle: tauri::AppHandle, label_id: Option<String>, offset: Option<i32>, limit: Option<i32>) -> Result<Vec<LocalThread>, String> {
+pub async fn get_threads(
+    app_handle: tauri::AppHandle,
+    label_id: Option<String>,
+    offset: Option<i32>,
+    limit: Option<i32>,
+) -> Result<Vec<LocalThread>, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
     let lim = limit.unwrap_or(50);
     let off = offset.unwrap_or(0);
-    
+
     #[derive(sqlx::FromRow)]
-    struct TR { 
-        id: String, snippet: Option<String>, history_id: Option<String>, unread: Option<i32>, 
-        sender: Option<String>, subject: Option<String>, msg_date: Option<i64>,
-        starred: Option<i32> 
+    struct TR {
+        id: String,
+        snippet: Option<String>,
+        history_id: Option<String>,
+        unread: Option<i32>,
+        sender: Option<String>,
+        subject: Option<String>,
+        msg_date: Option<i64>,
+        starred: Option<i32>,
     }
 
     let rows: Vec<TR> = if let Some(ref lid) = label_id {
@@ -686,58 +784,99 @@ pub async fn get_threads(app_handle: tauri::AppHandle, label_id: Option<String>,
         .fetch_all(pool.inner()).await.map_err(|e| e.to_string())?
     };
 
-    Ok(rows.into_iter().map(|r| LocalThread {
-        id: r.id, snippet: r.snippet.unwrap_or_default(), history_id: r.history_id.unwrap_or_default(),
-        unread: r.unread.unwrap_or(0), sender: clean_sender_name(r.sender),
-        subject: r.subject.unwrap_or_else(|| "No Subject".to_string()), internal_date: r.msg_date.unwrap_or(0),
-        starred: r.starred.unwrap_or(0) == 1,
-    }).collect())
+    Ok(rows
+        .into_iter()
+        .map(|r| LocalThread {
+            id: r.id,
+            snippet: r.snippet.unwrap_or_default(),
+            history_id: r.history_id.unwrap_or_default(),
+            unread: r.unread.unwrap_or(0),
+            sender: clean_sender_name(r.sender),
+            subject: r.subject.unwrap_or_else(|| "No Subject".to_string()),
+            internal_date: r.msg_date.unwrap_or(0),
+            starred: r.starred.unwrap_or(0) == 1,
+        })
+        .collect())
 }
 
-
 #[tauri::command]
-pub async fn fetch_label_threads(app_handle: tauri::AppHandle, label_id: String) -> Result<(), String> {
+pub async fn fetch_label_threads(
+    app_handle: tauri::AppHandle,
+    label_id: String,
+) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
     println!("[OnDemand] Fetching threads for label: {}", label_id);
     crate::gmail_api::fetch_and_store_threads(
-        pool.inner(), &account.id, &account.access_token,
-        Some(&[label_id.as_str()]), 50,
-    ).await?;
-    
+        pool.inner(),
+        &account.id,
+        &account.access_token,
+        Some(&[label_id.as_str()]),
+        50,
+    )
+    .await?;
+
     let unhydrated = crate::gmail_api::get_unhydrated_thread_ids(pool.inner(), &account.id).await;
     if !unhydrated.is_empty() {
         let batch: Vec<String> = unhydrated.into_iter().take(50).collect();
         crate::gmail_api::batch_hydrate_threads(
-            pool.inner(), &account.id, &account.access_token, batch
-        ).await;
+            pool.inner(),
+            &account.id,
+            &account.access_token,
+            batch,
+        )
+        .await;
     }
     Ok(())
 }
 
 #[tauri::command]
-pub async fn sync_thread_messages(app_handle: tauri::AppHandle, thread_id: String) -> Result<(), String> {
+pub async fn sync_thread_messages(
+    app_handle: tauri::AppHandle,
+    thread_id: String,
+) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
-    crate::gmail_api::fetch_messages_for_thread(pool.inner(), &account.id, &account.access_token, &thread_id).await
+    crate::gmail_api::fetch_messages_for_thread(
+        pool.inner(),
+        &account.id,
+        &account.access_token,
+        &thread_id,
+    )
+    .await
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct LocalMessage {
-    pub id: String, pub thread_id: String, pub sender: String, pub recipients: String,
-    pub subject: String, pub snippet: String, pub internal_date: i64,
-    pub body_html: String, pub body_plain: String,
+    pub id: String,
+    pub thread_id: String,
+    pub sender: String,
+    pub recipients: String,
+    pub subject: String,
+    pub snippet: String,
+    pub internal_date: i64,
+    pub body_html: String,
+    pub body_plain: String,
 }
 
 #[tauri::command]
-pub async fn get_messages(app_handle: tauri::AppHandle, thread_id: String) -> Result<Vec<LocalMessage>, String> {
+pub async fn get_messages(
+    app_handle: tauri::AppHandle,
+    thread_id: String,
+) -> Result<Vec<LocalMessage>, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
-    
+
     #[derive(sqlx::FromRow)]
     struct Row {
-        id: String, thread_id: Option<String>, sender: Option<String>, recipients: Option<String>,
-        subject: Option<String>, snippet: Option<String>, internal_date: Option<i64>,
-        body_html: Option<String>, body_plain: Option<String>,
+        id: String,
+        thread_id: Option<String>,
+        sender: Option<String>,
+        recipients: Option<String>,
+        subject: Option<String>,
+        snippet: Option<String>,
+        internal_date: Option<i64>,
+        body_html: Option<String>,
+        body_plain: Option<String>,
     }
 
     let rows: Vec<Row> = sqlx::query_as(
@@ -745,71 +884,111 @@ pub async fn get_messages(app_handle: tauri::AppHandle, thread_id: String) -> Re
          FROM messages WHERE thread_id = ? ORDER BY internal_date ASC"
     ).bind(thread_id).fetch_all(pool.inner()).await.map_err(|e| e.to_string())?;
 
-    Ok(rows.into_iter().map(|r| LocalMessage {
-        id: r.id, thread_id: r.thread_id.unwrap_or_default(), sender: r.sender.unwrap_or_default(),
-        recipients: r.recipients.unwrap_or_default(), subject: r.subject.unwrap_or_default(),
-        snippet: r.snippet.unwrap_or_default(), internal_date: r.internal_date.unwrap_or(0),
-        body_plain: r.body_plain.unwrap_or_default(), body_html: r.body_html.unwrap_or_default(),
-    }).collect())
+    Ok(rows
+        .into_iter()
+        .map(|r| LocalMessage {
+            id: r.id,
+            thread_id: r.thread_id.unwrap_or_default(),
+            sender: r.sender.unwrap_or_default(),
+            recipients: r.recipients.unwrap_or_default(),
+            subject: r.subject.unwrap_or_default(),
+            snippet: r.snippet.unwrap_or_default(),
+            internal_date: r.internal_date.unwrap_or(0),
+            body_plain: r.body_plain.unwrap_or_default(),
+            body_html: r.body_html.unwrap_or_default(),
+        })
+        .collect())
 }
-
-
-
-
 
 #[tauri::command]
 pub async fn archive_thread(app_handle: tauri::AppHandle, thread_id: String) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
-    crate::gmail_api::modify_thread(pool.inner(), &account.id, &account.access_token, &thread_id, vec![], vec!["INBOX".to_string()]).await
+    crate::gmail_api::modify_thread(
+        pool.inner(),
+        &account.id,
+        &account.access_token,
+        &thread_id,
+        vec![],
+        vec!["INBOX".to_string()],
+    )
+    .await
 }
 
 #[tauri::command]
-pub async fn move_thread_to_trash(app_handle: tauri::AppHandle, thread_id: String) -> Result<(), String> {
+pub async fn move_thread_to_trash(
+    app_handle: tauri::AppHandle,
+    thread_id: String,
+) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
-    crate::gmail_api::trash_thread(pool.inner(), &account.id, &account.access_token, &thread_id).await
+    crate::gmail_api::trash_thread(pool.inner(), &account.id, &account.access_token, &thread_id)
+        .await
 }
 
 #[tauri::command]
-pub async fn mark_thread_read_status(app_handle: tauri::AppHandle, thread_id: String, is_read: bool) -> Result<(), String> {
+pub async fn mark_thread_read_status(
+    app_handle: tauri::AppHandle,
+    thread_id: String,
+    is_read: bool,
+) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
-    let (add, remove) = if is_read { (vec![], vec!["UNREAD".to_string()]) } else { (vec!["UNREAD".to_string()], vec![]) };
-    crate::gmail_api::modify_thread(pool.inner(), &account.id, &account.access_token, &thread_id, add, remove).await
+    let (add, remove) = if is_read {
+        (vec![], vec!["UNREAD".to_string()])
+    } else {
+        (vec!["UNREAD".to_string()], vec![])
+    };
+    crate::gmail_api::modify_thread(
+        pool.inner(),
+        &account.id,
+        &account.access_token,
+        &thread_id,
+        add,
+        remove,
+    )
+    .await
 }
 
-
-
-
-
 #[tauri::command]
-pub async fn search_messages(app_handle: tauri::AppHandle, query: String) -> Result<Vec<LocalThread>, String> {
+pub async fn search_messages(
+    app_handle: tauri::AppHandle,
+    query: String,
+) -> Result<Vec<LocalThread>, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
     let mut all_thread_ids: Vec<String> = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
-    
     #[derive(sqlx::FromRow)]
-    struct FtsRow { thread_id: Option<String> }
+    struct FtsRow {
+        thread_id: Option<String>,
+    }
     let fts_query = format!("{}*", query.replace('"', ""));
     let local: Vec<FtsRow> = sqlx::query_as(
         "SELECT DISTINCT m.thread_id FROM messages m 
          INNER JOIN messages_fts ON messages_fts.rowid = m.rowid 
          WHERE messages_fts MATCH ? AND m.account_id = ?
-         LIMIT 50"
-    ).bind(&fts_query).bind(&account.id)
-    .fetch_all(pool.inner()).await.unwrap_or_default();
+         LIMIT 50",
+    )
+    .bind(&fts_query)
+    .bind(&account.id)
+    .fetch_all(pool.inner())
+    .await
+    .unwrap_or_default();
 
     for r in local {
         if let Some(tid) = r.thread_id {
-            if seen.insert(tid.clone()) { all_thread_ids.push(tid); }
+            if seen.insert(tid.clone()) {
+                all_thread_ids.push(tid);
+            }
         }
     }
 
     #[derive(sqlx::FromRow)]
-    struct LikeRow { thread_id: Option<String> }
+    struct LikeRow {
+        thread_id: Option<String>,
+    }
     let pattern = format!("%{}%", query);
     let like_results: Vec<LikeRow> = sqlx::query_as(
         "SELECT DISTINCT thread_id FROM messages WHERE account_id = ? AND (sender LIKE ? OR subject LIKE ?) LIMIT 30"
@@ -817,21 +996,32 @@ pub async fn search_messages(app_handle: tauri::AppHandle, query: String) -> Res
     .fetch_all(pool.inner()).await.unwrap_or_default();
     for r in like_results {
         if let Some(tid) = r.thread_id {
-            if seen.insert(tid.clone()) { all_thread_ids.push(tid); }
+            if seen.insert(tid.clone()) {
+                all_thread_ids.push(tid);
+            }
         }
     }
 
     let api_ids = search_gmail_api(&account.access_token, &query).await;
     for tid in api_ids {
-        if seen.insert(tid.clone()) { all_thread_ids.push(tid); }
+        if seen.insert(tid.clone()) {
+            all_thread_ids.push(tid);
+        }
     }
 
     let mut need_hydrate: Vec<String> = Vec::new();
     for tid in &all_thread_ids {
         #[derive(sqlx::FromRow)]
-        struct C { cnt: i32 }
-        let cnt = sqlx::query_as::<_, C>("SELECT COUNT(*) as cnt FROM messages WHERE thread_id = ?")
-            .bind(tid).fetch_one(pool.inner()).await.map(|r| r.cnt).unwrap_or(0);
+        struct C {
+            cnt: i32,
+        }
+        let cnt =
+            sqlx::query_as::<_, C>("SELECT COUNT(*) as cnt FROM messages WHERE thread_id = ?")
+                .bind(tid)
+                .fetch_one(pool.inner())
+                .await
+                .map(|r| r.cnt)
+                .unwrap_or(0);
         if cnt == 0 {
             let _ = sqlx::query("INSERT OR IGNORE INTO threads (id, account_id, snippet, history_id, unread) VALUES (?, ?, '', '', 0)")
                 .bind(tid).bind(&account.id)
@@ -841,8 +1031,12 @@ pub async fn search_messages(app_handle: tauri::AppHandle, query: String) -> Res
     }
     if !need_hydrate.is_empty() {
         crate::gmail_api::batch_hydrate_threads(
-            pool.inner(), &account.id, &account.access_token, need_hydrate
-        ).await;
+            pool.inner(),
+            &account.id,
+            &account.access_token,
+            need_hydrate,
+        )
+        .await;
     }
 
     fetch_threads_by_ids(pool.inner(), &all_thread_ids, &account.id).await
@@ -854,16 +1048,27 @@ async fn search_gmail_api(access_token: &str, query: &str) -> Vec<String> {
         .get("https://gmail.googleapis.com/gmail/v1/users/me/messages")
         .query(&[("q", query), ("maxResults", "30")])
         .header("Authorization", format!("Bearer {}", access_token))
-        .send().await {
+        .send()
+        .await
+    {
         Ok(r) => r,
-        Err(_) => return vec![], 
+        Err(_) => return vec![],
     };
-    if !res.status().is_success() { return vec![]; }
+    if !res.status().is_success() {
+        return vec![];
+    }
 
     #[derive(serde::Deserialize)]
-    struct MsgRef { #[allow(dead_code)] id: String, #[serde(rename = "threadId")] thread_id: String }
+    struct MsgRef {
+        #[allow(dead_code)]
+        id: String,
+        #[serde(rename = "threadId")]
+        thread_id: String,
+    }
     #[derive(serde::Deserialize)]
-    struct MsgsResponse { messages: Option<Vec<MsgRef>> }
+    struct MsgsResponse {
+        messages: Option<Vec<MsgRef>>,
+    }
 
     match res.json::<MsgsResponse>().await {
         Ok(api_res) => {
@@ -873,14 +1078,22 @@ async fn search_gmail_api(access_token: &str, query: &str) -> Vec<String> {
                     .filter(|m| seen.insert(m.thread_id.clone()))
                     .map(|m| m.thread_id)
                     .collect()
-            } else { vec![] }
+            } else {
+                vec![]
+            }
         }
         Err(_) => vec![],
     }
 }
 
-async fn fetch_threads_by_ids(pool: &sqlx::SqlitePool, ids: &[String], account_id: &str) -> Result<Vec<LocalThread>, String> {
-    if ids.is_empty() { return Ok(vec![]); }
+async fn fetch_threads_by_ids(
+    pool: &sqlx::SqlitePool,
+    ids: &[String],
+    account_id: &str,
+) -> Result<Vec<LocalThread>, String> {
+    if ids.is_empty() {
+        return Ok(vec![]);
+    }
     let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
     let sql = format!(
         "SELECT t.id, t.snippet, t.history_id, t.unread,
@@ -893,30 +1106,40 @@ async fn fetch_threads_by_ids(pool: &sqlx::SqlitePool, ids: &[String], account_i
          ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC",
         placeholders.join(",")
     );
-    
+
     #[derive(sqlx::FromRow)]
-    struct TR { 
-        id: String, snippet: Option<String>, history_id: Option<String>, unread: Option<i32>, 
-        sender: Option<String>, subject: Option<String>, msg_date: Option<i64>,
-        starred: Option<i32> 
+    struct TR {
+        id: String,
+        snippet: Option<String>,
+        history_id: Option<String>,
+        unread: Option<i32>,
+        sender: Option<String>,
+        subject: Option<String>,
+        msg_date: Option<i64>,
+        starred: Option<i32>,
     }
 
     let mut q = sqlx::query_as::<_, TR>(&sql);
-    for tid in ids { q = q.bind(tid); }
+    for tid in ids {
+        q = q.bind(tid);
+    }
     q = q.bind(account_id);
-    
+
     let rows = q.fetch_all(pool).await.unwrap_or_default();
-    Ok(rows.into_iter().map(|r| LocalThread {
-        id: r.id, snippet: r.snippet.unwrap_or_default(), history_id: r.history_id.unwrap_or_default(),
-        unread: r.unread.unwrap_or(0), sender: clean_sender_name(r.sender),
-        subject: r.subject.unwrap_or_else(|| "No Subject".to_string()), internal_date: r.msg_date.unwrap_or(0),
-        starred: r.starred.unwrap_or(0) == 1,
-    }).collect())
+    Ok(rows
+        .into_iter()
+        .map(|r| LocalThread {
+            id: r.id,
+            snippet: r.snippet.unwrap_or_default(),
+            history_id: r.history_id.unwrap_or_default(),
+            unread: r.unread.unwrap_or(0),
+            sender: clean_sender_name(r.sender),
+            subject: r.subject.unwrap_or_else(|| "No Subject".to_string()),
+            internal_date: r.msg_date.unwrap_or(0),
+            starred: r.starred.unwrap_or(0) == 1,
+        })
+        .collect())
 }
-
-
-
-
 
 #[derive(serde::Serialize)]
 pub struct HydrationProgress {
@@ -925,69 +1148,95 @@ pub struct HydrationProgress {
 }
 
 #[tauri::command]
-pub async fn get_hydration_progress(app_handle: tauri::AppHandle) -> Result<HydrationProgress, String> {
+pub async fn get_hydration_progress(
+    app_handle: tauri::AppHandle,
+) -> Result<HydrationProgress, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
-    
+
     #[derive(sqlx::FromRow)]
-    struct Count { cnt: i32 }
-    
-    let total = sqlx::query_as::<_, Count>("SELECT COUNT(*) as cnt FROM threads WHERE account_id = ?")
-        .bind(&account.id).fetch_one(pool.inner()).await.map(|r| r.cnt).unwrap_or(0) as usize;
-    
+    struct Count {
+        cnt: i32,
+    }
+
+    let total =
+        sqlx::query_as::<_, Count>("SELECT COUNT(*) as cnt FROM threads WHERE account_id = ?")
+            .bind(&account.id)
+            .fetch_one(pool.inner())
+            .await
+            .map(|r| r.cnt)
+            .unwrap_or(0) as usize;
+
     let hydrated = sqlx::query_as::<_, Count>(
         "SELECT COUNT(DISTINCT t.id) as cnt FROM threads t INNER JOIN messages m ON t.id = m.thread_id WHERE t.account_id = ?"
     ).bind(&account.id).fetch_one(pool.inner()).await.map(|r| r.cnt).unwrap_or(0) as usize;
-    
+
     Ok(HydrationProgress { total, hydrated })
 }
 
 #[tauri::command]
-pub async fn ensure_threads_hydrated(app_handle: tauri::AppHandle, thread_ids: Vec<String>) -> Result<(), String> {
+pub async fn ensure_threads_hydrated(
+    app_handle: tauri::AppHandle,
+    thread_ids: Vec<String>,
+) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
-    
-    
+
     let mut need_hydration = Vec::new();
     for tid in &thread_ids {
         #[derive(sqlx::FromRow)]
-        struct Count { cnt: i32 }
-        let has_msgs = sqlx::query_as::<_, Count>("SELECT COUNT(*) as cnt FROM messages WHERE thread_id = ?")
-            .bind(tid).fetch_one(pool.inner()).await.map(|r| r.cnt).unwrap_or(0);
+        struct Count {
+            cnt: i32,
+        }
+        let has_msgs =
+            sqlx::query_as::<_, Count>("SELECT COUNT(*) as cnt FROM messages WHERE thread_id = ?")
+                .bind(tid)
+                .fetch_one(pool.inner())
+                .await
+                .map(|r| r.cnt)
+                .unwrap_or(0);
         if has_msgs == 0 {
             need_hydration.push(tid.clone());
         }
     }
     if !need_hydration.is_empty() {
         crate::gmail_api::batch_hydrate_threads(
-            pool.inner(), &account.id, &account.access_token, need_hydration
-        ).await;
+            pool.inner(),
+            &account.id,
+            &account.access_token,
+            need_hydration,
+        )
+        .await;
     }
-    
+
     Ok(())
 }
 
-
-
-
-
 #[derive(serde::Serialize)]
 pub struct SearchSuggestion {
-    pub kind: String,   
+    pub kind: String,
     pub text: String,
     pub detail: String,
 }
 
 #[tauri::command]
-pub async fn get_search_suggestions(app_handle: tauri::AppHandle, partial: String) -> Result<Vec<SearchSuggestion>, String> {
+pub async fn get_search_suggestions(
+    app_handle: tauri::AppHandle,
+    partial: String,
+) -> Result<Vec<SearchSuggestion>, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
     let mut suggestions = Vec::new();
 
     #[derive(sqlx::FromRow)]
-    struct SettingRow { value: String }
-    if let Ok(Some(row)) = sqlx::query_as::<_, SettingRow>("SELECT value FROM settings WHERE key = 'recent_searches'")
-        .fetch_optional(pool.inner()).await {
+    struct SettingRow {
+        value: String,
+    }
+    if let Ok(Some(row)) =
+        sqlx::query_as::<_, SettingRow>("SELECT value FROM settings WHERE key = 'recent_searches'")
+            .fetch_optional(pool.inner())
+            .await
+    {
         if let Ok(recents) = serde_json::from_str::<Vec<String>>(&row.value) {
             for r in recents.iter().take(5) {
                 if partial.is_empty() || r.to_lowercase().contains(&partial.to_lowercase()) {
@@ -1003,28 +1252,43 @@ pub async fn get_search_suggestions(app_handle: tauri::AppHandle, partial: Strin
 
     if partial.len() >= 2 {
         #[derive(sqlx::FromRow)]
-        struct SenderRow { sender: String }
+        struct SenderRow {
+            sender: String,
+        }
         let pattern = format!("%{}%", partial);
         let contacts: Vec<SenderRow> = sqlx::query_as(
-            "SELECT DISTINCT sender FROM messages WHERE account_id = ? AND sender LIKE ? LIMIT 5"
-        ).bind(&account.id).bind(&pattern)
-        .fetch_all(pool.inner()).await.unwrap_or_default();
-        
+            "SELECT DISTINCT sender FROM messages WHERE account_id = ? AND sender LIKE ? LIMIT 5",
+        )
+        .bind(&account.id)
+        .bind(&pattern)
+        .fetch_all(pool.inner())
+        .await
+        .unwrap_or_default();
+
         for c in contacts {
             suggestions.push(SearchSuggestion {
                 kind: "contact".to_string(),
-                text: format!("from:{}", c.sender.split('<').next().unwrap_or(&c.sender).trim()),
+                text: format!(
+                    "from:{}",
+                    c.sender.split('<').next().unwrap_or(&c.sender).trim()
+                ),
                 detail: c.sender.clone(),
             });
         }
 
         #[derive(sqlx::FromRow)]
-        struct SubjectRow { subject: String }
+        struct SubjectRow {
+            subject: String,
+        }
         let subjects: Vec<SubjectRow> = sqlx::query_as(
-            "SELECT DISTINCT subject FROM messages WHERE account_id = ? AND subject LIKE ? LIMIT 3"
-        ).bind(&account.id).bind(&pattern)
-        .fetch_all(pool.inner()).await.unwrap_or_default();
-        
+            "SELECT DISTINCT subject FROM messages WHERE account_id = ? AND subject LIKE ? LIMIT 3",
+        )
+        .bind(&account.id)
+        .bind(&pattern)
+        .fetch_all(pool.inner())
+        .await
+        .unwrap_or_default();
+
         for s in subjects {
             suggestions.push(SearchSuggestion {
                 kind: "subject".to_string(),
@@ -1033,39 +1297,59 @@ pub async fn get_search_suggestions(app_handle: tauri::AppHandle, partial: Strin
             });
         }
     }
-    
+
     Ok(suggestions)
 }
 
 #[tauri::command]
 pub async fn save_recent_search(app_handle: tauri::AppHandle, query: String) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
-    
+
     #[derive(sqlx::FromRow)]
-    struct SettingRow { value: String }
-    let mut recents: Vec<String> = sqlx::query_as::<_, SettingRow>("SELECT value FROM settings WHERE key = 'recent_searches'")
-        .fetch_optional(pool.inner()).await.unwrap_or(None)
-        .and_then(|r| serde_json::from_str(&r.value).ok())
-        .unwrap_or_default();
-    
-    
+    struct SettingRow {
+        value: String,
+    }
+    let mut recents: Vec<String> =
+        sqlx::query_as::<_, SettingRow>("SELECT value FROM settings WHERE key = 'recent_searches'")
+            .fetch_optional(pool.inner())
+            .await
+            .unwrap_or(None)
+            .and_then(|r| serde_json::from_str(&r.value).ok())
+            .unwrap_or_default();
+
     recents.retain(|r| r != &query);
     recents.insert(0, query);
     recents.truncate(10);
-    
+
     let json = serde_json::to_string(&recents).unwrap_or_default();
     sqlx::query("INSERT INTO settings (key, value) VALUES ('recent_searches', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
         .bind(&json).execute(pool.inner()).await.map_err(|e| e.to_string())?;
-    
+
     Ok(())
 }
 
 #[tauri::command]
-pub async fn toggle_thread_star(app_handle: tauri::AppHandle, thread_id: String, starred: bool) -> Result<(), String> {
+pub async fn toggle_thread_star(
+    app_handle: tauri::AppHandle,
+    thread_id: String,
+    starred: bool,
+) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
-    let (add, remove) = if starred { (vec!["STARRED".to_string()], vec![]) } else { (vec![], vec!["STARRED".to_string()]) };
-    crate::gmail_api::modify_thread(pool.inner(), &account.id, &account.access_token, &thread_id, add, remove).await
+    let (add, remove) = if starred {
+        (vec!["STARRED".to_string()], vec![])
+    } else {
+        (vec![], vec!["STARRED".to_string()])
+    };
+    crate::gmail_api::modify_thread(
+        pool.inner(),
+        &account.id,
+        &account.access_token,
+        &thread_id,
+        add,
+        remove,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1082,9 +1366,14 @@ pub async fn send_message(
     let account = get_active_account(pool.inner()).await?;
 
     #[derive(sqlx::FromRow)]
-    struct EmailRow { email: String }
+    struct EmailRow {
+        email: String,
+    }
     let row = sqlx::query_as::<_, EmailRow>("SELECT email FROM accounts WHERE id = ?")
-        .bind(&account.id).fetch_one(pool.inner()).await.map_err(|e| e.to_string())?;
+        .bind(&account.id)
+        .fetch_one(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
 
     crate::gmail_api::send_message(
         &account.id,
@@ -1096,7 +1385,8 @@ pub async fn send_message(
         thread_id.as_deref(),
         in_reply_to.as_deref(),
         references.as_deref(),
-    ).await
+    )
+    .await
 }
 
 #[derive(serde::Serialize)]
@@ -1107,13 +1397,18 @@ pub struct ContactSuggestion {
 }
 
 #[tauri::command]
-pub async fn search_contacts(app_handle: tauri::AppHandle, query: String) -> Result<Vec<ContactSuggestion>, String> {
+pub async fn search_contacts(
+    app_handle: tauri::AppHandle,
+    query: String,
+) -> Result<Vec<ContactSuggestion>, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
     let pattern = format!("%{}%", query);
 
     #[derive(sqlx::FromRow)]
-    struct RawContact { contact: String }
+    struct RawContact {
+        contact: String,
+    }
 
     let rows: Vec<RawContact> = sqlx::query_as(
         "SELECT DISTINCT sender as contact FROM messages WHERE account_id = ? AND sender LIKE ?
@@ -1132,12 +1427,16 @@ pub async fn search_contacts(app_handle: tauri::AppHandle, query: String) -> Res
         let parts: Vec<&str> = row.contact.split(',').collect();
         for p in parts {
             let p = p.trim();
-            if p.is_empty() || !p.to_lowercase().contains(&query.to_lowercase()) { continue; }
-            if !seen.insert(p.to_string()) { continue; }
+            if p.is_empty() || !p.to_lowercase().contains(&query.to_lowercase()) {
+                continue;
+            }
+            if !seen.insert(p.to_string()) {
+                continue;
+            }
 
             let (name, email) = if let Some(bracket_start) = p.find('<') {
                 let name = p[..bracket_start].trim().trim_matches('"').to_string();
-                let email = p[bracket_start+1..].trim_matches('>').trim().to_string();
+                let email = p[bracket_start + 1..].trim_matches('>').trim().to_string();
                 (name, email)
             } else {
                 ("".to_string(), p.to_string())
@@ -1165,15 +1464,21 @@ pub async fn save_draft(
     thread_id: Option<String>,
     in_reply_to: Option<String>,
     references: Option<String>,
-) -> Result<(), String> {
+    draft_id: Option<String>,
+) -> Result<String, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
-    
+
     #[derive(sqlx::FromRow)]
-    struct EmailRow { email: String }
+    struct EmailRow {
+        email: String,
+    }
     let row = sqlx::query_as::<_, EmailRow>("SELECT email FROM accounts WHERE id = ?")
-        .bind(&account.id).fetch_one(pool.inner()).await.map_err(|e| e.to_string())?;
-        
+        .bind(&account.id)
+        .fetch_one(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+
     crate::gmail_api::save_draft(
         &account.id,
         &row.email,
@@ -1184,11 +1489,33 @@ pub async fn save_draft(
         thread_id.as_deref(),
         in_reply_to.as_deref(),
         references.as_deref(),
-    ).await
+        draft_id.as_deref(),
+    )
+    .await
 }
 
 #[tauri::command]
-pub async fn get_upcoming_events(app_handle: tauri::AppHandle) -> Result<Vec<crate::calendar_api::CalendarEvent>, String> {
+pub async fn delete_draft(app_handle: tauri::AppHandle, draft_id: String) -> Result<(), String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+
+    #[derive(sqlx::FromRow)]
+    struct EmailRow {
+        email: String,
+    }
+    let row = sqlx::query_as::<_, EmailRow>("SELECT email FROM accounts WHERE id = ?")
+        .bind(&account.id)
+        .fetch_one(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    crate::gmail_api::delete_draft(&account.id, &row.email, &account.access_token, &draft_id).await
+}
+
+#[tauri::command]
+pub async fn get_upcoming_events(
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<crate::calendar_api::CalendarEvent>, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
     crate::calendar_api::get_upcoming_events(&account.access_token).await
@@ -1197,16 +1524,15 @@ pub async fn get_upcoming_events(app_handle: tauri::AppHandle) -> Result<Vec<cra
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
     use sqlx::sqlite::SqliteConnectOptions;
-    use std::str::FromStr;
     use sqlx::SqlitePool;
+    use std::env;
+    use std::str::FromStr;
 
     // Helper to create an in-memory DB with schema for refresh and FTS5 tests.
     // Using sqlite::memory: avoids tempdir lifetime issues.
     async fn setup_test_db() -> SqlitePool {
-        let options = SqliteConnectOptions::from_str("sqlite::memory:")
-            .unwrap();
+        let options = SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
         let pool = SqlitePool::connect_with(options).await.unwrap();
         // Schema: accounts, messages, and FTS5 virtual table
         sqlx::query(
@@ -1220,8 +1546,11 @@ mod tests {
                 token_expiry INTEGER,
                 is_active INTEGER DEFAULT 1,
                 created_at INTEGER
-            )"
-        ).execute(&pool).await.unwrap();
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS messages (
                 id TEXT PRIMARY KEY,
@@ -1235,8 +1564,11 @@ mod tests {
                 body_plain TEXT,
                 body_html TEXT,
                 has_attachments INTEGER
-            )"
-        ).execute(&pool).await.unwrap();
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(sender, subject, body_plain, content=messages, content_rowid=rowid)"
         ).execute(&pool).await.unwrap();
@@ -1245,9 +1577,18 @@ mod tests {
 
     #[test]
     fn test_clean_sender_name() {
-        assert_eq!(clean_sender_name(Some("John Doe <john@example.com>".to_string())), "John Doe");
-        assert_eq!(clean_sender_name(Some("<only-email@example.com>".to_string())), "only-email@example.com");
-        assert_eq!(clean_sender_name(Some("\"John Doe\" <john@example.com>".to_string())), "John Doe");
+        assert_eq!(
+            clean_sender_name(Some("John Doe <john@example.com>".to_string())),
+            "John Doe"
+        );
+        assert_eq!(
+            clean_sender_name(Some("<only-email@example.com>".to_string())),
+            "only-email@example.com"
+        );
+        assert_eq!(
+            clean_sender_name(Some("\"John Doe\" <john@example.com>".to_string())),
+            "John Doe"
+        );
         assert_eq!(clean_sender_name(None), "Unknown Sender");
     }
 
@@ -1326,4 +1667,4 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0, "thread1");
     }
-    }
+}
