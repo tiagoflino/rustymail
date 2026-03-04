@@ -52,6 +52,8 @@ pub fn run() {
             auth::send_message,
             auth::save_draft,
             auth::delete_draft,
+            auth::delete_draft_by_thread,
+            auth::get_draft_id_by_message_id,
             auth::get_upcoming_events,
             auth::search_contacts
         ])

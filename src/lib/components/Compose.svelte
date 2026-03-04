@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { iconClose, iconTrash, iconSent, iconCheck } from "./icons";
   import { fly } from "svelte/transition";
   import { addToast } from "$lib/stores/toast";
@@ -14,6 +14,8 @@
     threadId = null,
     inReplyTo = null,
     references = null,
+    initialDraftId = null,
+    onDraftSaved = (id: string | null) => {},
   }: {
     onClose: () => void;
     initialTo?: string;
@@ -23,17 +25,19 @@
     threadId?: string | null;
     inReplyTo?: string | null;
     references?: string | null;
+    initialDraftId?: string | null;
+    onDraftSaved?: (id: string | null) => void;
   } = $props();
 
   let isMinimized = $state(false);
   let isExpanded = $state(false);
   let isSending = $state(false);
 
-  let to = $state(initialTo);
-  let cc = $state(initialCc);
+  let to = $state("" + initialTo);
+  let cc = $state("" + initialCc);
   let bcc = $state("");
-  let subject = $state(initialSubject);
-  let bodyHTML = $state(initialBodyHTML);
+  let subject = $state("" + initialSubject);
+  let bodyHTML = $state("" + initialBodyHTML);
 
   let showCc = $state(initialCc.length > 0);
   let showBcc = $state(false);
@@ -42,7 +46,7 @@
   let suggestionIndex = $state(0);
   let activeField = $state<"to" | "cc" | "bcc" | null>(null);
   let suggestionDebounce: any;
-  let currentDraftId = $state<string | null>(null);
+  let currentDraftId = $state<string | null>(untrack(() => initialDraftId));
 
   async function handleInput(field: "to" | "cc" | "bcc", val: string) {
     activeField = field;
@@ -103,11 +107,11 @@
     }
   }
 
-  let editorEl: HTMLDivElement;
+  let editorEl = $state<HTMLDivElement>();
 
   function format(command: string, value: string | undefined = undefined) {
     document.execCommand(command, false, value);
-    editorEl.focus();
+    editorEl?.focus();
   }
 
   onMount(async () => {
@@ -120,18 +124,18 @@
           (initialBodyHTML ? `<br>${initialBodyHTML}` : "");
       }
       if (newHtml) {
-        editorEl.innerHTML = newHtml;
+        if (editorEl) editorEl.innerHTML = newHtml;
       }
 
       const range = document.createRange();
       const sel = window.getSelection();
-      range.setStart(editorEl, 0);
+      if (editorEl) range.setStart(editorEl, 0);
       range.collapse(true);
       sel?.removeAllRanges();
       sel?.addRange(range);
     } catch (e) {
       if (initialBodyHTML) {
-        editorEl.innerHTML = initialBodyHTML;
+        if (editorEl) editorEl.innerHTML = initialBodyHTML;
       }
     }
   });
@@ -146,7 +150,7 @@
       await invoke("send_message", {
         to: `${to}${cc ? "," + cc : ""}${bcc ? "," + bcc : ""}`,
         subject,
-        body: editorEl.innerHTML,
+        body: editorEl?.innerHTML || "",
         threadId,
         inReplyTo,
         references,
@@ -162,15 +166,30 @@
 
   async function saveDraft() {
     try {
-      currentDraftId = await invoke("save_draft", {
+      currentDraftId = (await invoke("save_draft", {
         to: `${to}${cc ? "," + cc : ""}${bcc ? "," + bcc : ""}`,
         subject,
-        body: editorEl.innerHTML,
+        body: editorEl?.innerHTML || "",
         threadId,
         inReplyTo,
         references,
         draftId: currentDraftId,
-      });
+      })) as string;
+      if (currentDraftId) {
+        onDraftSaved(currentDraftId);
+      }
+
+      // Re-sync thread messages from Gmail to replace stale local records.
+      // Gmail changes the message ID on draft update, so without this,
+      // old and new messages both appear in the thread view.
+      if (threadId) {
+        try {
+          await invoke("sync_thread_messages", { threadId });
+        } catch (_) {
+          // Non-critical — thread will self-heal on next full sync
+        }
+      }
+
       addToast("Draft saved.", "success");
       onClose();
     } catch (e) {
@@ -182,9 +201,11 @@
     if (currentDraftId) {
       try {
         await invoke("delete_draft", { draftId: currentDraftId });
+        onDraftSaved(null);
         addToast("Draft discarded.", "info");
       } catch (e) {
         console.error("Failed to delete draft:", e);
+        addToast(`Failed to discard draft: ${e}`, "error", 5000);
       }
     }
     onClose();
@@ -203,22 +224,42 @@
   class:expanded={isExpanded}
   transition:fly={{ y: 20, duration: 250 }}
 >
-  <header class="compose-header" onclick={() => (isMinimized = !isMinimized)}>
+  <header
+    class="compose-header"
+    onclick={() => (isMinimized = !isMinimized)}
+    onkeydown={(e) =>
+      (e.key === "Enter" || e.key === " ") && (isMinimized = !isMinimized)}
+    tabindex="0"
+    role="button"
+  >
     <span class="title">New Message</span>
-    <div class="header-actions" onclick={(e) => e.stopPropagation()}>
-      <button class="action-btn" onclick={() => (isMinimized = !isMinimized)}>
+    <div class="header-actions" role="none">
+      <button
+        class="action-btn"
+        onclick={(e) => {
+          e.stopPropagation();
+          isMinimized = !isMinimized;
+        }}
+      >
         {@html iconMinimize}
       </button>
       <button
         class="action-btn"
-        onclick={() => {
+        onclick={(e) => {
+          e.stopPropagation();
           isExpanded = !isExpanded;
           isMinimized = false;
         }}
       >
         {@html iconMaximize}
       </button>
-      <button class="action-btn close-btn" onclick={saveDraft}>
+      <button
+        class="action-btn close-btn"
+        onclick={(e) => {
+          e.stopPropagation();
+          saveDraft();
+        }}
+      >
         {@html iconClose}
       </button>
     </div>

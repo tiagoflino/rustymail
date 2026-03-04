@@ -10,6 +10,7 @@ export interface LocalMessage {
     internal_date: number;
     body_html: string;
     body_plain: string;
+    is_draft?: boolean;
 }
 
 export const selectedThreadId = writable<string | null>(null);

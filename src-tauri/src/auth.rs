@@ -857,6 +857,7 @@ pub struct LocalMessage {
     pub internal_date: i64,
     pub body_html: String,
     pub body_plain: String,
+    pub is_draft: bool,
 }
 
 #[tauri::command]
@@ -877,11 +878,13 @@ pub async fn get_messages(
         internal_date: Option<i64>,
         body_html: Option<String>,
         body_plain: Option<String>,
+        is_draft: bool,
     }
 
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT id, thread_id, sender, recipients, subject, snippet, internal_date, body_html, body_plain 
-         FROM messages WHERE thread_id = ? ORDER BY internal_date ASC"
+        "SELECT m.id, m.thread_id, m.sender, m.recipients, m.subject, m.snippet, m.internal_date, m.body_html, m.body_plain, 
+         EXISTS(SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.label_id = 'DRAFT') as is_draft
+         FROM messages m WHERE m.thread_id = ? ORDER BY m.internal_date ASC"
     ).bind(thread_id).fetch_all(pool.inner()).await.map_err(|e| e.to_string())?;
 
     Ok(rows
@@ -896,6 +899,7 @@ pub async fn get_messages(
             internal_date: r.internal_date.unwrap_or(0),
             body_plain: r.body_plain.unwrap_or_default(),
             body_html: r.body_html.unwrap_or_default(),
+            is_draft: r.is_draft,
         })
         .collect())
 }
@@ -1479,7 +1483,7 @@ pub async fn save_draft(
         .await
         .map_err(|e| e.to_string())?;
 
-    crate::gmail_api::save_draft(
+    let new_draft_id = crate::gmail_api::save_draft(
         &account.id,
         &row.email,
         &account.access_token,
@@ -1491,7 +1495,24 @@ pub async fn save_draft(
         references.as_deref(),
         draft_id.as_deref(),
     )
-    .await
+    .await?;
+
+    // Clean up stale local draft messages for this thread.
+    // Gmail changes the message ID on each draft update, leaving orphaned
+    // records in the local DB. Delete local draft-labeled messages for the thread
+    // so re-sync picks up fresh data without duplicates.
+    if let Some(ref tid) = thread_id {
+        let _ = sqlx::query(
+            "DELETE FROM messages WHERE thread_id = ? AND id IN (
+                SELECT message_id FROM message_labels WHERE label_id = 'DRAFT'
+            )",
+        )
+        .bind(tid)
+        .execute(pool.inner())
+        .await;
+    }
+
+    Ok(new_draft_id)
 }
 
 #[tauri::command]
@@ -1509,7 +1530,43 @@ pub async fn delete_draft(app_handle: tauri::AppHandle, draft_id: String) -> Res
         .await
         .map_err(|e| e.to_string())?;
 
-    crate::gmail_api::delete_draft(&account.id, &row.email, &account.access_token, &draft_id).await
+    crate::gmail_api::delete_draft(
+        pool.inner(),
+        &account.id,
+        &row.email,
+        &account.access_token,
+        &draft_id,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn delete_draft_by_thread(
+    app_handle: tauri::AppHandle,
+    thread_id: String,
+) -> Result<(), String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+
+    crate::gmail_api::delete_draft_by_thread(
+        pool.inner(),
+        &account.id,
+        &account.access_token,
+        &thread_id,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn get_draft_id_by_message_id(
+    app_handle: tauri::AppHandle,
+    message_id: String,
+) -> Result<String, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+
+    crate::gmail_api::get_draft_id_by_message_id(&account.id, &account.access_token, &message_id)
+        .await
 }
 
 #[tauri::command]

@@ -491,6 +491,8 @@ pub async fn trash_thread(
             thread_id
         ))
         .header("Authorization", format!("Bearer {}", access_token))
+        .header("Content-Length", 0)
+        .body(vec![])
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -682,7 +684,11 @@ pub async fn save_draft(
         }
     }
 
-    let body_json = serde_json::json!({ "message": message_json });
+    let mut body_json = serde_json::json!({ "message": message_json });
+
+    if let Some(did) = draft_id {
+        body_json["id"] = serde_json::json!(did);
+    }
 
     let url = if let Some(did) = draft_id {
         format!(
@@ -719,6 +725,7 @@ pub async fn save_draft(
 }
 
 pub async fn delete_draft(
+    pool: &sqlx::SqlitePool,
     _account_id: &str,
     _account_email: &str,
     access_token: &str,
@@ -738,7 +745,120 @@ pub async fn delete_draft(
     if !res.status().is_success() {
         return Err(format!("Failed to delete draft: {}", res.status()));
     }
+
+    // Also clean up local database
+    sqlx::query("DELETE FROM drafts WHERE id = ?")
+        .bind(draft_id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
     Ok(())
+}
+
+/// Find the draft associated with a thread and delete just that draft,
+/// preserving the original messages in the thread.
+pub async fn delete_draft_by_thread(
+    pool: &sqlx::SqlitePool,
+    _account_id: &str,
+    access_token: &str,
+    thread_id: &str,
+) -> Result<(), String> {
+    let client = reqwest::Client::new();
+
+    // List drafts and find the one associated with this thread
+    let res = client
+        .get("https://gmail.googleapis.com/gmail/v1/users/me/drafts")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !res.status().is_success() {
+        return Err(format!("Failed to list drafts: {}", res.status()));
+    }
+
+    let body: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+    let drafts = body["drafts"].as_array();
+
+    if let Some(drafts) = drafts {
+        for draft in drafts {
+            let draft_id = draft["id"].as_str().unwrap_or("");
+            let msg_thread_id = draft["message"]["threadId"].as_str().unwrap_or("");
+
+            if msg_thread_id == thread_id && !draft_id.is_empty() {
+                // Delete this draft
+                let del_res = client
+                    .delete(&format!(
+                        "https://gmail.googleapis.com/gmail/v1/users/me/drafts/{}",
+                        draft_id
+                    ))
+                    .header("Authorization", format!("Bearer {}", access_token))
+                    .send()
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                if !del_res.status().is_success() {
+                    return Err(format!("Failed to delete draft: {}", del_res.status()));
+                }
+
+                // Clean up local database
+                let _ = sqlx::query("DELETE FROM drafts WHERE id = ?")
+                    .bind(draft_id)
+                    .execute(pool)
+                    .await;
+
+                // Also remove the draft message from the local messages table
+                let _ = sqlx::query(
+                    "DELETE FROM messages WHERE thread_id = ? AND id IN (SELECT id FROM messages WHERE thread_id = ? ORDER BY internal_date DESC LIMIT 1)"
+                )
+                    .bind(thread_id)
+                    .bind(thread_id)
+                    .execute(pool)
+                    .await;
+
+                return Ok(());
+            }
+        }
+    }
+
+    Err("No draft found for this thread".to_string())
+}
+
+/// Find the draft associated with a message ID
+pub async fn get_draft_id_by_message_id(
+    _account_id: &str,
+    access_token: &str,
+    message_id: &str,
+) -> Result<String, String> {
+    let client = reqwest::Client::new();
+
+    let res = client
+        .get("https://gmail.googleapis.com/gmail/v1/users/me/drafts")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !res.status().is_success() {
+        return Err(format!("Failed to list drafts: {}", res.status()));
+    }
+
+    let body: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+    let drafts = body["drafts"].as_array();
+
+    if let Some(drafts) = drafts {
+        for draft in drafts {
+            let draft_id = draft["id"].as_str().unwrap_or("");
+            let msg_id = draft["message"]["id"].as_str().unwrap_or("");
+
+            if msg_id == message_id && !draft_id.is_empty() {
+                return Ok(draft_id.to_string());
+            }
+        }
+    }
+
+    Err("No draft found for this message".to_string())
 }
 
 #[cfg(test)]

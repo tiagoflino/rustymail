@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { isAuthenticated } from "$lib/stores/auth";
   import {
     threads,
@@ -15,7 +15,7 @@
     messagesError,
     type LocalMessage,
   } from "$lib/stores/messages";
-  import { writable } from "svelte/store";
+  import { writable, get } from "svelte/store";
   import {
     getLabelIcon,
     formatLabelName,
@@ -41,6 +41,7 @@
     iconReply,
     iconReplyAll,
     iconForward,
+    iconDraft,
   } from "$lib/components/icons";
   import Settings from "$lib/components/Settings.svelte";
   import Compose from "$lib/components/Compose.svelte";
@@ -77,34 +78,36 @@
   const searchQuery = writable<string>("");
   const isSearching = writable<boolean>(false);
 
-  let activeAccount: AccountInfo | null = null;
-  let allAccounts: AccountInfo[] = [];
-  let showAccountDropdown = false;
-  let showSettings = false;
-  let isLoading = false;
-  let isLoadingThreads = false;
-  let showCompose = false;
-  let showCalendar = false;
-  let searchInput = "";
+  let activeAccount = $state<AccountInfo | null>(null);
+  let allAccounts = $state<AccountInfo[]>([]);
+  let showAccountDropdown = $state(false);
+  let showSettings = $state(false);
+  let isLoading = $state(false);
+  let isLoadingThreads = $state(false);
+  let showCompose = $state(false);
+  let showCalendar = $state(false);
+  let searchInput = $state("");
   let searchTimeout: ReturnType<typeof setTimeout> | null = null;
-  let showSearchSuggestions = false;
-  let searchSuggestions: SearchSuggestion[] = [];
-  let appState: "loading" | "onboarding" | "authenticated" = "loading";
-  let onboardingStep = 0;
-  let searchInputEl: HTMLInputElement;
-  let threadScrollArea: HTMLDivElement;
-  let loadingSentinel: HTMLDivElement;
+  let showSearchSuggestions = $state(false);
+  let searchSuggestions = $state<SearchSuggestion[]>([]);
+  let appState = $state<"loading" | "onboarding" | "authenticated">("loading");
+  let onboardingStep = $state(0);
+  let searchInputEl = $state<HTMLInputElement>();
+  let threadScrollArea = $state<HTMLDivElement>();
+  let loadingSentinel = $state<HTMLDivElement>();
 
-  let threadOffset = 0;
+  let threadOffset = $state(0);
   const THREAD_PAGE_SIZE = 50;
-  let hasMore = true;
-  let isLoadingMore = false;
-  let bgSyncDone = false;
+  let hasMore = $state(true);
+  let isLoadingMore = $state(false);
+  let bgSyncDone = $state(false);
   let globalSyncInterval: ReturnType<typeof setInterval> | null = null;
   let currentBgInterval: ReturnType<typeof setInterval> | null = null;
   const labelLastSyncMap: Record<string, number> = {};
+  let syncLock = false;
 
-  let composeProps = {
+  let composeKey = $state(0);
+  let composeProps = $state({
     initialTo: "",
     initialCc: "",
     initialSubject: "",
@@ -112,7 +115,8 @@
     threadId: null as string | null,
     inReplyTo: null as string | null,
     references: null as string | null,
-  };
+    initialDraftId: null as string | null,
+  });
 
   function openCompose(props: Partial<typeof composeProps> = {}) {
     composeProps = {
@@ -123,8 +127,10 @@
       threadId: null,
       inReplyTo: null,
       references: null,
+      initialDraftId: null,
       ...props,
     };
+    composeKey++;
     showCompose = true;
   }
 
@@ -197,14 +203,23 @@
   }
 
   async function performSync(isManual = false) {
+    // Synchronous lock to prevent re-entrant calls from stacked intervals
+    if (syncLock) return;
+    syncLock = true;
+
+    // Capture the label at invocation time — if it changes mid-sync, abort
+    const syncLabelId = get(selectedLabelId) || "INBOX";
+
     try {
       isSyncing.set(true);
       lastSyncError.set(null);
 
-      const labelId = $selectedLabelId || "INBOX";
-      await invoke("sync_gmail_data", { labelId });
+      await invoke("sync_gmail_data", { labelId: syncLabelId });
 
-      if (!$searchQuery) {
+      // GUARD: Abort if user switched folders while we were syncing
+      if (get(selectedLabelId) !== syncLabelId) return;
+
+      if (!get(searchQuery)) {
         if (isManual) {
           threadOffset = 0;
           hasMore = true;
@@ -216,12 +231,17 @@
       }
 
       await loadLabels();
-      isSyncing.set(false);
 
-      pollBackgroundSync();
+      // Only start background hydration polling on manual syncs
+      // to avoid cascading intervals from auto-sync
+      if (isManual) {
+        pollBackgroundSync();
+      }
     } catch (e) {
       lastSyncError.set(String(e));
+    } finally {
       isSyncing.set(false);
+      syncLock = false;
     }
   }
 
@@ -254,62 +274,80 @@
   }
 
   async function checkAndSetupSync() {
-    if (globalSyncInterval) clearInterval(globalSyncInterval);
+    if (globalSyncInterval) {
+      clearInterval(globalSyncInterval);
+      globalSyncInterval = null;
+    }
     try {
       const freqStr = await invoke<string>("get_setting", {
         key: "sync_frequency",
       });
+      console.log("[SyncSetup] sync_frequency setting:", freqStr);
       if (freqStr && freqStr !== "manual") {
-        const secs = parseInt(freqStr) || 30;
-        if (secs > 0) {
-          globalSyncInterval = setInterval(async () => {
-            if (!$isSyncing) await performSync(false);
-          }, secs * 1000);
-        }
+        // Enforce minimum 30 seconds to prevent accidental rapid polling
+        const secs = Math.max(parseInt(freqStr) || 30, 30);
+        console.log("[SyncSetup] Setting sync interval to", secs, "seconds");
+        globalSyncInterval = setInterval(async () => {
+          if (!syncLock) await performSync(false);
+        }, secs * 1000);
       }
     } catch (e) {
       console.error("Could not fetch sync freq", e);
     }
   }
 
-  let isLabelFetching = false;
+  let isLabelFetching = $state(false);
 
   async function loadThreads(reset = false, silent = false) {
     if (isLoadingThreads && !silent) return;
     if (!silent) isLoadingThreads = true;
 
+    // Capture the label at invocation — all operations must match this
+    const invocationLabelId = get(selectedLabelId) || null;
+
     if (
       reset &&
-      $threads.length > 0 &&
+      get(threads).length > 0 &&
       !isLabelFetching &&
-      !$searchQuery &&
+      !get(searchQuery) &&
       !silent
     ) {
     } else if (reset && !silent) {
-      if ($searchQuery && !isLabelFetching) return;
+      if (get(searchQuery) && !isLabelFetching) return;
       threadOffset = 0;
       hasMore = true;
       threads.set([]);
     }
 
     try {
-      const labelId = $selectedLabelId || null;
-      const fetched: LocalThread[] = await invoke("get_threads", {
-        labelId,
+      const fetched = (await invoke("get_threads", {
+        labelId: invocationLabelId,
         offset: reset ? 0 : threadOffset,
         limit: THREAD_PAGE_SIZE,
-      });
+      })) as LocalThread[];
 
-      if (reset && fetched.length === 0 && labelId && !silent) {
+      // GUARD: Abort if user switched folders during the await
+      if ((get(selectedLabelId) || null) !== invocationLabelId) return;
+
+      if (reset && fetched.length === 0 && invocationLabelId && !silent) {
         isLabelFetching = true;
         try {
-          await invoke("fetch_label_threads", { labelId });
-          if (labelId) labelLastSyncMap[labelId] = Date.now();
-          const retried: LocalThread[] = await invoke("get_threads", {
-            labelId,
+          await invoke("fetch_label_threads", { labelId: invocationLabelId });
+
+          // GUARD: Abort if user switched folders
+          if ((get(selectedLabelId) || null) !== invocationLabelId) return;
+
+          if (invocationLabelId)
+            labelLastSyncMap[invocationLabelId] = Date.now();
+          const retried = (await invoke("get_threads", {
+            labelId: invocationLabelId,
             offset: 0,
             limit: THREAD_PAGE_SIZE,
-          });
+          })) as LocalThread[];
+
+          // GUARD: Abort if user switched folders
+          if ((get(selectedLabelId) || null) !== invocationLabelId) return;
+
           threads.set(retried);
           hasMore = retried.length >= THREAD_PAGE_SIZE;
           threadOffset = retried.length;
@@ -367,40 +405,54 @@
     if (isLoadingMore || !hasMore) return;
     isLoadingMore = true;
 
-    const labelId = $selectedLabelId || null;
+    // Capture label at invocation — abort if it changes
+    const invocationLabelId = get(selectedLabelId) || null;
 
-    const fetched: LocalThread[] = await invoke("get_threads", {
-      labelId,
-      offset: threadOffset,
-      limit: THREAD_PAGE_SIZE,
-    }).catch(() => []);
+    try {
+      const fetched = (await invoke("get_threads", {
+        labelId: invocationLabelId,
+        offset: threadOffset,
+        limit: THREAD_PAGE_SIZE,
+      }).catch(() => [])) as LocalThread[];
 
-    if (fetched.length > 0) {
-      threads.update((t) => [...t, ...fetched]);
-      hasMore = fetched.length >= THREAD_PAGE_SIZE;
-      threadOffset += fetched.length;
-    } else if (labelId) {
-      try {
-        await invoke("fetch_label_threads", { labelId });
-        const retried: LocalThread[] = await invoke("get_threads", {
-          labelId,
-          offset: threadOffset,
-          limit: THREAD_PAGE_SIZE,
-        }).catch(() => []);
-        if (retried.length > 0) {
-          threads.update((t) => [...t, ...retried]);
-          threadOffset += retried.length;
+      // GUARD: Abort if user switched folders
+      if ((get(selectedLabelId) || null) !== invocationLabelId) return;
+
+      if (fetched.length > 0) {
+        threads.update((t) => [...t, ...fetched]);
+        hasMore = fetched.length >= THREAD_PAGE_SIZE;
+        threadOffset += fetched.length;
+      } else if (invocationLabelId) {
+        try {
+          await invoke("fetch_label_threads", { labelId: invocationLabelId });
+
+          // GUARD: Abort if user switched folders
+          if ((get(selectedLabelId) || null) !== invocationLabelId) return;
+
+          const retried = (await invoke("get_threads", {
+            labelId: invocationLabelId,
+            offset: threadOffset,
+            limit: THREAD_PAGE_SIZE,
+          }).catch(() => [])) as LocalThread[];
+
+          // GUARD: Abort if user switched folders
+          if ((get(selectedLabelId) || null) !== invocationLabelId) return;
+
+          if (retried.length > 0) {
+            threads.update((t) => [...t, ...retried]);
+            threadOffset += retried.length;
+          }
+          hasMore = retried.length >= THREAD_PAGE_SIZE;
+        } catch (_) {
+          hasMore = false;
         }
-        hasMore = retried.length >= THREAD_PAGE_SIZE;
-      } catch (_) {
+      } else {
         hasMore = false;
       }
-    } else {
-      hasMore = false;
+    } finally {
+      isLoadingMore = false;
+      observeSentinel();
     }
-
-    isLoadingMore = false;
-    observeSentinel();
   }
 
   async function loadLabels() {
@@ -427,21 +479,18 @@
       threads.set([]);
     }
 
-    if (labelId !== "INBOX") {
-      const lastSync = labelLastSyncMap[labelId] || 0;
-      if (Date.now() - lastSync > 300000) {
-        isSyncing.set(true);
-        try {
-          await invoke("fetch_label_threads", { labelId });
-          labelLastSyncMap[labelId] = Date.now();
-        } catch (e) {
-          console.error("On-demand sync failed", e);
-        } finally {
-          isSyncing.set(false);
-        }
+    // On-demand refresh for ALL labels (including INBOX)
+    const lastSync = labelLastSyncMap[labelId] || 0;
+    if (Date.now() - lastSync > 300000) {
+      isSyncing.set(true);
+      try {
+        await invoke("fetch_label_threads", { labelId: labelId });
+        labelLastSyncMap[labelId] = Date.now();
+      } catch (e) {
+        console.error("On-demand sync failed", e);
+      } finally {
+        isSyncing.set(false);
       }
-    } else {
-      labelLastSyncMap["INBOX"] = Date.now();
     }
 
     await loadThreads(true);
@@ -488,7 +537,9 @@
     hasMore = false;
     try {
       await invoke("save_recent_search", { query });
-      const results: LocalThread[] = await invoke("search_messages", { query });
+      const results: LocalThread[] = (await invoke("search_messages", {
+        query,
+      })) as LocalThread[];
       threads.set(results);
     } catch (e) {
       console.error("Search failed", e);
@@ -543,6 +594,30 @@
   async function executeAction(action: "archive" | "trash" | "unread") {
     const threadId = $selectedThreadId;
     if (!threadId) return;
+
+    // If the compose window is open for this thread and user clicks "Trash",
+    // discard the draft instead of trashing the whole thread.
+    if (
+      action === "trash" &&
+      showCompose &&
+      composeProps.threadId === threadId
+    ) {
+      showCompose = false;
+      if (composeProps.initialDraftId) {
+        try {
+          await invoke("delete_draft", {
+            draftId: composeProps.initialDraftId,
+          });
+          addToast("Draft discarded.", "info");
+        } catch (e) {
+          addToast(`Failed to discard draft: ${e}`, "error", 5000);
+        }
+      } else {
+        addToast("Draft discarded.", "info");
+      }
+      return;
+    }
+
     const currentList = $threads;
     if (action === "archive" || action === "trash") {
       threads.set(currentList.filter((t) => t.id !== threadId));
@@ -556,13 +631,28 @@
       currentMessages.set([]);
     }
     try {
-      if (action === "archive") await invoke("archive_thread", { threadId });
-      else if (action === "trash")
-        await invoke("move_thread_to_trash", { threadId });
-      else if (action === "unread")
-        await invoke("mark_thread_read_status", { threadId, isRead: false });
+      if (action === "archive")
+        await invoke("archive_thread", { threadId: threadId });
+      else if (action === "trash") {
+        // In the DRAFT folder, delete just the draft instead of trashing the whole thread
+        if ($selectedLabelId === "DRAFT") {
+          try {
+            await invoke("delete_draft_by_thread", { threadId: threadId });
+          } catch (e) {
+            // If no draft found, fall back to trashing the thread
+            await invoke("move_thread_to_trash", { threadId: threadId });
+          }
+        } else {
+          await invoke("move_thread_to_trash", { threadId: threadId });
+        }
+      } else if (action === "unread")
+        await invoke("mark_thread_read_status", {
+          threadId: threadId,
+          isRead: false,
+        });
     } catch (e) {
       console.error(`${action} failed`, e);
+      addToast(`Failed to ${action}: ${e}`, "error", 5000);
       threads.set(currentList);
     }
   }
@@ -573,7 +663,10 @@
       list.map((t) => (t.id === threadId ? { ...t, starred: newState } : t)),
     );
     try {
-      await invoke("toggle_thread_star", { threadId, starred: newState });
+      await invoke("toggle_thread_star", {
+        threadId: threadId,
+        starred: newState,
+      });
     } catch (e) {
       console.error("Failed to toggle star", e);
       threads.update((list) =>
@@ -590,8 +683,10 @@
     messagesError.set(null);
     currentMessages.set([]);
     try {
-      await invoke("sync_thread_messages", { threadId });
-      const msgs: LocalMessage[] = await invoke("get_messages", { threadId });
+      await invoke("sync_thread_messages", { threadId: threadId });
+      const msgs: LocalMessage[] = await invoke("get_messages", {
+        threadId: threadId,
+      });
       currentMessages.set(msgs);
 
       const delaySetting = (await invoke("get_setting", {
@@ -602,16 +697,22 @@
         const delayMs =
           delaySetting === "instant" ? 0 : (parseInt(delaySetting) || 2) * 1000;
         setTimeout(() => {
-          threads.update((list) =>
-            list.map((t) => (t.id === threadId ? { ...t, unread: 0 } : t)),
-          );
-          invoke("mark_thread_read_status", { threadId, isRead: true }).catch(
-            () => {},
-          );
+          if ($selectedThreadId === threadId) {
+            threads.set(
+              $threads.map((t) =>
+                t.id === threadId ? { ...t, unread: 0 } : t,
+              ),
+            );
+            invoke("mark_thread_read_status", {
+              threadId: threadId,
+              isRead: true,
+            }).catch(() => {});
+          }
         }, delayMs);
       }
     } catch (e) {
       messagesError.set(String(e));
+      addToast(`Failed to load messages: ${e}`, "error", 6000);
     } finally {
       isMessagesLoading.set(false);
     }
@@ -620,7 +721,7 @@
   async function switchAccount(accountId: string) {
     showAccountDropdown = false;
     try {
-      await invoke("switch_account", { accountId });
+      await invoke("switch_account", { accountId: accountId });
       await refreshAccountState();
       await performSync(true);
     } catch (e) {
@@ -636,7 +737,7 @@
 
   async function removeAccount(accountId: string) {
     try {
-      await invoke("remove_account", { accountId });
+      await invoke("remove_account", { accountId: accountId });
       await refreshAccountState();
       if (allAccounts.length === 0) {
         appState = "onboarding";
@@ -652,7 +753,8 @@
   function handleKeydown(event: KeyboardEvent) {
     if (
       event.target instanceof HTMLInputElement ||
-      event.target instanceof HTMLTextAreaElement
+      event.target instanceof HTMLTextAreaElement ||
+      (event.target instanceof HTMLElement && event.target.isContentEditable)
     )
       return;
     if (showSettings) {
@@ -781,6 +883,26 @@
     });
   }
 
+  async function handleEditDraft(msg: LocalMessage) {
+    try {
+      // First try to fetch the draft ID from Gmail API associated with this message
+      const draftId = (await invoke("get_draft_id_by_message_id", {
+        messageId: msg.id,
+      })) as string;
+
+      openCompose({
+        initialTo: msg.recipients,
+        initialSubject: msg.subject,
+        initialBodyHTML: msg.body_html || msg.body_plain,
+        threadId: msg.thread_id,
+        initialDraftId: draftId,
+      });
+    } catch (e) {
+      console.error("Failed to get draft ID", e);
+      addToast(`Could not edit draft: ${e}`, "error", 5000);
+    }
+  }
+
   onMount(async () => {
     const saved = localStorage.getItem("rustymail-theme") as ThemeMode | null;
     if (saved) applyTheme(saved);
@@ -793,6 +915,19 @@
     }
 
     setTimeout(() => setupIntersectionObserver(), 100);
+  });
+
+  // Clean up all intervals on destroy (critical for HMR to prevent stacking)
+  onDestroy(() => {
+    if (globalSyncInterval) {
+      clearInterval(globalSyncInterval);
+      globalSyncInterval = null;
+    }
+    if (currentBgInterval) {
+      clearInterval(currentBgInterval);
+      currentBgInterval = null;
+    }
+    syncLock = false;
   });
 
   function getActiveLabelName(): string {
@@ -1272,27 +1407,43 @@
                       class="message-actions"
                       style="display: flex; gap: 2px;"
                     >
-                      <button
-                        class="msg-action-btn"
-                        onclick={() => handleReply(msg)}
-                        data-tooltip="Reply (r)"
-                      >
-                        {@html iconReply}
-                      </button>
-                      <button
-                        class="msg-action-btn"
-                        onclick={() => handleReplyAll(msg)}
-                        data-tooltip="Reply All"
-                      >
-                        {@html iconReplyAll}
-                      </button>
-                      <button
-                        class="msg-action-btn"
-                        onclick={() => handleForward(msg)}
-                        data-tooltip="Forward"
-                      >
-                        {@html iconForward}
-                      </button>
+                      {#if msg.is_draft}
+                        <button
+                          class="msg-action-btn"
+                          onclick={() => handleEditDraft(msg)}
+                          data-tooltip="Edit Draft"
+                          style="width: auto; padding: 0 12px; font-size: 13px; font-weight: 500;"
+                        >
+                          <span
+                            style="display: flex; align-items: center; gap: 6px;"
+                          >
+                            <span class="icon">{@html iconDraft}</span>
+                            <span>Edit Draft</span>
+                          </span>
+                        </button>
+                      {:else}
+                        <button
+                          class="msg-action-btn"
+                          onclick={() => handleReply(msg)}
+                          data-tooltip="Reply (r)"
+                        >
+                          {@html iconReply}
+                        </button>
+                        <button
+                          class="msg-action-btn"
+                          onclick={() => handleReplyAll(msg)}
+                          data-tooltip="Reply All"
+                        >
+                          {@html iconReplyAll}
+                        </button>
+                        <button
+                          class="msg-action-btn"
+                          onclick={() => handleForward(msg)}
+                          data-tooltip="Forward"
+                        >
+                          {@html iconForward}
+                        </button>
+                      {/if}
                     </div>
                   </div>
                 </div>
@@ -1316,9 +1467,10 @@
                         div,td,p,span{max-width:100%!important;}
                       </style></head><body>${msg.body_html}</body></html>`}
                       onload={(e) => {
-                        const doc = e.currentTarget.contentWindow?.document;
+                        const iframe = e.currentTarget as HTMLIFrameElement;
+                        const doc = iframe.contentWindow?.document;
                         if (doc)
-                          e.currentTarget.style.height =
+                          iframe.style.height =
                             Math.max(
                               doc.body.scrollHeight,
                               doc.documentElement.scrollHeight,
@@ -1362,9 +1514,15 @@
   />
 {/if}
 
-{#if showCompose}
-  <Compose onClose={() => (showCompose = false)} {...composeProps} />
-{/if}
+{#key composeKey}
+  {#if showCompose}
+    <Compose
+      onClose={() => (showCompose = false)}
+      {...composeProps}
+      onDraftSaved={(id) => (composeProps.initialDraftId = id)}
+    />
+  {/if}
+{/key}
 
 {#if showCalendar}
   <CalendarSidebar onClose={() => (showCalendar = false)} />
@@ -2092,9 +2250,6 @@
   }
   .skeleton-line.w40 {
     width: 40%;
-  }
-  .skeleton-line.w50 {
-    width: 50%;
   }
   .skeleton-line.w60 {
     width: 60%;

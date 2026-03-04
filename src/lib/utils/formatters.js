@@ -30,18 +30,12 @@ export function prepareQuotedHtml(html) {
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
 
-        // Extract all style tags from the document
-        const styles = Array.from(doc.querySelectorAll('style'));
-        let styleHtml = "";
-        styles.forEach(s => {
-            styleHtml += s.outerHTML;
-        });
-
-        // Extract body content
+        // Extract body content only — skip style tags to prevent
+        // leaked selectors causing content to visually duplicate
+        // in the WYSIWYG editor or draft body.
         const bodyContent = doc.body ? doc.body.innerHTML : html;
 
         return `<div class="gmail_quote" style="border-left:1px solid #ccc; margin-left:1ex; padding-left:1ex">
-            ${styleHtml}
             ${bodyContent}
         </div>`;
     } catch (e) {
