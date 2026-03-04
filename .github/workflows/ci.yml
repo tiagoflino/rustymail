@@ -38,9 +38,17 @@ jobs:
 
       - uses: github/codeql-action/init@v3
         with:
-          languages: javascript, typescript
+          languages: javascript, typescript, actions, rust
 
       - uses: github/codeql-action/analyze@v3
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-audit
+      - run: cargo audit --manifest-path src-tauri/Cargo.toml
 
   secrets:
     runs-on: ubuntu-latest
