@@ -24,7 +24,7 @@ jobs:
       RUSTYMAIL_CLIENT_SECRET: ${{ secrets.RUSTYMAIL_CLIENT_SECRET }}
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-node@v4
         with:
