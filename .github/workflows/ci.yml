@@ -9,6 +9,9 @@ on:
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
+    env:
+      RUSTYMAIL_CLIENT_ID: ${{ secrets.RUSTYMAIL_CLIENT_ID }}
+      RUSTYMAIL_CLIENT_SECRET: ${{ secrets.RUSTYMAIL_CLIENT_SECRET }}
     steps:
       - uses: actions/checkout@v4
       
@@ -28,6 +31,7 @@ jobs:
   security:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       security-events: write
     steps:
       - uses: actions/checkout@v4
