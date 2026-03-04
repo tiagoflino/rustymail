@@ -5,6 +5,10 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   build-and-release:
     strategy:
@@ -19,8 +23,6 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
-    permissions:
-      contents: write
     env:
       RUSTYMAIL_CLIENT_ID: ${{ secrets.RUSTYMAIL_CLIENT_ID }}
       RUSTYMAIL_CLIENT_SECRET: ${{ secrets.RUSTYMAIL_CLIENT_SECRET }}
