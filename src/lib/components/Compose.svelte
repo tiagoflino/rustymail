@@ -33,13 +33,13 @@
   let isExpanded = $state(false);
   let isSending = $state(false);
 
-  let to = $state("" + initialTo);
-  let cc = $state("" + initialCc);
+  let to = $state(untrack(() => "" + initialTo));
+  let cc = $state(untrack(() => "" + initialCc));
   let bcc = $state("");
-  let subject = $state("" + initialSubject);
-  let bodyHTML = $state("" + initialBodyHTML);
+  let subject = $state(untrack(() => "" + initialSubject));
+  let bodyHTML = $state(untrack(() => "" + initialBodyHTML));
 
-  let showCc = $state(initialCc.length > 0);
+  let showCc = $state(untrack(() => initialCc.length > 0));
   let showBcc = $state(false);
 
   let suggestions = $state<any[]>([]);

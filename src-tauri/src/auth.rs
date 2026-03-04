@@ -1459,6 +1459,7 @@ pub async fn search_contacts(
     Ok(suggestions)
 }
 
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn save_draft(
     app_handle: tauri::AppHandle,

@@ -1,4 +1,5 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/svelte';
+import '@testing-library/jest-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import Page from './+page.svelte';
 import { invoke } from '@tauri-apps/api/core';

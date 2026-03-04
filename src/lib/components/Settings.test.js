@@ -1,4 +1,5 @@
 import { render, screen, fireEvent } from '@testing-library/svelte';
+import '@testing-library/jest-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import Settings from './Settings.svelte';
 import { invoke } from '@tauri-apps/api/core';
@@ -19,7 +20,14 @@ describe('Settings.svelte', () => {
     });
 
     it('renders when show is true', async () => {
-        render(Settings, { show: true, accounts: [] });
+        render(Settings, {
+            show: true,
+            accounts: [],
+            onclose: vi.fn(),
+            onAccountSwitch: vi.fn(),
+            onAccountAdd: vi.fn(),
+            onAccountRemove: vi.fn()
+        });
         // Tab "Accounts" should be visible
         expect(screen.getByText('Accounts')).toBeInTheDocument();
     });
@@ -29,7 +37,14 @@ describe('Settings.svelte', () => {
             { key: 'theme', value: 'dark' }
         ]);
 
-        render(Settings, { show: true, accounts: [] });
+        render(Settings, {
+            show: true,
+            accounts: [],
+            onclose: vi.fn(),
+            onAccountSwitch: vi.fn(),
+            onAccountAdd: vi.fn(),
+            onAccountRemove: vi.fn()
+        });
 
         // Check if invoke was called for get_settings
         expect(invoke).toHaveBeenCalledWith('get_settings');
@@ -37,7 +52,14 @@ describe('Settings.svelte', () => {
 
     it('closes when close button is clicked', async () => {
         const onclose = vi.fn();
-        render(Settings, { show: true, accounts: [], onclose });
+        render(Settings, {
+            show: true,
+            accounts: [],
+            onclose,
+            onAccountSwitch: vi.fn(),
+            onAccountAdd: vi.fn(),
+            onAccountRemove: vi.fn()
+        });
 
         const closeBtn = screen.getByLabelText('Close Settings');
         await fireEvent.click(closeBtn);

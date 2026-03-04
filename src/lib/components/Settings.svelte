@@ -134,6 +134,7 @@
     <div
       class="settings-modal"
       onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
       role="dialog"
       aria-label="Settings"
       tabindex="-1"
@@ -616,10 +617,6 @@
     color: var(--text-secondary);
     margin-bottom: 20px;
     line-height: 1.4;
-  }
-
-  .setting-row:last-child {
-    border-bottom: none;
   }
 
   .setting-group {

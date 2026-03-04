@@ -217,7 +217,7 @@ pub async fn fetch_messages_for_thread(
 ) -> Result<(), String> {
     let client = Client::new();
     let res = client
-        .get(&format!(
+        .get(format!(
             "https://gmail.googleapis.com/gmail/v1/users/me/threads/{}",
             thread_id
         ))
@@ -332,7 +332,7 @@ pub async fn batch_hydrate_threads(
             let aid = account_id.to_string();
             async move {
                 let res = client
-                    .get(&format!(
+                    .get(format!(
                         "https://gmail.googleapis.com/gmail/v1/users/me/threads/{}",
                         tid
                     ))
@@ -430,7 +430,7 @@ pub async fn modify_thread(
     };
 
     let res = client
-        .post(&format!(
+        .post(format!(
             "https://gmail.googleapis.com/gmail/v1/users/me/threads/{}/modify",
             thread_id
         ))
@@ -486,7 +486,7 @@ pub async fn trash_thread(
 ) -> Result<(), String> {
     let client = reqwest::Client::new();
     let res = client
-        .post(&format!(
+        .post(format!(
             "https://gmail.googleapis.com/gmail/v1/users/me/threads/{}/trash",
             thread_id
         ))
@@ -611,6 +611,7 @@ fn build_mime_message(
     Ok(base64::encode_config(formatted, base64::URL_SAFE_NO_PAD))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn send_message(
     _account_id: &str,
     account_email: &str,
@@ -654,6 +655,7 @@ pub async fn send_message(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn save_draft(
     _account_id: &str,
     account_email: &str,
@@ -733,7 +735,7 @@ pub async fn delete_draft(
 ) -> Result<(), String> {
     let client = reqwest::Client::new();
     let res = client
-        .delete(&format!(
+        .delete(format!(
             "https://gmail.googleapis.com/gmail/v1/users/me/drafts/{}",
             draft_id
         ))
@@ -789,7 +791,7 @@ pub async fn delete_draft_by_thread(
             if msg_thread_id == thread_id && !draft_id.is_empty() {
                 // Delete this draft
                 let del_res = client
-                    .delete(&format!(
+                    .delete(format!(
                         "https://gmail.googleapis.com/gmail/v1/users/me/drafts/{}",
                         draft_id
                     ))

@@ -1,4 +1,5 @@
 import { render, screen, fireEvent } from '@testing-library/svelte';
+import '@testing-library/jest-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import Toasts from './Toasts.svelte';
 import { toasts, addToast, removeToast } from '$lib/stores/toast';
