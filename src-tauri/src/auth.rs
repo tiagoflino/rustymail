@@ -1,6 +1,5 @@
 use keyring::Entry;
 use oauth2::basic::BasicClient;
-use oauth2::reqwest::async_http_client;
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge, RedirectUrl,
     TokenResponse, TokenUrl,
@@ -67,13 +66,11 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let redirect_url = format!("http://127.0.0.1:{}", port);
 
-    let client = BasicClient::new(
-        ClientId::new(client_id),
-        Some(ClientSecret::new(client_secret)),
-        AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).unwrap(),
-        Some(TokenUrl::new("https://oauth2.googleapis.com/token".to_string()).unwrap()),
-    )
-    .set_redirect_uri(RedirectUrl::new(redirect_url.clone()).unwrap());
+    let client = BasicClient::new(ClientId::new(client_id))
+        .set_client_secret(ClientSecret::new(client_secret))
+        .set_auth_uri(AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).unwrap())
+        .set_token_uri(TokenUrl::new("https://oauth2.googleapis.com/token".to_string()).unwrap())
+        .set_redirect_uri(RedirectUrl::new(redirect_url.clone()).unwrap());
 
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
@@ -149,13 +146,17 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
     }
 
     println!("[OAuth] Exchanging code for tokens...");
+    let http_client = reqwest::ClientBuilder::new()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
     let token_result = client
         .exchange_code(AuthorizationCode::new(code))
         .set_pkce_verifier(pkce_verifier)
-        .request_async(async_http_client)
+        .request_async(&http_client)
         .await
         .map_err(|e| {
-            println!("[OAuth] Token exchange failed: {}", e);
+            println!("[OAuth] Token exchange failed: {:?}", e);
             e.to_string()
         })?;
     println!("[OAuth] Token exchange succeeded.");
