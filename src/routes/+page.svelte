@@ -1453,28 +1453,29 @@
                     <iframe
                       title="Email Body"
                       sandbox="allow-same-origin allow-popups"
-                      style="width:100%;height:500px;border:none;overflow:hidden;background:#fff;border-radius:6px;"
-                      srcdoc={`<html><head><meta name="color-scheme" content="light only"><meta name="supported-color-schemes" content="light only"><style>
+                      style="width:100%;border:none;overflow:hidden;background:#fff;border-radius:6px;"
+                      srcdoc={`<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light only"><meta name="supported-color-schemes" content="light only"><style>
                         html,body{background:#ffffff!important;color:#1c1c1e!important;color-scheme:light!important;
                         font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;margin:0;padding:12px;
-                        overflow-y:hidden;word-break:break-word;-webkit-text-size-adjust:100%;}
-                        *{color-scheme:light!important;}
-                        img{max-width:100%!important;height:auto!important;display:block;}
-                        table{max-width:100%!important;table-layout:fixed!important;}
-                        td,th{word-break:break-word;overflow:hidden;}
+                        overflow:hidden;word-break:break-word;-webkit-text-size-adjust:100%;box-sizing:border-box;}
+                        *{color-scheme:light!important;box-sizing:border-box;}
+                        img{max-width:100%!important;height:auto!important;}
+                        table{max-width:100%!important;}
                         a{color:#0A84FF;}
                         pre,code{white-space:pre-wrap!important;word-break:break-all;}
-                        div,td,p,span{max-width:100%!important;}
                       </style></head><body>${msg.body_html}</body></html>`}
                       onload={(e) => {
                         const iframe = e.currentTarget as HTMLIFrameElement;
                         const doc = iframe.contentWindow?.document;
-                        if (doc)
-                          iframe.style.height =
-                            Math.max(
-                              doc.body.scrollHeight,
-                              doc.documentElement.scrollHeight,
-                            ) + "px";
+                        if (!doc) return;
+                        const resize = () => {
+                          iframe.style.height = Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight) + 'px';
+                        };
+                        resize();
+                        new ResizeObserver(resize).observe(doc.body);
+                        doc.querySelectorAll('img').forEach((img) => {
+                          if (!img.complete) img.addEventListener('load', resize, { once: true });
+                        });
                       }}
                     ></iframe>
                   {:else if msg.body_plain}
