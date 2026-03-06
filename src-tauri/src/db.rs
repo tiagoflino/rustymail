@@ -3,12 +3,14 @@ use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
 use std::str::FromStr;
 use tauri::Manager;
 
+const CURRENT_SCHEMA_VERSION: &str = "2";
+
 pub async fn init_db(app_handle: &tauri::AppHandle) -> Result<SqlitePool> {
     let app_dir = app_handle.path().app_data_dir().expect("Failed to get app data dir");
     std::fs::create_dir_all(&app_dir)?;
 
     let db_path = app_dir.join("rustymail.db");
-    
+
     let options = SqliteConnectOptions::from_str(
         &format!("sqlite://{}", db_path.to_string_lossy())
     )?.create_if_missing(true);
@@ -21,8 +23,6 @@ pub async fn init_db(app_handle: &tauri::AppHandle) -> Result<SqlitePool> {
         email TEXT,
         display_name TEXT,
         avatar_url TEXT,
-        access_token TEXT,
-        refresh_token TEXT,
         token_expiry INTEGER,
         is_active INTEGER DEFAULT 1,
         created_at INTEGER
@@ -106,9 +106,11 @@ pub async fn init_db(app_handle: &tauri::AppHandle) -> Result<SqlitePool> {
 
     sqlx::query(schema).execute(&pool).await?;
 
-    let _ = sqlx::query("ALTER TABLE accounts ADD COLUMN display_name TEXT").execute(&pool).await;
-    let _ = sqlx::query("ALTER TABLE accounts ADD COLUMN avatar_url TEXT").execute(&pool).await;
-    let _ = sqlx::query("ALTER TABLE accounts ADD COLUMN is_active INTEGER DEFAULT 1").execute(&pool).await;
+    // Set schema version for future migration tracking.
+    sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES ('schema_version', ?)")
+        .bind(CURRENT_SCHEMA_VERSION)
+        .execute(&pool)
+        .await?;
 
     sqlx::query(
         "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(sender, subject, body_plain, content=messages, content_rowid=rowid)"

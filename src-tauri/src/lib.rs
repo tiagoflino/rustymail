@@ -1,5 +1,6 @@
 mod auth;
 pub mod calendar_api;
+mod credentials;
 mod db;
 mod gmail_api;
 
@@ -12,6 +13,7 @@ fn greet(name: &str) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(debug_assertions)]
     dotenvy::dotenv().ok();
 
     tauri::Builder::default()

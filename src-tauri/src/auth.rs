@@ -1,4 +1,3 @@
-use keyring::Entry;
 use oauth2::basic::BasicClient;
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge, RedirectUrl,
@@ -9,7 +8,7 @@ use tauri::Manager;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
-#[derive(sqlx::FromRow)]
+#[allow(dead_code)]
 struct ActiveAccountFull {
     id: String,
     access_token: String,
@@ -17,48 +16,78 @@ struct ActiveAccountFull {
     token_expiry: Option<i64>,
 }
 
+#[derive(sqlx::FromRow)]
+struct ActiveAccountRow {
+    id: String,
+    token_expiry: Option<i64>,
+}
+
 async fn get_active_account(pool: &sqlx::SqlitePool) -> Result<ActiveAccountFull, String> {
-    let account = sqlx::query_as::<_, ActiveAccountFull>(
-        "SELECT id, access_token, refresh_token, token_expiry FROM accounts WHERE is_active = 1 LIMIT 1"
+    let row = sqlx::query_as::<_, ActiveAccountRow>(
+        "SELECT id, token_expiry FROM accounts WHERE is_active = 1 LIMIT 1"
     )
         .fetch_one(pool)
         .await
         .map_err(|e| format!("No active account found: {}", e))?;
 
     let now = chrono::Utc::now().timestamp();
-    let expiry = account.token_expiry.unwrap_or(0);
+    let expiry = row.token_expiry.unwrap_or(0);
     if expiry > 0 && expiry - 300 < now {
-        let refresh_tok = account.refresh_token.clone().unwrap_or_default();
-        let token_to_use = if refresh_tok.is_empty() {
-            keyring::Entry::new("rustymail", &account.id)
-                .and_then(|e| e.get_password())
-                .unwrap_or_default()
-        } else {
-            refresh_tok
-        };
+        let token_to_use = crate::credentials::get_refresh_token(&row.id).unwrap_or_default();
         if !token_to_use.is_empty() {
-            if let Err(_e) = refresh_and_update(pool, &account.id, &token_to_use).await {
-            } else {
-                return sqlx::query_as::<_, ActiveAccountFull>(
-                    "SELECT id, access_token, refresh_token, token_expiry FROM accounts WHERE is_active = 1 LIMIT 1"
+            if refresh_and_update(pool, &row.id, &token_to_use).await.is_ok() {
+                let refreshed = sqlx::query_as::<_, ActiveAccountRow>(
+                    "SELECT id, token_expiry FROM accounts WHERE is_active = 1 LIMIT 1"
                 )
                     .fetch_one(pool)
                     .await
-                    .map_err(|_| "Failed to read account after refresh.".to_string());
+                    .map_err(|_| "Failed to read account after refresh.".to_string())?;
+
+                let access_token = crate::credentials::get_access_token(&refreshed.id)
+                    .map_err(|e| format!("Failed to read access token from keyring: {}", e))?;
+                let refresh_token = crate::credentials::get_refresh_token(&refreshed.id).ok();
+
+                return Ok(ActiveAccountFull {
+                    id: refreshed.id,
+                    access_token,
+                    refresh_token,
+                    token_expiry: refreshed.token_expiry,
+                });
             }
         }
     }
 
-    Ok(account)
+    let access_token = crate::credentials::get_access_token(&row.id)
+        .map_err(|e| format!("Failed to read access token from keyring: {}", e))?;
+    let refresh_token = crate::credentials::get_refresh_token(&row.id).ok();
+
+    Ok(ActiveAccountFull {
+        id: row.id,
+        access_token,
+        refresh_token,
+        token_expiry: row.token_expiry,
+    })
+}
+
+#[cfg(not(debug_assertions))]
+fn get_client_credentials() -> Result<(String, String), String> {
+    Ok((
+        env!("RUSTYMAIL_CLIENT_ID").to_string(),
+        env!("RUSTYMAIL_CLIENT_SECRET").to_string(),
+    ))
+}
+
+#[cfg(debug_assertions)]
+fn get_client_credentials() -> Result<(String, String), String> {
+    let id = env::var("RUSTYMAIL_CLIENT_ID")
+        .map_err(|_| "RUSTYMAIL_CLIENT_ID not found in environment".to_string())?;
+    let secret = env::var("RUSTYMAIL_CLIENT_SECRET")
+        .map_err(|_| "RUSTYMAIL_CLIENT_SECRET not found in environment".to_string())?;
+    Ok((id.trim().to_string(), secret.trim().to_string()))
 }
 
 pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String> {
-    let client_id = env::var("RUSTYMAIL_CLIENT_ID")
-        .map_err(|_| "RUSTYMAIL_CLIENT_ID not found in environment".to_string())?;
-    let client_id = client_id.trim().to_string();
-    let client_secret = env::var("RUSTYMAIL_CLIENT_SECRET")
-        .map_err(|_| "RUSTYMAIL_CLIENT_SECRET not found in environment".to_string())?;
-    let client_secret = client_secret.trim().to_string();
+    let (client_id, client_secret) = get_client_credentials()?;
 
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -203,11 +232,7 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
 
     let account_id = email.clone();
 
-    if !refresh_token.is_empty() {
-        if let Ok(entry) = Entry::new("rustymail", &account_id) {
-            let _ = entry.set_password(&refresh_token);
-        }
-    }
+    crate::credentials::store_tokens(&account_id, &access_token, &refresh_token)?;
 
     let pool = app_handle.state::<sqlx::SqlitePool>();
 
@@ -215,11 +240,9 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
         .execute(pool.inner())
         .await;
 
-    let sql = "INSERT INTO accounts (id, email, display_name, avatar_url, access_token, refresh_token, token_expiry, is_active, created_at) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
-               ON CONFLICT(id) DO UPDATE SET 
-                 access_token = excluded.access_token, 
-                 refresh_token = excluded.refresh_token, 
+    let sql = "INSERT INTO accounts (id, email, display_name, avatar_url, token_expiry, is_active, created_at)
+               VALUES (?, ?, ?, ?, ?, 1, ?)
+               ON CONFLICT(id) DO UPDATE SET
                  email = excluded.email,
                  display_name = excluded.display_name,
                  avatar_url = excluded.avatar_url,
@@ -230,8 +253,6 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
         .bind(&email)
         .bind(&display_name)
         .bind(&avatar_url)
-        .bind(&access_token)
-        .bind(&refresh_token)
         .bind(chrono::Utc::now().timestamp() + 3500)
         .bind(chrono::Utc::now().timestamp())
         .execute(pool.inner())
@@ -272,12 +293,11 @@ pub async fn check_auth_status(app_handle: tauri::AppHandle) -> Result<AuthStatu
         email: Option<String>,
         display_name: Option<String>,
         avatar_url: Option<String>,
-        refresh_token: Option<String>,
         token_expiry: Option<i64>,
         is_active: Option<i32>,
     }
 
-    let all_accounts: Vec<AccountRow> = sqlx::query_as("SELECT id, email, display_name, avatar_url, refresh_token, token_expiry, is_active FROM accounts")
+    let all_accounts: Vec<AccountRow> = sqlx::query_as("SELECT id, email, display_name, avatar_url, token_expiry, is_active FROM accounts")
         .fetch_all(pool.inner())
         .await
         .map_err(|e| e.to_string())?;
@@ -330,14 +350,7 @@ pub async fn check_auth_status(app_handle: tauri::AppHandle) -> Result<AuthStatu
         });
     }
 
-    let refresh_token = active.refresh_token.clone().unwrap_or_default();
-    let token_to_use = if refresh_token.is_empty() {
-        Entry::new("rustymail", &active.id)
-            .and_then(|e| e.get_password())
-            .unwrap_or_default()
-    } else {
-        refresh_token
-    };
+    let token_to_use = crate::credentials::get_refresh_token(&active.id).unwrap_or_default();
 
     if token_to_use.is_empty() {
         return Ok(AuthStatus {
@@ -373,10 +386,7 @@ async fn refresh_and_update(
     account_id: &str,
     refresh_token: &str,
 ) -> Result<(), String> {
-    let client_id = std::env::var("RUSTYMAIL_CLIENT_ID")
-        .map_err(|_| "RUSTYMAIL_CLIENT_ID not found".to_string())?;
-    let client_secret = std::env::var("RUSTYMAIL_CLIENT_SECRET")
-        .map_err(|_| "RUSTYMAIL_CLIENT_SECRET not found".to_string())?;
+    let (client_id, client_secret) = get_client_credentials()?;
 
     let client = reqwest::Client::new();
     let res = client
@@ -400,6 +410,8 @@ async fn refresh_and_update(
     let expires_in = body["expires_in"].as_i64().unwrap_or(3500);
     let new_expiry = chrono::Utc::now().timestamp() + expires_in;
 
+    crate::credentials::update_access_token(account_id, new_access_token)?;
+
     let http = reqwest::Client::new();
     if let Ok(profile_res) = http
         .get("https://www.googleapis.com/oauth2/v2/userinfo")
@@ -411,8 +423,7 @@ async fn refresh_and_update(
             let name = profile["name"].as_str().unwrap_or("");
             let picture = profile["picture"].as_str().unwrap_or("");
             let email = profile["email"].as_str().unwrap_or("");
-            sqlx::query("UPDATE accounts SET access_token = ?, token_expiry = ?, display_name = COALESCE(NULLIF(display_name, ''), ?), avatar_url = COALESCE(NULLIF(avatar_url, ''), ?), email = COALESCE(NULLIF(email, 'unknown@gmail.com'), ?) WHERE id = ?")
-                .bind(new_access_token)
+            sqlx::query("UPDATE accounts SET token_expiry = ?, display_name = COALESCE(NULLIF(display_name, ''), ?), avatar_url = COALESCE(NULLIF(avatar_url, ''), ?), email = COALESCE(NULLIF(email, 'unknown@gmail.com'), ?) WHERE id = ?")
                 .bind(new_expiry)
                 .bind(name)
                 .bind(picture)
@@ -425,8 +436,7 @@ async fn refresh_and_update(
         }
     }
 
-    sqlx::query("UPDATE accounts SET access_token = ?, token_expiry = ? WHERE id = ?")
-        .bind(new_access_token)
+    sqlx::query("UPDATE accounts SET token_expiry = ? WHERE id = ?")
         .bind(new_expiry)
         .bind(account_id)
         .execute(pool)
@@ -491,9 +501,7 @@ pub async fn remove_account(
 ) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
 
-    if let Ok(entry) = Entry::new("rustymail", &account_id) {
-        let _ = entry.delete_password();
-    }
+    let _ = crate::credentials::delete_tokens(&account_id);
 
     let mut tx = pool.inner().begin().await.map_err(|e| e.to_string())?;
     sqlx::query("DELETE FROM messages WHERE account_id = ?")
@@ -1651,8 +1659,6 @@ mod tests {
                 email TEXT,
                 display_name TEXT,
                 avatar_url TEXT,
-                access_token TEXT,
-                refresh_token TEXT,
                 token_expiry INTEGER,
                 is_active INTEGER DEFAULT 1,
                 created_at INTEGER
@@ -1776,5 +1782,21 @@ mod tests {
         .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0, "thread1");
+    }
+
+    #[tokio::test]
+    async fn test_accounts_schema_has_no_token_columns() {
+        let pool = setup_test_db().await;
+        #[derive(sqlx::FromRow)]
+        struct ColInfo { name: String }
+        let cols: Vec<ColInfo> = sqlx::query_as("PRAGMA table_info(accounts)")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        let col_names: Vec<&str> = cols.iter().map(|c| c.name.as_str()).collect();
+        assert!(!col_names.contains(&"access_token"), "access_token should not be in accounts table");
+        assert!(!col_names.contains(&"refresh_token"), "refresh_token should not be in accounts table");
+        assert!(col_names.contains(&"id"));
+        assert!(col_names.contains(&"token_expiry"));
     }
 }
