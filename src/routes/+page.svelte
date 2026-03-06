@@ -1483,9 +1483,9 @@
                   {#if msg.body_html}
                     <iframe
                       title="Email Body"
-                      sandbox="allow-same-origin allow-popups"
+                      sandbox="allow-same-origin"
                       style="width:100%;height:0;border:none;overflow:hidden;background:#fff;border-radius:6px;opacity:0;transition:opacity .15s;"
-                      srcdoc={`<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light only"><meta name="supported-color-schemes" content="light only"><style>
+                      srcdoc={`<html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src https: data: cid:;"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light only"><meta name="supported-color-schemes" content="light only"><style>
                         html{height:auto!important;}
                         body{background:#ffffff!important;color:#1c1c1e!important;color-scheme:light!important;
                         font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;margin:0;padding:12px;
