@@ -402,7 +402,13 @@ async fn refresh_and_update(
         .map_err(|e| e.to_string())?;
 
     if !res.status().is_success() {
-        return Err("Token refresh failed".to_string());
+        let error_body: serde_json::Value = res.json().await.unwrap_or_default();
+        let error_code = error_body["error"].as_str().unwrap_or("");
+        if error_code == "invalid_grant" {
+            let _ = crate::credentials::delete_tokens(account_id);
+            return Err("invalid_grant: Please re-authenticate your account.".to_string());
+        }
+        return Err(format!("Token refresh failed: {}", error_body));
     }
 
     let body: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
