@@ -689,11 +689,27 @@
     messagesError.set(null);
     currentMessages.set([]);
     try {
-      await invoke("sync_thread_messages", { threadId: threadId });
-      const msgs: LocalMessage[] = await invoke("get_messages", {
+      // Show cached messages from SQLite immediately
+      const cachedMsgs: LocalMessage[] = await invoke("get_messages", {
         threadId: threadId,
       });
-      currentMessages.set(msgs);
+      if (cachedMsgs.length > 0) {
+        currentMessages.set(cachedMsgs);
+        isMessagesLoading.set(false);
+      }
+      // Sync from Gmail in background, then refresh if new data arrived
+      invoke("sync_thread_messages", { threadId: threadId })
+        .then(async () => {
+          if ($selectedThreadId !== threadId) return;
+          const freshMsgs: LocalMessage[] = await invoke("get_messages", {
+            threadId: threadId,
+          });
+          if ($selectedThreadId === threadId) {
+            currentMessages.set(freshMsgs);
+          }
+        })
+        .catch(() => {});
+      const msgs = cachedMsgs;
 
       const delaySetting = (await invoke("get_setting", {
         key: "mark_read_delay",
@@ -1468,11 +1484,12 @@
                     <iframe
                       title="Email Body"
                       sandbox="allow-same-origin allow-popups"
-                      style="width:100%;border:none;overflow:hidden;background:#fff;border-radius:6px;"
+                      style="width:100%;height:0;border:none;overflow:hidden;background:#fff;border-radius:6px;opacity:0;transition:opacity .15s;"
                       srcdoc={`<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light only"><meta name="supported-color-schemes" content="light only"><style>
-                        html,body{background:#ffffff!important;color:#1c1c1e!important;color-scheme:light!important;
+                        html{height:auto!important;}
+                        body{background:#ffffff!important;color:#1c1c1e!important;color-scheme:light!important;
                         font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;margin:0;padding:12px;
-                        overflow:hidden;word-break:break-word;-webkit-text-size-adjust:100%;box-sizing:border-box;}
+                        overflow:hidden;word-break:break-word;-webkit-text-size-adjust:100%;box-sizing:border-box;height:auto!important;}
                         *{color-scheme:light!important;box-sizing:border-box;}
                         img{max-width:100%!important;height:auto!important;}
                         table{max-width:100%!important;}
@@ -1483,8 +1500,16 @@
                         const iframe = e.currentTarget as HTMLIFrameElement;
                         const doc = iframe.contentWindow?.document;
                         if (!doc) return;
+                        let resizeTimer: number;
                         const resize = () => {
-                          iframe.style.height = Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight) + 'px';
+                          cancelAnimationFrame(resizeTimer);
+                          resizeTimer = requestAnimationFrame(() => {
+                            // Reset height to measure true content size
+                            iframe.style.height = '0';
+                            const h = doc.body.scrollHeight;
+                            iframe.style.height = h + 'px';
+                            iframe.style.opacity = '1';
+                          });
                         };
                         resize();
                         new ResizeObserver(resize).observe(doc.body);
