@@ -932,6 +932,37 @@ pub async fn move_thread_to_trash(
 }
 
 #[tauri::command]
+pub async fn untrash_thread(
+    app_handle: tauri::AppHandle,
+    thread_id: String,
+) -> Result<(), String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+    crate::gmail_api::untrash_thread(&account.access_token, &thread_id).await?;
+    sqlx::query(
+        "INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES (?, ?, '', '', 0) ON CONFLICT(id) DO NOTHING"
+    )
+    .bind(&thread_id)
+    .bind(&account.id)
+    .execute(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM thread_labels WHERE thread_id = ?")
+        .bind(&thread_id)
+        .execute(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+    crate::gmail_api::fetch_messages_for_thread(
+        pool.inner(),
+        &account.id,
+        &account.access_token,
+        &thread_id,
+    )
+    .await?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn mark_thread_read_status(
     app_handle: tauri::AppHandle,
     thread_id: String,

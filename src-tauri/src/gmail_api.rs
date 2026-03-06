@@ -502,7 +502,7 @@ pub async fn trash_thread(
     }
 
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-    sqlx::query("DELETE FROM threads WHERE id = ?")
+    sqlx::query("DELETE FROM thread_labels WHERE thread_id = ?")
         .bind(thread_id)
         .execute(&mut *tx)
         .await
@@ -512,7 +512,36 @@ pub async fn trash_thread(
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM threads WHERE id = ?")
+        .bind(thread_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
     tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub async fn untrash_thread(
+    access_token: &str,
+    thread_id: &str,
+) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!(
+            "https://gmail.googleapis.com/gmail/v1/users/me/threads/{}/untrash",
+            thread_id
+        ))
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("Content-Length", 0)
+        .body(vec![])
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !res.status().is_success() {
+        return Err(format!("Failed to untrash thread: {}", res.status()));
+    }
+
     Ok(())
 }
 

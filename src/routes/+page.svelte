@@ -466,6 +466,7 @@
 
   async function selectLabel(labelId: string) {
     const prev = $selectedLabelId;
+    const isReselect = prev === labelId;
     selectedLabelId.set(labelId);
     selectedThreadId.set(null);
     currentMessages.set([]);
@@ -475,13 +476,14 @@
     threadOffset = 0;
     hasMore = true;
 
-    if (prev !== labelId) {
+    if (!isReselect) {
       threads.set([]);
     }
 
     // On-demand refresh for ALL labels (including INBOX)
+    // Always refresh when re-clicking the same label (user expects fresh data)
     const lastSync = labelLastSyncMap[labelId] || 0;
-    if (Date.now() - lastSync > 300000) {
+    if (isReselect || Date.now() - lastSync > 300000) {
       isSyncing.set(true);
       try {
         await invoke("fetch_label_threads", { labelId: labelId });
@@ -591,7 +593,7 @@
     loadThreads(true);
   }
 
-  async function executeAction(action: "archive" | "trash" | "unread") {
+  async function executeAction(action: "archive" | "trash" | "unread" | "untrash") {
     const threadId = $selectedThreadId;
     if (!threadId) return;
 
@@ -619,7 +621,8 @@
     }
 
     const currentList = $threads;
-    if (action === "archive" || action === "trash") {
+
+    if (action === "archive" || action === "trash" || action === "untrash") {
       threads.set(currentList.filter((t) => t.id !== threadId));
       selectedThreadId.set(null);
       currentMessages.set([]);
@@ -634,17 +637,20 @@
       if (action === "archive")
         await invoke("archive_thread", { threadId: threadId });
       else if (action === "trash") {
-        // In the DRAFT folder, delete just the draft instead of trashing the whole thread
         if ($selectedLabelId === "DRAFT") {
           try {
             await invoke("delete_draft_by_thread", { threadId: threadId });
           } catch (e) {
-            // If no draft found, fall back to trashing the thread
             await invoke("move_thread_to_trash", { threadId: threadId });
           }
         } else {
           await invoke("move_thread_to_trash", { threadId: threadId });
+          delete labelLastSyncMap["TRASH"];
+          addToast("Conversation moved to Trash.", "info");
         }
+      } else if (action === "untrash") {
+        await invoke("untrash_thread", { threadId: threadId });
+        addToast("Conversation restored from Trash.", "success");
       } else if (action === "unread")
         await invoke("mark_thread_read_status", {
           threadId: threadId,
@@ -1355,14 +1361,23 @@
               >Archive</span
             >
           </button>
-          <button
-            onclick={() => executeAction("trash")}
-            class="toolbar-btn"
-            title="Delete (#)"
-          >
-            <span class="toolbar-icon">{@html iconTrash}</span><span>Trash</span
+          {#if $selectedLabelId === "TRASH"}
+            <button
+              onclick={() => executeAction("untrash")}
+              class="toolbar-btn"
+              title="Restore from Trash"
             >
-          </button>
+              <span class="toolbar-icon">{@html iconInbox}</span><span>Restore</span>
+            </button>
+          {:else}
+            <button
+              onclick={() => executeAction("trash")}
+              class="toolbar-btn"
+              title="Delete (#)"
+            >
+              <span class="toolbar-icon">{@html iconTrash}</span><span>Trash</span>
+            </button>
+          {/if}
           <button
             onclick={() => executeAction("unread")}
             class="toolbar-btn"

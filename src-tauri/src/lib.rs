@@ -40,6 +40,7 @@ pub fn run() {
             auth::get_labels,
             auth::archive_thread,
             auth::move_thread_to_trash,
+            auth::untrash_thread,
             auth::mark_thread_read_status,
             crate::auth::toggle_thread_star,
             auth::search_messages,

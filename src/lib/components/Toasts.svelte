@@ -29,6 +29,11 @@
       <div class="toast-message">
         {toast.message}
       </div>
+      {#if toast.actionLabel && toast.onAction}
+        <button class="toast-action" onclick={() => { toast.onAction?.(); removeToast(toast.id); }}>
+          {toast.actionLabel}
+        </button>
+      {/if}
       <button class="toast-close" onclick={() => removeToast(toast.id)}>
         {@html iconClose}
       </button>
@@ -77,6 +82,24 @@
     font-size: 13px;
     font-weight: 500;
     line-height: 1.4;
+  }
+
+  .toast-action {
+    background: transparent;
+    border: none;
+    color: #4285F4;
+    font-size: 13px;
+    font-weight: 600;
+    margin-left: 12px;
+    padding: 4px 8px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background 0.15s;
+    white-space: nowrap;
+  }
+
+  .toast-action:hover {
+    background: rgba(66, 133, 244, 0.1);
   }
 
   .toast-close {
