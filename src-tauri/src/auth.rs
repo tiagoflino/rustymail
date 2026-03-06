@@ -610,9 +610,19 @@ pub async fn sync_gmail_data(
     )
     .await?;
 
+    #[derive(sqlx::FromRow)]
+    struct PrefetchSetting { value: String }
+    let prefetch = sqlx::query_as::<_, PrefetchSetting>("SELECT value FROM settings WHERE key = 'prefetch_bodies'")
+        .fetch_optional(pool.inner())
+        .await
+        .unwrap_or(None)
+        .map(|r| r.value == "true")
+        .unwrap_or(false);
+
     let unhydrated = crate::gmail_api::get_unhydrated_thread_ids(pool.inner(), &account.id).await;
     if !unhydrated.is_empty() {
-        let batch: Vec<String> = unhydrated.into_iter().take(100).collect();
+        let limit = if prefetch { unhydrated.len() } else { 100 };
+        let batch: Vec<String> = unhydrated.into_iter().take(limit).collect();
         crate::gmail_api::batch_hydrate_threads(
             pool.inner(),
             &account.id,
@@ -817,9 +827,19 @@ pub async fn fetch_label_threads(
     )
     .await?;
 
+    #[derive(sqlx::FromRow)]
+    struct PrefetchVal { value: String }
+    let prefetch = sqlx::query_as::<_, PrefetchVal>("SELECT value FROM settings WHERE key = 'prefetch_bodies'")
+        .fetch_optional(pool.inner())
+        .await
+        .unwrap_or(None)
+        .map(|r| r.value == "true")
+        .unwrap_or(false);
+
     let unhydrated = crate::gmail_api::get_unhydrated_thread_ids(pool.inner(), &account.id).await;
     if !unhydrated.is_empty() {
-        let batch: Vec<String> = unhydrated.into_iter().take(50).collect();
+        let limit = if prefetch { unhydrated.len() } else { 50 };
+        let batch: Vec<String> = unhydrated.into_iter().take(limit).collect();
         crate::gmail_api::batch_hydrate_threads(
             pool.inner(),
             &account.id,

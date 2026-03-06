@@ -291,6 +291,25 @@
               </div>
 
               <div class="setting-group">
+                <label class="toggle-row" style="border-bottom: none; padding: 0;">
+                  <div class="toggle-label">
+                    <span class="setting-name">Pre-fetch Message Bodies</span>
+                    <span class="setting-hint">Download full message content during sync so emails open instantly. Uses more bandwidth and storage.</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    class="toggle"
+                    checked={settings.prefetch_bodies === "true"}
+                    onchange={(e) =>
+                      saveSetting(
+                        "prefetch_bodies",
+                        e.currentTarget.checked ? "true" : "false",
+                      )}
+                  />
+                </label>
+              </div>
+
+              <div class="setting-group">
                 <div class="setting-label">
                   <span class="setting-name">Cache Size Limit</span>
                   <span class="setting-hint"
