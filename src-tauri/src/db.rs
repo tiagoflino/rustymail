@@ -102,6 +102,15 @@ pub async fn init_db(app_handle: &tauri::AppHandle) -> Result<SqlitePool> {
     );
 
     CREATE INDEX IF NOT EXISTS idx_thread_labels_thread ON thread_labels(thread_id);
+    CREATE INDEX IF NOT EXISTS idx_thread_labels_label ON thread_labels(label_id);
+    CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
+    CREATE INDEX IF NOT EXISTS idx_messages_account ON messages(account_id);
+    CREATE INDEX IF NOT EXISTS idx_messages_internal_date ON messages(internal_date);
+    CREATE INDEX IF NOT EXISTS idx_message_labels_label ON message_labels(label_id);
+    CREATE INDEX IF NOT EXISTS idx_threads_account ON threads(account_id);
+    CREATE INDEX IF NOT EXISTS idx_labels_account ON labels(account_id);
+
+    PRAGMA journal_mode=WAL;
     "#;
 
     sqlx::query(schema).execute(&pool).await?;
