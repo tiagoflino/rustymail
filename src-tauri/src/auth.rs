@@ -34,26 +34,24 @@ async fn get_active_account(pool: &sqlx::SqlitePool) -> Result<ActiveAccountFull
     let expiry = row.token_expiry.unwrap_or(0);
     if expiry > 0 && expiry - 300 < now {
         let token_to_use = crate::credentials::get_refresh_token(&row.id).unwrap_or_default();
-        if !token_to_use.is_empty() {
-            if refresh_and_update(pool, &row.id, &token_to_use).await.is_ok() {
-                let refreshed = sqlx::query_as::<_, ActiveAccountRow>(
-                    "SELECT id, token_expiry FROM accounts WHERE is_active = 1 LIMIT 1"
-                )
-                    .fetch_one(pool)
-                    .await
-                    .map_err(|_| "Failed to read account after refresh.".to_string())?;
+        if !token_to_use.is_empty() && refresh_and_update(pool, &row.id, &token_to_use).await.is_ok() {
+            let refreshed = sqlx::query_as::<_, ActiveAccountRow>(
+                "SELECT id, token_expiry FROM accounts WHERE is_active = 1 LIMIT 1"
+            )
+                .fetch_one(pool)
+                .await
+                .map_err(|_| "Failed to read account after refresh.".to_string())?;
 
-                let access_token = crate::credentials::get_access_token(&refreshed.id)
-                    .map_err(|e| format!("Failed to read access token from keyring: {}", e))?;
-                let refresh_token = crate::credentials::get_refresh_token(&refreshed.id).ok();
+            let access_token = crate::credentials::get_access_token(&refreshed.id)
+                .map_err(|e| format!("Failed to read access token from keyring: {}", e))?;
+            let refresh_token = crate::credentials::get_refresh_token(&refreshed.id).ok();
 
-                return Ok(ActiveAccountFull {
-                    id: refreshed.id,
-                    access_token,
-                    refresh_token,
-                    token_expiry: refreshed.token_expiry,
-                });
-            }
+            return Ok(ActiveAccountFull {
+                id: refreshed.id,
+                access_token,
+                refresh_token,
+                token_expiry: refreshed.token_expiry,
+            });
         }
     }
 
