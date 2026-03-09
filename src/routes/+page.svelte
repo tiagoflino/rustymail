@@ -91,7 +91,6 @@
   let showSearchSuggestions = $state(false);
   let searchSuggestions = $state<SearchSuggestion[]>([]);
   let appState = $state<"loading" | "onboarding" | "authenticated">("loading");
-  let onboardingStep = $state(0);
   let searchInputEl = $state<HTMLInputElement>();
   let threadScrollArea = $state<HTMLDivElement>();
   let loadingSentinel = $state<HTMLDivElement>();
@@ -957,23 +956,6 @@
     return label ? formatLabelName(label.name) : "Inbox";
   }
 
-  const onboardingFeatures = [
-    {
-      icon: iconZap,
-      title: "Lightning Fast",
-      desc: "Rust backend with local SQLite cache",
-    },
-    {
-      icon: iconShield,
-      title: "Privacy First",
-      desc: "OAuth 2.0 PKCE — password-free",
-    },
-    {
-      icon: iconGlobe,
-      title: "Cross-Platform",
-      desc: "Native on macOS, Windows, Linux",
-    },
-  ];
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -984,74 +966,16 @@
   </main>
 {:else if appState === "onboarding"}
   <main class="onboarding">
-    <div class="onboarding-bg">
-      <div class="onboarding-orb orb-1"></div>
-      <div class="onboarding-orb orb-2"></div>
-      <div class="onboarding-orb orb-3"></div>
+    <div class="onboard-content slide-in">
+      <img src="/app-icon.png" alt="Rustymail" class="onboard-icon" />
+      <h1 class="onboard-title">Rustymail</h1>
+      <p class="onboard-subtitle">Fast, private email</p>
+      <button class="btn-google" onclick={login} disabled={isLoading}>
+        <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+        {isLoading ? "Connecting..." : "Sign in with Google"}
+      </button>
+      <p class="onboard-footer">Your data stays on your device.</p>
     </div>
-
-    {#if onboardingStep === 0}
-      <div class="onboard-card slide-in">
-        <div class="onboard-logo-container">
-          <div class="onboard-logo-ring">
-            <span class="onboard-logo-icon">{@html iconMail}</span>
-          </div>
-        </div>
-        <h1 class="onboard-title">Rustymail</h1>
-        <p class="onboard-tagline">A better way to email.</p>
-        <div class="feature-pills">
-          {#each onboardingFeatures as feature}
-            <div class="feature-pill">
-              <span class="pill-icon">{@html feature.icon}</span>
-              <div class="pill-text">
-                <span class="pill-title">{feature.title}</span>
-                <span class="pill-desc">{feature.desc}</span>
-              </div>
-            </div>
-          {/each}
-        </div>
-        <button class="btn-onboard" onclick={() => (onboardingStep = 1)}
-          >Get Started</button
-        >
-        <p class="onboard-footnote">
-          Free &amp; open source. Your data stays yours.
-        </p>
-      </div>
-    {:else if onboardingStep === 1}
-      <div class="onboard-card slide-in">
-        <div class="onboard-logo-container">
-          <div class="onboard-logo-ring small-ring">
-            <span class="onboard-logo-icon small-icon">{@html iconUser}</span>
-          </div>
-        </div>
-        <h1 class="onboard-title">Sign In</h1>
-        <p class="onboard-tagline">
-          Connect your Google account to get started.<br />Rustymail never sees
-          your password.
-        </p>
-        <button class="btn-google" onclick={login} disabled={isLoading}>
-          <svg width="18" height="18" viewBox="0 0 48 48"
-            ><path
-              fill="#EA4335"
-              d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
-            /><path
-              fill="#4285F4"
-              d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
-            /><path
-              fill="#FBBC05"
-              d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
-            /><path
-              fill="#34A853"
-              d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
-            /></svg
-          >
-          {isLoading ? "Connecting…" : "Continue with Google"}
-        </button>
-        <button class="btn-link" onclick={() => (onboardingStep = 0)}
-          >← Back</button
-        >
-      </div>
-    {/if}
   </main>
 {:else}
   <div class="app-container">
@@ -1576,264 +1500,70 @@
     justify-content: center;
     height: 100vh;
     width: 100vw;
-    background: #0d0d12;
-    position: relative;
-    overflow: hidden;
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display",
-      "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+    background: var(--bg-sidebar, #f5f5f7);
+    font-family: var(--font-family, -apple-system, BlinkMacSystemFont, system-ui, sans-serif);
   }
-  .onboarding-bg {
-    position: absolute;
-    inset: 0;
-    z-index: 0;
-  }
-  .onboarding-orb {
-    position: absolute;
-    border-radius: 50%;
-    filter: blur(100px);
-    opacity: 0.35;
-    animation: float 12s ease-in-out infinite;
-  }
-  .orb-1 {
-    width: 500px;
-    height: 500px;
-    top: -150px;
-    left: -150px;
-    background: #0a84ff;
-  }
-  .orb-2 {
-    width: 400px;
-    height: 400px;
-    bottom: -120px;
-    right: -120px;
-    background: #bf5af2;
-    animation-delay: 3s;
-  }
-  .orb-3 {
-    width: 300px;
-    height: 300px;
-    top: 50%;
-    left: 55%;
-    background: #30d158;
-    animation-delay: 6s;
-    opacity: 0.2;
-  }
-  @keyframes float {
-    0%,
-    100% {
-      transform: translate(0, 0) scale(1);
-    }
-    50% {
-      transform: translate(20px, -20px) scale(1.05);
-    }
-  }
-
-  .onboard-card {
-    position: relative;
-    z-index: 1;
-    background: rgba(30, 30, 35, 0.7);
-    backdrop-filter: blur(60px);
-    -webkit-backdrop-filter: blur(60px);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 24px;
-    padding: 56px 48px 44px;
-    max-width: 480px;
-    width: 100%;
+  .onboard-content {
     text-align: center;
-    box-shadow:
-      0 32px 100px rgba(0, 0, 0, 0.5),
-      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    max-width: 320px;
   }
   .slide-in {
-    animation: slideIn 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    animation: slideIn 0.4s ease forwards;
   }
   @keyframes slideIn {
-    from {
-      opacity: 0;
-      transform: translateY(20px) scale(0.97);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0) scale(1);
-    }
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
   }
-
-  .onboard-logo-container {
-    display: flex;
-    justify-content: center;
-    margin-bottom: 28px;
-  }
-  .onboard-logo-ring {
-    width: 64px;
-    height: 64px;
+  .onboard-icon {
+    width: 80px;
+    height: 80px;
+    margin-bottom: 20px;
     border-radius: 18px;
-    background: linear-gradient(
-      145deg,
-      rgba(10, 132, 255, 0.9),
-      rgba(191, 90, 242, 0.8)
-    );
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 8px 32px rgba(10, 132, 255, 0.25);
-  }
-  .onboard-logo-ring.small-ring {
-    width: 52px;
-    height: 52px;
-    border-radius: 14px;
-  }
-  .onboard-logo-icon {
-    color: white;
-    display: flex;
-    align-items: center;
-  }
-  .onboard-logo-icon :global(svg) {
-    width: 28px;
-    height: 28px;
-  }
-  .small-icon :global(svg) {
-    width: 22px;
-    height: 22px;
   }
   .onboard-title {
-    font-size: 32px;
-    font-weight: 200;
-    color: #fff;
-    letter-spacing: 0.5px;
-    margin-bottom: 10px;
+    font-size: 26px;
+    font-weight: 600;
+    color: var(--text-primary, #1c1c1e);
+    margin-bottom: 6px;
+    letter-spacing: -0.3px;
   }
-  .onboard-tagline {
-    font-size: 15px;
-    font-weight: 300;
-    color: rgba(255, 255, 255, 0.45);
-    line-height: 1.6;
-    margin-bottom: 36px;
-    letter-spacing: 0.2px;
-  }
-
-  .feature-pills {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    margin-bottom: 36px;
-    text-align: left;
-  }
-  .feature-pill {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 14px 18px;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    border-radius: 14px;
-    transition: all 0.25s ease;
-  }
-  .feature-pill:hover {
-    background: rgba(255, 255, 255, 0.06);
-    border-color: rgba(255, 255, 255, 0.1);
-    transform: translateX(4px);
-  }
-  .pill-icon {
-    width: 36px;
-    height: 36px;
-    border-radius: 10px;
-    background: rgba(10, 132, 255, 0.12);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #0a84ff;
-    flex-shrink: 0;
-  }
-  .pill-icon :global(svg) {
-    width: 18px;
-    height: 18px;
-  }
-  .pill-text {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .pill-title {
-    font-size: 13px;
-    font-weight: 500;
-    color: rgba(255, 255, 255, 0.9);
-    letter-spacing: 0.1px;
-  }
-  .pill-desc {
-    font-size: 12px;
-    font-weight: 300;
-    color: rgba(255, 255, 255, 0.35);
-    letter-spacing: 0.1px;
-  }
-
-  .btn-onboard {
-    background: rgba(10, 132, 255, 0.9);
-    color: white;
-    border: none;
-    padding: 13px 44px;
+  .onboard-subtitle {
     font-size: 14px;
-    font-weight: 400;
-    border-radius: 12px;
-    cursor: pointer;
-    transition: all 0.25s ease;
-    letter-spacing: 0.3px;
-    font-family: inherit;
+    color: var(--text-secondary, #8e8e93);
+    margin-bottom: 32px;
   }
-  .btn-onboard:hover {
-    background: rgba(10, 132, 255, 1);
-    box-shadow: 0 8px 28px rgba(10, 132, 255, 0.3);
-    transform: translateY(-1px);
-  }
-  .onboard-footnote {
-    margin-top: 20px;
-    font-size: 11px;
-    font-weight: 300;
-    color: rgba(255, 255, 255, 0.2);
-    letter-spacing: 0.3px;
-  }
-
   .btn-google {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 10px;
-    background: rgba(255, 255, 255, 0.95);
-    color: #1d1d1f;
+    width: 100%;
+    background: var(--text-primary, #1c1c1e);
+    color: var(--bg-sidebar, #ffffff);
     border: none;
-    padding: 12px 28px;
+    padding: 12px 24px;
     font-size: 14px;
-    font-weight: 400;
-    border-radius: 12px;
+    font-weight: 500;
+    border-radius: 10px;
     cursor: pointer;
-    margin: 0 auto 16px;
-    transition: all 0.25s ease;
+    transition: opacity 0.15s;
     font-family: inherit;
-    letter-spacing: 0.2px;
   }
   .btn-google:hover {
-    background: white;
-    box-shadow: 0 4px 20px rgba(255, 255, 255, 0.15);
-    transform: translateY(-1px);
+    opacity: 0.85;
   }
   .btn-google:disabled {
-    opacity: 0.5;
+    opacity: 0.4;
     cursor: not-allowed;
-    transform: none;
-    box-shadow: none;
   }
-  .btn-link {
-    background: none;
-    border: none;
-    color: rgba(255, 255, 255, 0.3);
-    font-size: 13px;
-    font-weight: 300;
-    cursor: pointer;
+  .onboard-footer {
+    margin-top: 16px;
+    font-size: 11px;
+    color: var(--text-secondary, #8e8e93);
     padding: 8px;
     font-family: inherit;
     letter-spacing: 0.2px;
     transition: color 0.2s;
-  }
-  .btn-link:hover {
-    color: rgba(255, 255, 255, 0.6);
   }
   .error {
     color: #ff453a;
