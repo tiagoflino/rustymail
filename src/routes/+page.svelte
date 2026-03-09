@@ -1137,7 +1137,7 @@
                   if (e.key === "Enter" || e.key === " ") selectLabel(label.id);
                 }}
               >
-                <span class="icon">{@html getLabelIcon(label.name)}</span>
+                <span class="icon {label.name === 'STARRED' ? 'icon-starred' : ''}">{@html getLabelIcon(label.name)}</span>
                 <span class="label-text">{formatLabelName(label.name)}</span>
                 {#if label.unread_count > 0}<span class="badge"
                     >{label.unread_count}</span
@@ -1852,6 +1852,10 @@
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
+  }
+  .sidebar-item .icon-starred {
+    color: #f2a600;
+    opacity: 1;
   }
   .sidebar-item .label-text {
     flex: 1;
