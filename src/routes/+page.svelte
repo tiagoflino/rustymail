@@ -87,6 +87,7 @@
   let showCompose = $state(false);
   let showCalendar = $state(false);
   let isMacOS = $state(false);
+  let sidebarCollapsed = $state(false);
   let searchInput = $state("");
   let searchTimeout: ReturnType<typeof setTimeout> | null = null;
   let showSearchSuggestions = $state(false);
@@ -159,6 +160,12 @@
       (themeMode === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
     applyTheme(isDark ? "light" : "dark");
   }
+  function toggleSidebar() {
+    sidebarCollapsed = !sidebarCollapsed;
+    localStorage.setItem("rustymail-sidebar-collapsed", sidebarCollapsed ? "1" : "0");
+  }
+  const iconSidebarCollapse = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/><polyline points="14 9 11 12 14 15"/></svg>';
+  const iconSidebarExpand = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/><polyline points="13 9 16 12 13 15"/></svg>';
   let themeIcon = $derived((() => {
     const m: string = themeMode;
     const isDark = m === "dark" || (m === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
@@ -835,6 +842,10 @@
       if (event.key === "Escape") showSettings = false;
       return;
     }
+    if (event.key === "[") {
+      toggleSidebar();
+      return;
+    }
     if (event.key === "/") {
       event.preventDefault();
       searchInputEl?.focus();
@@ -979,6 +990,7 @@
 
   onMount(async () => {
     isMacOS = navigator.platform.toUpperCase().includes("MAC");
+    sidebarCollapsed = localStorage.getItem("rustymail-sidebar-collapsed") === "1";
 
     const dbTheme = await invoke("get_setting", { key: "theme" }).catch(() => "") as string;
     const saved = (dbTheme || localStorage.getItem("rustymail-theme") || "system") as ThemeMode;
@@ -1035,7 +1047,7 @@
   </main>
 {:else}
   <div class="app-container">
-    <aside class="pane-sidebar">
+    <aside class="pane-sidebar" class:collapsed={sidebarCollapsed}>
       {#if isMacOS}<div class="titlebar-spacer sidebar-titlebar" data-tauri-drag-region></div>{/if}
       <div class="sidebar-brand">
         <button
@@ -1109,7 +1121,7 @@
           onclick={() => openCompose()}
           style="font-size: 13px; font-weight: 500; padding: 8px; background: var(--accent-blue); color: white; border: none; box-shadow: 0 2px 5px rgba(10,132,255,0.3);"
         >
-          <span class="icon">{@html iconPlus}</span> Compose
+          <span class="icon">{@html iconPlus}</span><span class="sidebar-text"> Compose</span>
         </button>
         <button
           class="btn-sidebar"
@@ -1147,7 +1159,7 @@
           {/each}
         </ul>
 
-        {#if $labels.filter((l) => l.type === "user").length > 0}
+        {#if !sidebarCollapsed && $labels.filter((l) => l.type === "user").length > 0}
           <h2 class="sidebar-heading">Labels</h2>
           <ul class="sidebar-menu">
             {#each $labels.filter((l) => l.type === "user") as label}
@@ -1186,7 +1198,7 @@
             <span class="icon {$isSyncing ? 'spin' : ''}"
               >{@html iconRefresh}</span
             >
-            {$isSyncing ? "Syncing…" : "Refresh"}
+            <span class="sidebar-text">{$isSyncing ? "Syncing…" : "Refresh"}</span>
           </button>
           <button
             onclick={cycleTheme}
@@ -1196,9 +1208,18 @@
             <span class="icon">{@html themeIcon}</span>
           </button>
         </div>
-        <button onclick={() => (showSettings = true)} class="btn-sidebar">
-          <span class="icon">{@html iconSettings}</span>Settings
-        </button>
+        <div class="sidebar-bottom-row">
+          <button onclick={() => (showSettings = true)} class="btn-sidebar flex-grow">
+            <span class="icon">{@html iconSettings}</span><span class="sidebar-text">Settings</span>
+          </button>
+          <button
+            onclick={toggleSidebar}
+            class="btn-sidebar btn-theme"
+            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            <span class="icon">{@html sidebarCollapsed ? iconSidebarExpand : iconSidebarCollapse}</span>
+          </button>
+        </div>
         {#if $lastSyncError}<div class="error sidebar-error">
             {$lastSyncError}
           </div>{/if}
@@ -1723,11 +1744,14 @@
     flex-shrink: 0;
   }
 
+  .sidebar-brand {
+    position: relative;
+  }
   .account-dropdown {
     position: absolute;
-    left: 8px;
-    right: 8px;
-    top: 52px;
+    left: 0;
+    right: 0;
+    top: 100%;
     background: var(--bg-view);
     border: 1px solid var(--border-color);
     border-radius: 10px;
@@ -1804,6 +1828,65 @@
 
   .pane-sidebar {
     position: relative;
+    transition: width 0.2s ease, min-width 0.2s ease;
+  }
+  .pane-sidebar.collapsed {
+    width: 56px;
+    min-width: 56px;
+  }
+  .pane-sidebar.collapsed .account-text,
+  .pane-sidebar.collapsed .chevron,
+  .pane-sidebar.collapsed .sidebar-heading,
+  .pane-sidebar.collapsed .label-text,
+  .pane-sidebar.collapsed .badge,
+  .pane-sidebar.collapsed .sidebar-text,
+  .pane-sidebar.collapsed .sidebar-error {
+    display: none;
+  }
+  .pane-sidebar.collapsed .account-switcher {
+    justify-content: center;
+    padding: 10px 0;
+  }
+  .pane-sidebar.collapsed .sidebar-compose {
+    flex-direction: column;
+    padding: 8px 6px 4px !important;
+    gap: 4px !important;
+  }
+  .pane-sidebar.collapsed .sidebar-compose .btn-sidebar {
+    width: 100% !important;
+    padding: 8px 0 !important;
+    min-width: 0;
+    flex: none !important;
+  }
+  .pane-sidebar.collapsed .sidebar-compose .btn-sidebar .icon {
+    margin-right: 0;
+  }
+  .pane-sidebar.collapsed .sidebar-content {
+    padding: 8px 6px;
+  }
+  .pane-sidebar.collapsed .sidebar-item {
+    justify-content: center;
+    padding: 8px 0;
+  }
+  .pane-sidebar.collapsed .sidebar-item .icon {
+    margin-right: 0;
+  }
+  .pane-sidebar.collapsed .sidebar-bottom {
+    padding: 6px;
+  }
+  .pane-sidebar.collapsed .sidebar-bottom-row {
+    flex-direction: column;
+  }
+  .pane-sidebar.collapsed .btn-sidebar {
+    padding: 6px 0;
+    justify-content: center;
+  }
+  .pane-sidebar.collapsed .btn-sidebar.btn-theme {
+    width: 100%;
+    flex: unset;
+  }
+  .pane-sidebar.collapsed .btn-sidebar.flex-grow {
+    flex: unset;
   }
   .sidebar-content {
     flex: 1;
