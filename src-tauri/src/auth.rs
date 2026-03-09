@@ -165,7 +165,7 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
         }
     }
 
-    let response = "HTTP/1.1 200 OK\r\n\r\n<html><body style='font-family:-apple-system,system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;color:#333;'><div style='text-align:center'><h2>✓ Authentication successful!</h2><p>You can close this tab and return to Rustymail.</p></div></body></html>";
+    let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body style='font-family:-apple-system,system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;color:#333;'><div style='text-align:center'><h2>Authentication successful!</h2><p>You can close this tab and return to Rustymail.</p></div></body></html>";
     let _ = stream.write_all(response.as_bytes()).await;
 
     if state != *csrf_token.secret() {

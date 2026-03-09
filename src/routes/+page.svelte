@@ -135,7 +135,7 @@
   }
 
   type ThemeMode = "system" | "light" | "dark";
-  let themeMode: ThemeMode = "system";
+  let themeMode: ThemeMode = $state("system");
   const iconSun =
     '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
   const iconMoon =
@@ -152,20 +152,20 @@
     localStorage.setItem("rustymail-theme", mode);
   }
   function cycleTheme() {
-    const order: ThemeMode[] = ["system", "light", "dark"];
-    const next = order[(order.indexOf(themeMode) + 1) % 3];
-    applyTheme(next);
+    const isDark = themeMode === "dark" ||
+      (themeMode === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    applyTheme(isDark ? "light" : "dark");
   }
-  function getThemeIcon(): string {
-    if (themeMode === "light") return iconSun;
-    if (themeMode === "dark") return iconMoon;
-    return iconMonitor;
-  }
-  function getThemeLabel(): string {
-    if (themeMode === "light") return "Light";
-    if (themeMode === "dark") return "Dark";
-    return "System";
-  }
+  let themeIcon = $derived((() => {
+    const m: string = themeMode;
+    const isDark = m === "dark" || (m === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    return isDark ? iconSun : iconMoon;
+  })());
+  let themeLabel = $derived((() => {
+    const m: string = themeMode;
+    const isDark = m === "dark" || (m === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    return isDark ? "Light mode" : "Dark mode";
+  })());
 
   async function login() {
     try {
@@ -1210,9 +1210,9 @@
           <button
             onclick={cycleTheme}
             class="btn-sidebar btn-theme"
-            title="Theme: {getThemeLabel()}"
+            title="{themeLabel}"
           >
-            <span class="icon">{@html getThemeIcon()}</span>
+            <span class="icon">{@html themeIcon}</span>
           </button>
         </div>
         <button onclick={() => (showSettings = true)} class="btn-sidebar">
@@ -1484,18 +1484,8 @@
                     <iframe
                       title="Email Body"
                       sandbox="allow-same-origin"
-                      style="width:100%;height:0;border:none;overflow:hidden;background:#fff;border-radius:6px;opacity:0;transition:opacity .15s;"
-                      srcdoc={`<html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src https: data: cid:;"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light only"><meta name="supported-color-schemes" content="light only"><style>
-                        html{height:auto!important;}
-                        body{background:#ffffff!important;color:#1c1c1e!important;color-scheme:light!important;
-                        font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;margin:0;padding:12px;
-                        overflow:hidden;word-break:break-word;-webkit-text-size-adjust:100%;box-sizing:border-box;height:auto!important;}
-                        *{color-scheme:light!important;box-sizing:border-box;}
-                        img{max-width:100%!important;height:auto!important;}
-                        table{max-width:100%!important;}
-                        a{color:#0A84FF;}
-                        pre,code{white-space:pre-wrap!important;word-break:break-all;}
-                      </style></head><body>${msg.body_html}</body></html>`}
+                      style="width:100%;height:0;border:none;overflow:hidden;background:#f5f5f5;border-radius:6px;opacity:0;transition:opacity .15s;"
+                      srcdoc={`<html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src https: http: data: cid:;"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light only"></head><body style="margin:0;padding:0;background:#f5f5f5;overflow:hidden;"><div style="max-width:680px;margin:0 auto;padding:12px;">${msg.body_html}</div></body></html>`}
                       onload={(e) => {
                         const iframe = e.currentTarget as HTMLIFrameElement;
                         const doc = iframe.contentWindow?.document;
@@ -1504,7 +1494,6 @@
                         const resize = () => {
                           cancelAnimationFrame(resizeTimer);
                           resizeTimer = requestAnimationFrame(() => {
-                            // Reset height to measure true content size
                             iframe.style.height = '0';
                             const h = doc.body.scrollHeight;
                             iframe.style.height = h + 'px';
@@ -2539,7 +2528,7 @@
     font-weight: 500;
   }
   .thread-item.unread .thread-snippet {
-    color: #3c3c3e;
+    color: var(--text-secondary);
     font-weight: 400;
   }
 

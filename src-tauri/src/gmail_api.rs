@@ -76,6 +76,64 @@ pub struct ThreadDetailsResponse {
     pub messages: Option<Vec<GmailMessage>>,
 }
 
+fn sanitize_email_html(raw: &str) -> String {
+    if raw.is_empty() {
+        return String::new();
+    }
+
+    // Step 1: Sanitize with ammonia — strip dangerous tags/attributes.
+    // Run BEFORE css-inline so ammonia doesn't strip CSS background-image URLs
+    // that css-inline will inject as inline styles.
+    let mut builder = ammonia::Builder::default();
+    builder.add_tags(&[
+            "html", "head", "body", "meta",
+            "div", "span", "p", "br", "hr", "wbr",
+            "h1", "h2", "h3", "h4", "h5", "h6",
+            "table", "thead", "tbody", "tfoot", "tr", "td", "th",
+            "caption", "colgroup", "col",
+            "ul", "ol", "li", "dl", "dt", "dd",
+            "a", "img", "b", "i", "u", "em", "strong", "small", "s", "strike", "del",
+            "blockquote", "pre", "code", "center",
+            "font", "sup", "sub", "abbr", "mark",
+            "style",
+            "section", "article", "header", "footer", "nav", "main", "aside",
+            "figure", "figcaption", "picture", "source",
+            "map", "area",
+        ]);
+    builder.add_tag_attributes("a", &["href", "target", "title", "name"]);
+    builder.add_tag_attributes("img", &["src", "alt", "width", "height", "border", "hspace", "vspace"]);
+    builder.add_tag_attributes("table", &["width", "height", "cellpadding", "cellspacing", "border", "role", "summary"]);
+    builder.add_tag_attributes("td", &["colspan", "rowspan", "nowrap", "background"]);
+    builder.add_tag_attributes("th", &["colspan", "rowspan", "nowrap", "scope"]);
+    builder.add_tag_attributes("col", &["span"]);
+    builder.add_tag_attributes("colgroup", &["span"]);
+    builder.add_tag_attributes("font", &["face", "size"]);
+    builder.add_tag_attributes("meta", &["name", "content", "http-equiv", "charset"]);
+    builder.add_tag_attributes("source", &["srcset", "media", "type", "sizes"]);
+    builder.add_tag_attributes("area", &["shape", "coords", "href", "alt"]);
+    builder.add_tag_attributes("map", &["name"]);
+    builder.add_generic_attributes(&[
+        "style", "class", "id", "dir", "lang", "title",
+        "align", "valign", "width", "height",
+        "bgcolor", "color", "background",
+        "border", "cellpadding", "cellspacing",
+        "role", "aria-label", "aria-hidden",
+    ]);
+    builder.add_url_schemes(&["https", "http", "mailto", "cid", "data"]);
+    builder.rm_clean_content_tags(&["style"]);
+    builder.link_rel(Some("noopener noreferrer"));
+    builder.strip_comments(true);
+    let sanitized = builder.clean(raw).to_string();
+
+    // Step 2: Inline CSS from <style> blocks into inline style attributes.
+    // Run AFTER sanitization so background-image URLs in CSS aren't stripped.
+    let inliner = css_inline::CSSInliner::options()
+        .load_remote_stylesheets(false)
+        .keep_style_tags(true)
+        .build();
+    inliner.inline(&sanitized).unwrap_or(sanitized)
+}
+
 fn extract_body(part: &MessagePart, target_mime_type: &str) -> Option<String> {
     if part.mime_type == target_mime_type {
         if let Some(body) = &part.body {
@@ -261,7 +319,9 @@ async fn store_thread_messages(
                     subject = get_header(headers, "Subject").unwrap_or("").to_string();
                 }
                 body_plain = extract_body(payload, "text/plain").unwrap_or_default();
-                body_html = extract_body(payload, "text/html").unwrap_or_default();
+                body_html = sanitize_email_html(
+                    &extract_body(payload, "text/html").unwrap_or_default(),
+                );
             }
 
             sqlx::query(
@@ -1088,5 +1148,122 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(labels.0, 2);
+    }
+
+    #[test]
+    fn test_sanitize_strips_script_tags() {
+        let input = r#"<p>Hello</p><script>alert('xss')</script><p>World</p>"#;
+        let result = sanitize_email_html(input);
+        assert!(!result.contains("<script>"));
+        assert!(!result.contains("alert"));
+        assert!(result.contains("<p>Hello</p>"));
+        assert!(result.contains("<p>World</p>"));
+    }
+
+    #[test]
+    fn test_sanitize_strips_event_handlers() {
+        let input = r#"<img src="https://example.com/img.png" onerror="alert('xss')" onclick="steal()">"#;
+        let result = sanitize_email_html(input);
+        assert!(!result.contains("onerror"));
+        assert!(!result.contains("onclick"));
+        assert!(result.contains("src=\"https://example.com/img.png\""));
+    }
+
+    #[test]
+    fn test_sanitize_strips_iframe_and_object() {
+        let input = r#"<p>Before</p><iframe src="https://evil.com"></iframe><object data="hack.swf"></object><p>After</p>"#;
+        let result = sanitize_email_html(input);
+        assert!(!result.contains("<iframe"));
+        assert!(!result.contains("<object"));
+        assert!(result.contains("Before"));
+        assert!(result.contains("After"));
+    }
+
+    #[test]
+    fn test_sanitize_preserves_email_tables() {
+        let input = "<table width=\"600\" cellpadding=\"0\" cellspacing=\"0\" bgcolor=\"white\">\
+            <tr><td align=\"center\" valign=\"top\" style=\"padding:10px\">\
+            <img src=\"https://example.com/logo.png\" width=\"200\" height=\"50\" alt=\"Logo\">\
+            </td></tr></table>";
+        let result = sanitize_email_html(input);
+        assert!(result.contains("<table"), "table tag missing");
+        assert!(result.contains("width=\"600\""), "table width missing");
+        assert!(result.contains("cellpadding=\"0\""), "cellpadding missing");
+        assert!(result.contains("<td"), "td tag missing");
+        assert!(result.contains("align=\"center\""), "align missing");
+        assert!(result.contains("<img"), "img tag missing");
+        assert!(result.contains("width=\"200\""), "img width missing");
+    }
+
+    #[test]
+    fn test_sanitize_preserves_links_with_noopener() {
+        let input = r#"<a href="https://example.com" target="_blank">Click</a>"#;
+        let result = sanitize_email_html(input);
+        assert!(result.contains("href=\"https://example.com\""));
+        assert!(result.contains("noopener"));
+        assert!(result.contains("noreferrer"));
+    }
+
+    #[test]
+    fn test_sanitize_inlines_style_rules_and_keeps_style_tag() {
+        let input = r#"<style>.header { color: red; }</style><div class="header">Hi</div>"#;
+        let result = sanitize_email_html(input);
+        // css-inline converts rules to inline styles but keeps <style> tags
+        // for @font-face, @media, etc. that can't be inlined
+        assert!(result.contains("color"), "inlined style should be preserved on element");
+        assert!(result.contains("Hi"));
+    }
+
+    #[test]
+    fn test_sanitize_strips_form_elements() {
+        let input = r#"<form action="https://evil.com"><input type="text" name="password"><button>Submit</button></form>"#;
+        let result = sanitize_email_html(input);
+        assert!(!result.contains("<form"));
+        assert!(!result.contains("<input"));
+        assert!(!result.contains("<button"));
+    }
+
+    #[test]
+    fn test_sanitize_empty_input() {
+        assert_eq!(sanitize_email_html(""), "");
+    }
+
+    #[test]
+    fn test_sanitize_strips_javascript_urls() {
+        let input = r#"<a href="javascript:alert('xss')">Click me</a>"#;
+        let result = sanitize_email_html(input);
+        assert!(!result.contains("javascript:"));
+    }
+
+    #[test]
+    fn test_sanitize_preserves_mailto_links() {
+        let input = r#"<a href="mailto:test@example.com">Email us</a>"#;
+        let result = sanitize_email_html(input);
+        assert!(result.contains("mailto:test@example.com"));
+    }
+
+    #[test]
+    fn test_sanitize_preserves_http_and_https_images() {
+        let input = r#"<img src="http://example.com/logo.png" alt="Logo"><img src="https://example.com/banner.jpg" alt="Banner">"#;
+        let result = sanitize_email_html(input);
+        assert!(result.contains("http://example.com/logo.png"), "http image src lost: {}", result);
+        assert!(result.contains("https://example.com/banner.jpg"), "https image src lost: {}", result);
+    }
+
+    #[test]
+    fn test_sanitize_strips_css_url_properties() {
+        // ammonia strips CSS properties containing URLs (background-image) for security.
+        // This matches Gmail's behavior — background-image is not supported in Gmail either.
+        let input = r#"<td style="background-image:url(https://example.com/bg.png)">content</td>"#;
+        let result = sanitize_email_html(input);
+        assert!(!result.contains("background-image"), "background-image should be stripped: {}", result);
+        assert!(result.contains("content"));
+    }
+
+    #[test]
+    fn test_sanitize_preserves_td_background_attr() {
+        let input = r#"<table><tr><td background="https://example.com/bg.png">content</td></tr></table>"#;
+        let result = sanitize_email_html(input);
+        assert!(result.contains("background="), "td background attribute lost: {}", result);
     }
 }
