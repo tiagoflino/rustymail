@@ -13,7 +13,7 @@
     "windows": [
       {
         "title": "Rustymail",
-        "titleBarStyle": "overlay",
+        "titleBarStyle": "Overlay",
         "hiddenTitle": true,
         "width": 1100,
         "height": 800

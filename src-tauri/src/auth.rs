@@ -1854,6 +1854,15 @@ pub async fn get_upcoming_events(
     crate::calendar_api::get_upcoming_events(&account.access_token).await
 }
 
+#[tauri::command]
+pub async fn open_external_url(url: String) -> Result<(), String> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("Only http and https URLs are allowed".to_string());
+    }
+    tauri_plugin_opener::open_url(&url, None::<&str>)
+        .map_err(|e| format!("Failed to open URL: {}", e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

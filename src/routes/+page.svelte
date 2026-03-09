@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount, onDestroy } from "svelte";
   import { isAuthenticated } from "$lib/stores/auth";
   import {
@@ -86,8 +87,31 @@
   let isLoadingThreads = $state(false);
   let showCompose = $state(false);
   let showCalendar = $state(false);
+
   let isMacOS = $state(false);
   let sidebarCollapsed = $state(false);
+  let linkBehavior = $state("open");
+  const iframeWindows = new Map<Window, HTMLIFrameElement>();
+
+  function handleIframeMessage(event: MessageEvent) {
+    const iframe = iframeWindows.get(event.source as Window);
+    if (!iframe) return;
+    const data = event.data;
+    if (!data || typeof data !== 'object') return;
+
+    if (data.type === 'rustymail-resize' && typeof data.height === 'number') {
+      iframe.style.height = data.height + 'px';
+      iframe.style.opacity = '1';
+    } else if (data.type === 'rustymail-link' && typeof data.url === 'string') {
+      const url: string = data.url;
+      if (url.startsWith('mailto:')) return;
+      if (linkBehavior === 'disable') return;
+      if (linkBehavior === 'ask') {
+        if (!confirm(`Open this link?\n\n${url}`)) return;
+      }
+      invoke('open_external_url', { url });
+    }
+  }
   let searchInput = $state("");
   let searchTimeout: ReturnType<typeof setTimeout> | null = null;
   let showSearchSuggestions = $state(false);
@@ -988,9 +1012,27 @@
     }
   }
 
+  async function refreshLinkBehavior() {
+    const val = await invoke("get_setting", { key: "link_behavior" }).catch(() => "") as string;
+    linkBehavior = val || "open";
+  }
+
+  $effect(() => {
+    if (!showSettings) {
+      refreshLinkBehavior();
+    }
+  });
+
   onMount(async () => {
+    window.addEventListener('message', handleIframeMessage);
     isMacOS = navigator.platform.toUpperCase().includes("MAC");
+    if (!isMacOS) {
+      await getCurrentWindow().setDecorations(false);
+    }
     sidebarCollapsed = localStorage.getItem("rustymail-sidebar-collapsed") === "1";
+
+    const savedLinkBehavior = await invoke("get_setting", { key: "link_behavior" }).catch(() => "") as string;
+    linkBehavior = savedLinkBehavior || "open";
 
     const dbTheme = await invoke("get_setting", { key: "theme" }).catch(() => "") as string;
     const saved = (dbTheme || localStorage.getItem("rustymail-theme") || "system") as ThemeMode;
@@ -1008,6 +1050,8 @@
 
   // Clean up all intervals on destroy (critical for HMR to prevent stacking)
   onDestroy(() => {
+    window.removeEventListener('message', handleIframeMessage);
+    iframeWindows.clear();
     if (globalSyncInterval) {
       clearInterval(globalSyncInterval);
       globalSyncInterval = null;
@@ -1048,7 +1092,7 @@
 {:else}
   <div class="app-container">
     <aside class="pane-sidebar" class:collapsed={sidebarCollapsed}>
-      {#if isMacOS}<div class="titlebar-spacer sidebar-titlebar" data-tauri-drag-region></div>{/if}
+      <div class="titlebar-spacer sidebar-titlebar" data-tauri-drag-region></div>
       <div class="sidebar-brand">
         <button
           class="account-switcher"
@@ -1227,7 +1271,7 @@
     </aside>
 
     <section class="pane-list">
-      {#if isMacOS}<div class="titlebar-spacer" data-tauri-drag-region></div>{/if}
+      <div class="titlebar-spacer" data-tauri-drag-region></div>
       <div class="search-container" data-tauri-drag-region>
         <div class="search-bar">
           <span class="search-icon">{@html iconSearch}</span>
@@ -1385,7 +1429,21 @@
     </section>
 
     <main class="pane-view">
-      {#if isMacOS}<div class="titlebar-spacer" data-tauri-drag-region></div>{/if}
+      <div class="titlebar-spacer" data-tauri-drag-region>
+        {#if !isMacOS}
+          <div class="window-controls">
+            <button class="win-ctrl win-minimize" onclick={() => getCurrentWindow().minimize()} title="Minimize">
+              <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
+            </button>
+            <button class="win-ctrl win-maximize" onclick={() => getCurrentWindow().toggleMaximize()} title="Maximize">
+              <svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/></svg>
+            </button>
+            <button class="win-ctrl win-close" onclick={() => getCurrentWindow().close()} title="Close">
+              <svg width="10" height="10" viewBox="0 0 10 10"><line x1="0" y1="0" x2="10" y2="10" stroke="currentColor" stroke-width="1.2"/><line x1="10" y1="0" x2="0" y2="10" stroke="currentColor" stroke-width="1.2"/></svg>
+            </button>
+          </div>
+        {/if}
+      </div>
       {#if $selectedThreadId}
         <div class="message-toolbar" data-tauri-drag-region>
           <button
@@ -1504,28 +1562,14 @@
                   {#if msg.body_html}
                     <iframe
                       title="Email Body"
-                      sandbox="allow-same-origin"
+                      sandbox="allow-scripts"
                       style="width:100%;height:0;border:none;overflow:hidden;background:#f5f5f5;border-radius:6px;opacity:0;transition:opacity .15s;"
-                      srcdoc={`<html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src https: http: data: cid:;"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light only"></head><body style="margin:0;padding:0;background:#f5f5f5;overflow:hidden;"><div style="max-width:680px;margin:0 auto;padding:12px;">${msg.body_html}</div></body></html>`}
+                      srcdoc={`<html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: http: data: cid:;"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light only"></head><body style="margin:0;padding:0;background:#f5f5f5;overflow:hidden;"><div style="max-width:680px;margin:0 auto;padding:12px;">${msg.body_html}</div><script>(function(){var b=document.body;function post(type,data){parent.postMessage(Object.assign({type:type},data),'*');}function resize(){post('rustymail-resize',{height:b.scrollHeight});}resize();new ResizeObserver(resize).observe(b);b.querySelectorAll('img').forEach(function(img){if(!img.complete)img.addEventListener('load',resize,{once:true});});document.addEventListener('click',function(e){var t=e.target;while(t&&t.tagName!=='A')t=t.parentElement;if(!t||!t.href)return;e.preventDefault();post('rustymail-link',{url:t.href});},true);})();<\/script></body></html>`}
                       onload={(e) => {
                         const iframe = e.currentTarget as HTMLIFrameElement;
-                        const doc = iframe.contentWindow?.document;
-                        if (!doc) return;
-                        let resizeTimer: number;
-                        const resize = () => {
-                          cancelAnimationFrame(resizeTimer);
-                          resizeTimer = requestAnimationFrame(() => {
-                            iframe.style.height = '0';
-                            const h = doc.body.scrollHeight;
-                            iframe.style.height = h + 'px';
-                            iframe.style.opacity = '1';
-                          });
-                        };
-                        resize();
-                        new ResizeObserver(resize).observe(doc.body);
-                        doc.querySelectorAll('img').forEach((img) => {
-                          if (!img.complete) img.addEventListener('load', resize, { once: true });
-                        });
+                        if (iframe.contentWindow) {
+                          iframeWindows.set(iframe.contentWindow, iframe);
+                        }
                       }}
                     ></iframe>
                   {:else if msg.body_plain}
@@ -1587,9 +1631,37 @@
     height: 28px;
     flex-shrink: 0;
     -webkit-app-region: drag;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
   }
   .sidebar-titlebar {
     background: var(--bg-sidebar);
+  }
+  .window-controls {
+    display: flex;
+    align-items: center;
+    height: 100%;
+    -webkit-app-region: no-drag;
+  }
+  .win-ctrl {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 46px;
+    height: 100%;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .win-ctrl:hover {
+    background: var(--bg-hover, rgba(128, 128, 128, 0.2));
+  }
+  .win-close:hover {
+    background: #e81123;
+    color: #fff;
   }
   .loading-container {
     display: flex;

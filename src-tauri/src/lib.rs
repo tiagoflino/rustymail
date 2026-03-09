@@ -58,7 +58,8 @@ pub fn run() {
             auth::delete_draft_by_thread,
             auth::get_draft_id_by_message_id,
             auth::get_upcoming_events,
-            auth::search_contacts
+            auth::search_contacts,
+            auth::open_external_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

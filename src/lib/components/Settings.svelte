@@ -54,6 +54,7 @@
       for (const e of entries) {
         settings[e.key] = e.value;
       }
+      if (!settings.link_behavior) settings.link_behavior = "open";
     } catch (e) {
       console.error("Failed to load settings", e);
     }
@@ -403,6 +404,21 @@
                       onclick={() => saveSetting("mark_read_delay", val)}
                       >{label}</button
                     >
+                  {/each}
+                </div>
+              </div>
+
+              <div class="setting-group">
+                <div class="setting-label">
+                  <span class="setting-name">Link Behavior</span>
+                  <span class="setting-hint">How to handle links in emails</span>
+                </div>
+                <div class="option-group">
+                  {#each [["open", "Open in browser"], ["ask", "Ask before opening"], ["disable", "Disable links"]] as [val, label]}
+                    <button
+                      class="option-btn {(settings.link_behavior || 'open') === val ? 'selected' : ''}"
+                      onclick={() => saveSetting("link_behavior", val)}
+                    >{label}</button>
                   {/each}
                 </div>
               </div>
