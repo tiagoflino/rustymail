@@ -1294,7 +1294,7 @@
       </div>
 
       <div class="thread-scroll-area" bind:this={threadScrollArea}>
-        {#if $threads.length === 0 && ($isSyncing || isLabelFetching)}
+        {#if $threads.length === 0 && ($isSyncing || isLabelFetching || isLoadingThreads)}
           {#each Array(8) as _}
             <div class="skeleton-thread">
               <div class="skeleton-dot"></div>
