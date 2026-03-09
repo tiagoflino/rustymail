@@ -86,6 +86,7 @@
   let isLoadingThreads = $state(false);
   let showCompose = $state(false);
   let showCalendar = $state(false);
+  let isMacOS = $state(false);
   let searchInput = $state("");
   let searchTimeout: ReturnType<typeof setTimeout> | null = null;
   let showSearchSuggestions = $state(false);
@@ -977,6 +978,8 @@
   }
 
   onMount(async () => {
+    isMacOS = navigator.platform.toUpperCase().includes("MAC");
+
     const dbTheme = await invoke("get_setting", { key: "theme" }).catch(() => "") as string;
     const saved = (dbTheme || localStorage.getItem("rustymail-theme") || "system") as ThemeMode;
     applyTheme(saved, false);
@@ -1033,6 +1036,7 @@
 {:else}
   <div class="app-container">
     <aside class="pane-sidebar">
+      {#if isMacOS}<div class="titlebar-spacer sidebar-titlebar" data-tauri-drag-region></div>{/if}
       <div class="sidebar-brand">
         <button
           class="account-switcher"
@@ -1202,7 +1206,8 @@
     </aside>
 
     <section class="pane-list">
-      <div class="search-container">
+      {#if isMacOS}<div class="titlebar-spacer" data-tauri-drag-region></div>{/if}
+      <div class="search-container" data-tauri-drag-region>
         <div class="search-bar">
           <span class="search-icon">{@html iconSearch}</span>
           <input
@@ -1359,8 +1364,9 @@
     </section>
 
     <main class="pane-view">
+      {#if isMacOS}<div class="titlebar-spacer" data-tauri-drag-region></div>{/if}
       {#if $selectedThreadId}
-        <div class="message-toolbar">
+        <div class="message-toolbar" data-tauri-drag-region>
           <button
             onclick={() => executeAction("archive")}
             class="toolbar-btn"
@@ -1555,6 +1561,14 @@
 <Toasts />
 
 <style>
+  .titlebar-spacer {
+    height: 28px;
+    flex-shrink: 0;
+    -webkit-app-region: drag;
+  }
+  .sidebar-titlebar {
+    background: var(--bg-sidebar);
+  }
   .loading-container {
     display: flex;
     align-items: center;
