@@ -20,6 +20,7 @@
     onAccountSwitch: (id: string) => void;
     onAccountAdd: () => void;
     onAccountRemove: (id: string) => void;
+    onThemeChange?: (mode: string) => void;
   }
 
   let {
@@ -29,6 +30,7 @@
     onAccountSwitch = () => {},
     onAccountAdd = () => {},
     onAccountRemove = () => {},
+    onThemeChange = () => {},
   }: SettingsProps = $props();
 
   let activeTab = $state("accounts");
@@ -342,6 +344,24 @@
               <p class="section-desc">
                 Customize how you read and navigate emails.
               </p>
+
+              <div class="setting-group">
+                <div class="setting-label">
+                  <span class="setting-name">Appearance</span>
+                  <span class="setting-hint">Choose light, dark, or follow your system</span>
+                </div>
+                <div class="option-group">
+                  {#each [["system", "System"], ["light", "Light"], ["dark", "Dark"]] as [val, label]}
+                    <button
+                      class="option-btn {(settings.theme || 'system') === val ? 'selected' : ''}"
+                      onclick={() => {
+                        saveSetting("theme", val);
+                        onThemeChange?.(val);
+                      }}
+                    >{label}</button>
+                  {/each}
+                </div>
+              </div>
 
               <div class="setting-group">
                 <div class="setting-label">

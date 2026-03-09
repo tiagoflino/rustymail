@@ -142,13 +142,16 @@
   const iconMonitor =
     '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>';
 
-  function applyTheme(mode: ThemeMode) {
+  function applyTheme(mode: ThemeMode, persist = true) {
     themeMode = mode;
     const root = document.documentElement;
     if (mode === "light") root.setAttribute("data-theme", "light");
     else if (mode === "dark") root.setAttribute("data-theme", "dark");
     else root.removeAttribute("data-theme");
     localStorage.setItem("rustymail-theme", mode);
+    if (persist) {
+      invoke("update_setting", { key: "theme", value: mode }).catch(() => {});
+    }
   }
   function cycleTheme() {
     const isDark = themeMode === "dark" ||
@@ -925,8 +928,9 @@
   }
 
   onMount(async () => {
-    const saved = localStorage.getItem("rustymail-theme") as ThemeMode | null;
-    if (saved) applyTheme(saved);
+    const dbTheme = await invoke("get_setting", { key: "theme" }).catch(() => "") as string;
+    const saved = (dbTheme || localStorage.getItem("rustymail-theme") || "system") as ThemeMode;
+    applyTheme(saved, false);
 
     await refreshAccountState();
     if (appState === "authenticated") {
@@ -1465,6 +1469,7 @@
     onAccountSwitch={switchAccount}
     onAccountAdd={addAccount}
     onAccountRemove={removeAccount}
+    onThemeChange={(mode) => applyTheme(mode as ThemeMode, false)}
   />
 {/if}
 
