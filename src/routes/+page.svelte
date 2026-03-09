@@ -1215,7 +1215,7 @@
           <button
             onclick={toggleSidebar}
             class="btn-sidebar btn-theme"
-            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={sidebarCollapsed ? "Expand sidebar ([)" : "Collapse sidebar ([)"}
           >
             <span class="icon">{@html sidebarCollapsed ? iconSidebarExpand : iconSidebarCollapse}</span>
           </button>
@@ -1234,7 +1234,7 @@
           <input
             type="text"
             class="search-input"
-            placeholder="Search mail…"
+            placeholder="Search mail… (/)"
             bind:value={searchInput}
             bind:this={searchInputEl}
             oninput={onSearchInput}
@@ -1391,7 +1391,7 @@
           <button
             onclick={() => executeAction("archive")}
             class="toolbar-btn"
-            title="Archive (e)"
+            title="Archive (E)"
           >
             <span class="toolbar-icon">{@html iconArchive}</span><span
               >Archive</span
@@ -1417,7 +1417,7 @@
           <button
             onclick={() => executeAction("unread")}
             class="toolbar-btn"
-            title="Mark Unread (Shift+I)"
+            title="Mark Unread (Shift + I)"
           >
             <span class="toolbar-icon">{@html iconMail}</span><span>Unread</span
             >
@@ -1476,7 +1476,8 @@
                         <button
                           class="msg-action-btn"
                           onclick={() => handleReply(msg)}
-                          data-tooltip="Reply (r)"
+                          title="Reply (R)"
+                          data-tooltip="Reply (R)"
                         >
                           {@html iconReply}
                         </button>
