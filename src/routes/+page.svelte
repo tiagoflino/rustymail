@@ -553,9 +553,31 @@
   }
 
   async function fetchSuggestions() {
+    const cursorPos = searchInputEl?.selectionStart ?? searchInput.length;
+    const ctx = parseSearchContext(searchInput, cursorPos);
+
+    if (ctx.operator === "has") {
+      searchSuggestions = ["attachment", "link"]
+        .filter((v) => v.startsWith(ctx.value))
+        .map((v) => ({ kind: "filter", text: v, detail: "" }));
+      return;
+    }
+    if (ctx.operator === "is") {
+      searchSuggestions = ["unread", "read", "starred", "draft", "sent"]
+        .filter((v) => v.startsWith(ctx.value))
+        .map((v) => ({ kind: "filter", text: v, detail: "" }));
+      return;
+    }
+    if (ctx.operator === "before" || ctx.operator === "after") {
+      searchSuggestions = [{ kind: "hint", text: "YYYY/MM/DD", detail: `${ctx.operator}: date format` }];
+      return;
+    }
+
     try {
       searchSuggestions = await invoke("get_search_suggestions", {
-        partial: searchInput,
+        operator: ctx.operator,
+        value: ctx.value,
+        fullQuery: searchInput,
       });
     } catch (_) {
       searchSuggestions = [];
@@ -582,9 +604,25 @@
   }
 
   function applySuggestion(text: string) {
-    searchInput = text;
+    const cursorPos = searchInputEl?.selectionStart ?? searchInput.length;
+    const ctx = parseSearchContext(searchInput, cursorPos);
+
+    if (ctx.operator) {
+      // Replace only the current token's value portion
+      const beforeCursor = searchInput.slice(0, cursorPos);
+      const lastSpace = beforeCursor.lastIndexOf(" ");
+      const prefix = searchInput.slice(0, lastSpace + 1);
+      const afterCursor = searchInput.slice(cursorPos);
+      searchInput = `${prefix}${ctx.operator}:${text} ${afterCursor}`.replace(/  +/g, " ");
+    } else {
+      searchInput = text;
+    }
     showSearchSuggestions = false;
-    handleSearch();
+    // Only auto-search if the query looks complete (no trailing operator)
+    const trimmed = searchInput.trim();
+    if (trimmed && !trimmed.endsWith(":")) {
+      handleSearch();
+    }
   }
 
   function clearSearch() {
@@ -593,6 +631,17 @@
     showSearchSuggestions = false;
     searchSuggestions = [];
     loadThreads(true);
+  }
+
+  function parseSearchContext(input: string, cursorPos: number): { operator: string | null; value: string } {
+    const beforeCursor = input.slice(0, cursorPos);
+    const lastSpace = beforeCursor.lastIndexOf(" ");
+    const currentToken = beforeCursor.slice(lastSpace + 1);
+    const colonIdx = currentToken.indexOf(":");
+    if (colonIdx > 0) {
+      return { operator: currentToken.slice(0, colonIdx), value: currentToken.slice(colonIdx + 1) };
+    }
+    return { operator: null, value: currentToken };
   }
 
   async function executeAction(action: "archive" | "trash" | "unread" | "untrash") {
@@ -1179,40 +1228,56 @@
 
         {#if showSearchSuggestions && (searchSuggestions.length > 0 || !searchInput)}
           <div class="suggestions-dropdown">
-            {#if !searchInput}
-              <div class="suggestion-section">Quick Filters</div>
-              {#each [["from:", "From sender"], ["to:", "To recipient"], ["subject:", "Subject contains"], ["has:attachment ", "Has attachment"], ["is:unread ", "Is unread"]] as [val, label]}
-                <button
-                  class="suggestion-item filter"
-                  onmousedown={() => {
-                    searchInput = val;
-                    onSearchInput();
-                  }}
-                >
-                  <span class="suggestion-icon">{@html iconSearch}</span>
-                  <span class="suggestion-text">{label}</span>
-                  <span class="suggestion-detail">{val}</span>
-                </button>
-              {/each}
-            {:else}
-              {#each searchSuggestions as s}
-                <button
-                  class="suggestion-item"
-                  onmousedown={() => applySuggestion(s.text)}
-                >
-                  <span class="suggestion-icon">
-                    {#if s.kind === "recent"}
-                      {@html iconHistory}
-                    {:else if s.kind === "contact"}
-                      {@html iconUser}
-                    {:else}
-                      {@html iconTag}
-                    {/if}
-                  </span>
-                  <span class="suggestion-text">{s.text}</span>
-                  <span class="suggestion-detail">{s.detail}</span>
-                </button>
-              {/each}
+            {#each searchSuggestions as s}
+              <button
+                class="suggestion-item"
+                onmousedown={() => applySuggestion(s.text)}
+              >
+                <span class="suggestion-icon">
+                  {#if s.kind === "recent"}
+                    {@html iconHistory}
+                  {:else if s.kind === "contact"}
+                    {@html iconUser}
+                  {:else if s.kind === "filter" || s.kind === "hint"}
+                    {@html iconSearch}
+                  {:else}
+                    {@html iconTag}
+                  {/if}
+                </span>
+                <span class="suggestion-text">{s.text}</span>
+                {#if s.detail}<span class="suggestion-detail">{s.detail}</span>{/if}
+              </button>
+            {/each}
+            {#if !searchInput || (parseSearchContext(searchInput, searchInputEl?.selectionStart ?? searchInput.length).operator === null)}
+              {@const usedOperators = searchInput.match(/\b(from|to|subject|has|is|before|after):/g)?.map((o: string) => o) ?? []}
+              {@const allFilters = [["from:", "From sender"], ["to:", "To recipient"], ["subject:", "Subject contains"], ["has:", "Has…"], ["is:", "Is…"], ["before:", "Before date"], ["after:", "After date"]]}
+              {@const available = allFilters.filter(([val]) => !usedOperators.includes(val))}
+              {#if available.length > 0}
+                <div class="suggestion-section">Quick Filters</div>
+                {#each available as [val, label]}
+                  <button
+                    class="suggestion-item filter"
+                    onmousedown={() => {
+                      const cursorPos = searchInputEl?.selectionStart ?? searchInput.length;
+                      const before = searchInput.slice(0, cursorPos);
+                      const after = searchInput.slice(cursorPos);
+                      const needsSpace = before.length > 0 && !before.endsWith(" ");
+                      searchInput = `${before}${needsSpace ? " " : ""}${val}${after}`;
+                      onSearchInput();
+                      // Move cursor after the inserted operator
+                      setTimeout(() => {
+                        const newPos = before.length + (needsSpace ? 1 : 0) + val.length;
+                        searchInputEl?.setSelectionRange(newPos, newPos);
+                        searchInputEl?.focus();
+                      }, 0);
+                    }}
+                  >
+                    <span class="suggestion-icon">{@html iconSearch}</span>
+                    <span class="suggestion-text">{label}</span>
+                    <span class="suggestion-detail">{val}</span>
+                  </button>
+                {/each}
+              {/if}
             {/if}
           </div>
         {/if}

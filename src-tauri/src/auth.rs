@@ -1018,6 +1018,81 @@ pub async fn mark_thread_read_status(
     .await
 }
 
+struct ParsedQuery {
+    from: Option<String>,
+    to: Option<String>,
+    subject: Option<String>,
+    has_attachment: bool,
+    is_unread: Option<bool>,
+    free_text: String,
+}
+
+fn parse_query_operators(query: &str) -> ParsedQuery {
+    let mut from = None;
+    let mut to = None;
+    let mut subject = None;
+    let mut has_attachment = false;
+    let mut is_unread = None;
+    let mut free_parts = Vec::new();
+
+    let mut chars = query.chars().peekable();
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+
+    // Tokenize: split on spaces but respect quoted strings
+    while let Some(c) = chars.next() {
+        if c == '"' {
+            current.push(c);
+            for c2 in chars.by_ref() {
+                current.push(c2);
+                if c2 == '"' { break; }
+            }
+        } else if c == ' ' {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(c);
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    for token in tokens {
+        if let Some(val) = token.strip_prefix("from:") {
+            if !val.is_empty() { from = Some(val.trim_matches('"').to_string()); }
+        } else if let Some(val) = token.strip_prefix("to:") {
+            if !val.is_empty() { to = Some(val.trim_matches('"').to_string()); }
+        } else if let Some(val) = token.strip_prefix("subject:") {
+            if !val.is_empty() { subject = Some(val.trim_matches('"').to_string()); }
+        } else if token == "has:attachment" {
+            has_attachment = true;
+        } else if token == "has:link" {
+            // Gmail handles this, not stored locally
+            free_parts.push(token);
+        } else if token == "is:unread" {
+            is_unread = Some(true);
+        } else if token == "is:read" {
+            is_unread = Some(false);
+        } else if token.starts_with("is:") || token.starts_with("before:") || token.starts_with("after:") {
+            // Pass through to Gmail API as free text
+            free_parts.push(token);
+        } else {
+            free_parts.push(token);
+        }
+    }
+
+    ParsedQuery {
+        from,
+        to,
+        subject,
+        has_attachment,
+        is_unread,
+        free_text: free_parts.join(" "),
+    }
+}
+
 #[tauri::command]
 pub async fn search_messages(
     app_handle: tauri::AppHandle,
@@ -1028,48 +1103,101 @@ pub async fn search_messages(
     let mut all_thread_ids: Vec<String> = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
-    #[derive(sqlx::FromRow)]
-    struct FtsRow {
-        thread_id: Option<String>,
-    }
-    let fts_query = format!("{}*", query.replace('"', ""));
-    let local: Vec<FtsRow> = sqlx::query_as(
-        "SELECT DISTINCT m.thread_id FROM messages m 
-         INNER JOIN messages_fts ON messages_fts.rowid = m.rowid 
-         WHERE messages_fts MATCH ? AND m.account_id = ?
-         LIMIT 50",
-    )
-    .bind(&fts_query)
-    .bind(&account.id)
-    .fetch_all(pool.inner())
-    .await
-    .unwrap_or_default();
+    let parsed = parse_query_operators(&query);
 
-    for r in local {
-        if let Some(tid) = r.thread_id {
-            if seen.insert(tid.clone()) {
-                all_thread_ids.push(tid);
+    // Build targeted SQL conditions from operators
+    let has_operators = parsed.from.is_some() || parsed.to.is_some() || parsed.subject.is_some() || parsed.has_attachment || parsed.is_unread.is_some();
+
+    if has_operators {
+        let mut conditions = vec!["m.account_id = ?".to_string()];
+        let mut binds: Vec<String> = vec![account.id.clone()];
+
+        if let Some(ref f) = parsed.from {
+            conditions.push("m.sender LIKE ?".to_string());
+            binds.push(format!("%{}%", f));
+        }
+        if let Some(ref t) = parsed.to {
+            conditions.push("m.recipients LIKE ?".to_string());
+            binds.push(format!("%{}%", t));
+        }
+        if let Some(ref s) = parsed.subject {
+            conditions.push("m.subject LIKE ?".to_string());
+            binds.push(format!("%{}%", s));
+        }
+        if parsed.has_attachment {
+            conditions.push("m.has_attachments = 1".to_string());
+        }
+        if let Some(unread) = parsed.is_unread {
+            conditions.push("m.is_read = ?".to_string());
+            binds.push(if unread { "0".to_string() } else { "1".to_string() });
+        }
+
+        let where_clause = conditions.join(" AND ");
+        let sql = format!(
+            "SELECT DISTINCT m.thread_id FROM messages m WHERE {} LIMIT 50",
+            where_clause
+        );
+
+        #[derive(sqlx::FromRow)]
+        struct TidRow { thread_id: Option<String> }
+
+        let mut q = sqlx::query_as::<_, TidRow>(&sql);
+        for b in &binds {
+            q = q.bind(b);
+        }
+        let rows: Vec<TidRow> = q.fetch_all(pool.inner()).await.unwrap_or_default();
+        for r in rows {
+            if let Some(tid) = r.thread_id {
+                if seen.insert(tid.clone()) {
+                    all_thread_ids.push(tid);
+                }
             }
         }
     }
 
-    #[derive(sqlx::FromRow)]
-    struct LikeRow {
-        thread_id: Option<String>,
-    }
-    let pattern = format!("%{}%", query);
-    let like_results: Vec<LikeRow> = sqlx::query_as(
-        "SELECT DISTINCT thread_id FROM messages WHERE account_id = ? AND (sender LIKE ? OR subject LIKE ?) LIMIT 30"
-    ).bind(&account.id).bind(&pattern).bind(&pattern)
-    .fetch_all(pool.inner()).await.unwrap_or_default();
-    for r in like_results {
-        if let Some(tid) = r.thread_id {
-            if seen.insert(tid.clone()) {
-                all_thread_ids.push(tid);
+    // FTS5 for free text remainder
+    if !parsed.free_text.is_empty() {
+        #[derive(sqlx::FromRow)]
+        struct FtsRow { thread_id: Option<String> }
+        let fts_query = format!("{}*", parsed.free_text.replace('"', ""));
+        let local: Vec<FtsRow> = sqlx::query_as(
+            "SELECT DISTINCT m.thread_id FROM messages m
+             INNER JOIN messages_fts ON messages_fts.rowid = m.rowid
+             WHERE messages_fts MATCH ? AND m.account_id = ?
+             LIMIT 50",
+        )
+        .bind(&fts_query)
+        .bind(&account.id)
+        .fetch_all(pool.inner())
+        .await
+        .unwrap_or_default();
+
+        for r in local {
+            if let Some(tid) = r.thread_id {
+                if seen.insert(tid.clone()) {
+                    all_thread_ids.push(tid);
+                }
+            }
+        }
+
+        // LIKE fallback for free text
+        #[derive(sqlx::FromRow)]
+        struct LikeRow { thread_id: Option<String> }
+        let pattern = format!("%{}%", parsed.free_text);
+        let like_results: Vec<LikeRow> = sqlx::query_as(
+            "SELECT DISTINCT thread_id FROM messages WHERE account_id = ? AND (sender LIKE ? OR subject LIKE ?) LIMIT 30"
+        ).bind(&account.id).bind(&pattern).bind(&pattern)
+        .fetch_all(pool.inner()).await.unwrap_or_default();
+        for r in like_results {
+            if let Some(tid) = r.thread_id {
+                if seen.insert(tid.clone()) {
+                    all_thread_ids.push(tid);
+                }
             }
         }
     }
 
+    // Gmail API search with the full original query (already supports operators)
     let api_ids = search_gmail_api(&account.access_token, &query).await;
     for tid in api_ids {
         if seen.insert(tid.clone()) {
@@ -1080,9 +1208,7 @@ pub async fn search_messages(
     let mut need_hydrate: Vec<String> = Vec::new();
     for tid in &all_thread_ids {
         #[derive(sqlx::FromRow)]
-        struct C {
-            cnt: i32,
-        }
+        struct C { cnt: i32 }
         let cnt =
             sqlx::query_as::<_, C>("SELECT COUNT(*) as cnt FROM messages WHERE thread_id = ?")
                 .bind(tid)
@@ -1290,79 +1416,164 @@ pub struct SearchSuggestion {
 #[tauri::command]
 pub async fn get_search_suggestions(
     app_handle: tauri::AppHandle,
-    partial: String,
+    operator: Option<String>,
+    value: String,
+    full_query: String,
 ) -> Result<Vec<SearchSuggestion>, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
     let mut suggestions = Vec::new();
 
-    #[derive(sqlx::FromRow)]
-    struct SettingRow {
-        value: String,
-    }
-    if let Ok(Some(row)) =
-        sqlx::query_as::<_, SettingRow>("SELECT value FROM settings WHERE key = 'recent_searches'")
-            .fetch_optional(pool.inner())
-            .await
-    {
-        if let Ok(recents) = serde_json::from_str::<Vec<String>>(&row.value) {
-            for r in recents.iter().take(5) {
-                if partial.is_empty() || r.to_lowercase().contains(&partial.to_lowercase()) {
+    match operator.as_deref() {
+        Some("from") => {
+            if value.len() >= 1 {
+                #[derive(sqlx::FromRow)]
+                struct SenderRow { sender: String }
+                let pattern = format!("%{}%", value);
+                let contacts: Vec<SenderRow> = sqlx::query_as(
+                    "SELECT DISTINCT sender FROM messages WHERE account_id = ? AND sender LIKE ? LIMIT 8",
+                )
+                .bind(&account.id)
+                .bind(&pattern)
+                .fetch_all(pool.inner())
+                .await
+                .unwrap_or_default();
+
+                for c in contacts {
+                    let display = c.sender.split('<').next().unwrap_or(&c.sender).trim().to_string();
                     suggestions.push(SearchSuggestion {
-                        kind: "recent".to_string(),
-                        text: r.clone(),
-                        detail: "Recent search".to_string(),
+                        kind: "contact".to_string(),
+                        text: display.clone(),
+                        detail: c.sender.clone(),
                     });
                 }
             }
         }
-    }
+        Some("to") => {
+            if value.len() >= 1 {
+                #[derive(sqlx::FromRow)]
+                struct RecipRow { recipients: String }
+                let pattern = format!("%{}%", value);
+                let rows: Vec<RecipRow> = sqlx::query_as(
+                    "SELECT DISTINCT recipients FROM messages WHERE account_id = ? AND recipients LIKE ? LIMIT 20",
+                )
+                .bind(&account.id)
+                .bind(&pattern)
+                .fetch_all(pool.inner())
+                .await
+                .unwrap_or_default();
 
-    if partial.len() >= 2 {
-        #[derive(sqlx::FromRow)]
-        struct SenderRow {
-            sender: String,
+                let mut seen = std::collections::HashSet::new();
+                for row in rows {
+                    for p in row.recipients.split(',') {
+                        let p = p.trim();
+                        if p.is_empty() || !p.to_lowercase().contains(&value.to_lowercase()) {
+                            continue;
+                        }
+                        if !seen.insert(p.to_string()) {
+                            continue;
+                        }
+                        let display = if let Some(bracket_start) = p.find('<') {
+                            p[..bracket_start].trim().trim_matches('"').to_string()
+                        } else {
+                            p.to_string()
+                        };
+                        suggestions.push(SearchSuggestion {
+                            kind: "contact".to_string(),
+                            text: display,
+                            detail: p.to_string(),
+                        });
+                        if suggestions.len() >= 8 { break; }
+                    }
+                    if suggestions.len() >= 8 { break; }
+                }
+            }
         }
-        let pattern = format!("%{}%", partial);
-        let contacts: Vec<SenderRow> = sqlx::query_as(
-            "SELECT DISTINCT sender FROM messages WHERE account_id = ? AND sender LIKE ? LIMIT 5",
-        )
-        .bind(&account.id)
-        .bind(&pattern)
-        .fetch_all(pool.inner())
-        .await
-        .unwrap_or_default();
+        Some("subject") => {
+            if value.len() >= 1 {
+                #[derive(sqlx::FromRow)]
+                struct SubjectRow { subject: String }
+                let pattern = format!("%{}%", value);
+                let subjects: Vec<SubjectRow> = sqlx::query_as(
+                    "SELECT DISTINCT subject FROM messages WHERE account_id = ? AND subject LIKE ? LIMIT 8",
+                )
+                .bind(&account.id)
+                .bind(&pattern)
+                .fetch_all(pool.inner())
+                .await
+                .unwrap_or_default();
 
-        for c in contacts {
-            suggestions.push(SearchSuggestion {
-                kind: "contact".to_string(),
-                text: format!(
-                    "from:{}",
-                    c.sender.split('<').next().unwrap_or(&c.sender).trim()
-                ),
-                detail: c.sender.clone(),
-            });
+                for s in subjects {
+                    suggestions.push(SearchSuggestion {
+                        kind: "subject".to_string(),
+                        text: s.subject.clone(),
+                        detail: String::new(),
+                    });
+                }
+            }
         }
+        _ => {
+            // Free text: existing behavior using full_query
+            #[derive(sqlx::FromRow)]
+            struct SettingRow { value: String }
+            if let Ok(Some(row)) =
+                sqlx::query_as::<_, SettingRow>("SELECT value FROM settings WHERE key = 'recent_searches'")
+                    .fetch_optional(pool.inner())
+                    .await
+            {
+                if let Ok(recents) = serde_json::from_str::<Vec<String>>(&row.value) {
+                    for r in recents.iter().take(5) {
+                        if full_query.is_empty() || r.to_lowercase().contains(&full_query.to_lowercase()) {
+                            suggestions.push(SearchSuggestion {
+                                kind: "recent".to_string(),
+                                text: r.clone(),
+                                detail: "Recent search".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
 
-        #[derive(sqlx::FromRow)]
-        struct SubjectRow {
-            subject: String,
-        }
-        let subjects: Vec<SubjectRow> = sqlx::query_as(
-            "SELECT DISTINCT subject FROM messages WHERE account_id = ? AND subject LIKE ? LIMIT 3",
-        )
-        .bind(&account.id)
-        .bind(&pattern)
-        .fetch_all(pool.inner())
-        .await
-        .unwrap_or_default();
+            if full_query.len() >= 2 {
+                #[derive(sqlx::FromRow)]
+                struct SenderRow { sender: String }
+                let pattern = format!("%{}%", full_query);
+                let contacts: Vec<SenderRow> = sqlx::query_as(
+                    "SELECT DISTINCT sender FROM messages WHERE account_id = ? AND sender LIKE ? LIMIT 5",
+                )
+                .bind(&account.id)
+                .bind(&pattern)
+                .fetch_all(pool.inner())
+                .await
+                .unwrap_or_default();
 
-        for s in subjects {
-            suggestions.push(SearchSuggestion {
-                kind: "subject".to_string(),
-                text: format!("subject:{}", s.subject),
-                detail: s.subject.clone(),
-            });
+                for c in contacts {
+                    suggestions.push(SearchSuggestion {
+                        kind: "contact".to_string(),
+                        text: format!("from:{}", c.sender.split('<').next().unwrap_or(&c.sender).trim()),
+                        detail: c.sender.clone(),
+                    });
+                }
+
+                #[derive(sqlx::FromRow)]
+                struct SubjectRow { subject: String }
+                let subjects: Vec<SubjectRow> = sqlx::query_as(
+                    "SELECT DISTINCT subject FROM messages WHERE account_id = ? AND subject LIKE ? LIMIT 3",
+                )
+                .bind(&account.id)
+                .bind(&pattern)
+                .fetch_all(pool.inner())
+                .await
+                .unwrap_or_default();
+
+                for s in subjects {
+                    suggestions.push(SearchSuggestion {
+                        kind: "subject".to_string(),
+                        text: format!("subject:{}", s.subject),
+                        detail: s.subject.clone(),
+                    });
+                }
+            }
         }
     }
 
