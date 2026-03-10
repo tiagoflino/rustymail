@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { checkForUpdates, setupPeriodicUpdateCheck } from "$lib/utils/updater";
   import { onMount, onDestroy } from "svelte";
   import { isAuthenticated } from "$lib/stores/auth";
   import {
@@ -1046,6 +1047,14 @@
     }
 
     setTimeout(() => setupIntersectionObserver(), 100);
+    setTimeout(() => checkForUpdates(true), 5000);
+  });
+
+  let stopUpdateCheck: (() => void) | null = null;
+  $effect(() => {
+    if ($isAuthenticated && !stopUpdateCheck) {
+      stopUpdateCheck = setupPeriodicUpdateCheck();
+    }
   });
 
   // Clean up all intervals on destroy (critical for HMR to prevent stacking)
@@ -1061,6 +1070,7 @@
       currentBgInterval = null;
     }
     syncLock = false;
+    if (stopUpdateCheck) stopUpdateCheck();
   });
 
   function getActiveLabelName(): string {

@@ -1,11 +1,13 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { getVersion } from "@tauri-apps/api/app";
   import {
     iconClose,
     iconUser,
     iconPlus,
     iconCheck,
   } from "$lib/components/icons";
+  import { checkForUpdates } from "$lib/utils/updater";
 
   interface SettingsProps {
     show: boolean;
@@ -35,6 +37,9 @@
 
   let activeTab = $state("accounts");
   let settings: Record<string, string> = $state({});
+  let appVersion = $state("...");
+
+  getVersion().then((v) => (appVersion = v));
 
   const tabs = [
     { id: "accounts", label: "Accounts" },
@@ -530,7 +535,10 @@
             <div class="section about-section">
               <div class="about-logo">📬</div>
               <div class="about-name">Rustymail</div>
-              <div class="about-version">Version 0.1.0</div>
+              <div class="about-version">Version {appVersion}</div>
+              <button class="btn-check-update" onclick={() => checkForUpdates(false)}>
+                Check for Updates
+              </button>
               <p class="about-desc">
                 A fast, private, cross-platform Gmail client built with Rust and
                 Tauri.
@@ -1041,5 +1049,21 @@
   .about-link {
     font-size: 12px;
     color: var(--text-secondary);
+  }
+
+  .btn-check-update {
+    margin-top: 8px;
+    padding: 6px 16px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 13px;
+    font-family: var(--font-family);
+    transition: all 0.1s;
+  }
+  .btn-check-update:hover {
+    background: var(--sidebar-hover);
   }
 </style>

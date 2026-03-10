@@ -17,6 +17,17 @@ vi.mock('@tauri-apps/api/window', () => ({
     })),
 }));
 
+// Mock Tauri updater + process + app plugins
+vi.mock('@tauri-apps/plugin-updater', () => ({
+    check: vi.fn(() => Promise.resolve(null)),
+}));
+vi.mock('@tauri-apps/plugin-process', () => ({
+    relaunch: vi.fn(() => Promise.resolve()),
+}));
+vi.mock('@tauri-apps/api/app', () => ({
+    getVersion: vi.fn(() => Promise.resolve('0.1.0')),
+}));
+
 // Mock window.matchMedia
 Object.defineProperty(window, 'matchMedia', {
     writable: true,
