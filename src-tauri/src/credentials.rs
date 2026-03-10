@@ -89,6 +89,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Requires OS keyring — run locally, skipped in headless CI
     fn test_delete_tokens_does_not_error_on_missing() {
         // delete_tokens should succeed even if no tokens exist
         let result = delete_tokens("nonexistent-account-that-never-had-tokens@test.local");

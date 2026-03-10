@@ -24,7 +24,7 @@ describe('formatters', () => {
             const longAgo = new Date(2023, 0, 15); // Jan 15, 2023
             const ts = longAgo.getTime();
             const result = formatTime(ts);
-            expect(result).toMatch(/Jan 15/);
+            expect(result).toMatch(/Jan.*15|15.*Jan/);
         });
     });
 

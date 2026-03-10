@@ -4,6 +4,19 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::sync::Arc;
 
+fn gmail_api_url(path: &str) -> String {
+    #[cfg(test)]
+    {
+        let base = std::env::var("TEST_GMAIL_API_BASE")
+            .unwrap_or_else(|_| "https://gmail.googleapis.com".to_string());
+        format!("{}{}", base, path)
+    }
+    #[cfg(not(test))]
+    {
+        format!("https://gmail.googleapis.com{}", path)
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct GmailLabel {
     pub id: String,
@@ -168,7 +181,7 @@ pub async fn fetch_and_store_labels(
 ) -> Result<(), String> {
     let client = Client::new();
     let res = client
-        .get("https://gmail.googleapis.com/gmail/v1/users/me/labels")
+        .get(gmail_api_url("/gmail/v1/users/me/labels"))
         .header("Authorization", format!("Bearer {}", access_token))
         .send()
         .await
@@ -224,7 +237,7 @@ pub async fn fetch_and_store_threads(
     }
 
     let res = client
-        .get("https://gmail.googleapis.com/gmail/v1/users/me/threads")
+        .get(gmail_api_url("/gmail/v1/users/me/threads"))
         .query(&params)
         .header("Authorization", format!("Bearer {}", access_token))
         .send()
@@ -275,10 +288,10 @@ pub async fn fetch_messages_for_thread(
 ) -> Result<(), String> {
     let client = Client::new();
     let res = client
-        .get(format!(
-            "https://gmail.googleapis.com/gmail/v1/users/me/threads/{}",
+        .get(gmail_api_url(&format!(
+            "/gmail/v1/users/me/threads/{}",
             thread_id
-        ))
+        )))
         .header("Authorization", format!("Bearer {}", access_token))
         .send()
         .await
@@ -392,10 +405,10 @@ pub async fn batch_hydrate_threads(
             let aid = account_id.to_string();
             async move {
                 let res = client
-                    .get(format!(
-                        "https://gmail.googleapis.com/gmail/v1/users/me/threads/{}",
+                    .get(gmail_api_url(&format!(
+                        "/gmail/v1/users/me/threads/{}",
                         tid
-                    ))
+                    )))
                     .header("Authorization", format!("Bearer {}", token))
                     .send()
                     .await
@@ -490,10 +503,10 @@ pub async fn modify_thread(
     };
 
     let res = client
-        .post(format!(
-            "https://gmail.googleapis.com/gmail/v1/users/me/threads/{}/modify",
+        .post(gmail_api_url(&format!(
+            "/gmail/v1/users/me/threads/{}/modify",
             thread_id
-        ))
+        )))
         .header("Authorization", format!("Bearer {}", access_token))
         .json(&payload)
         .send()
@@ -546,10 +559,10 @@ pub async fn trash_thread(
 ) -> Result<(), String> {
     let client = reqwest::Client::new();
     let res = client
-        .post(format!(
-            "https://gmail.googleapis.com/gmail/v1/users/me/threads/{}/trash",
+        .post(gmail_api_url(&format!(
+            "/gmail/v1/users/me/threads/{}/trash",
             thread_id
-        ))
+        )))
         .header("Authorization", format!("Bearer {}", access_token))
         .header("Content-Length", 0)
         .body(vec![])
@@ -587,10 +600,10 @@ pub async fn untrash_thread(
 ) -> Result<(), String> {
     let client = reqwest::Client::new();
     let res = client
-        .post(format!(
-            "https://gmail.googleapis.com/gmail/v1/users/me/threads/{}/untrash",
+        .post(gmail_api_url(&format!(
+            "/gmail/v1/users/me/threads/{}/untrash",
             thread_id
-        ))
+        )))
         .header("Authorization", format!("Bearer {}", access_token))
         .header("Content-Length", 0)
         .body(vec![])
@@ -731,7 +744,7 @@ pub async fn send_message(
     }
 
     let res = client
-        .post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send")
+        .post(gmail_api_url("/gmail/v1/users/me/messages/send"))
         .header("Authorization", format!("Bearer {}", access_token))
         .json(&body_json)
         .send()
@@ -782,12 +795,9 @@ pub async fn save_draft(
     }
 
     let url = if let Some(did) = draft_id {
-        format!(
-            "https://gmail.googleapis.com/gmail/v1/users/me/drafts/{}",
-            did
-        )
+        gmail_api_url(&format!("/gmail/v1/users/me/drafts/{}", did))
     } else {
-        "https://gmail.googleapis.com/gmail/v1/users/me/drafts".to_string()
+        gmail_api_url("/gmail/v1/users/me/drafts")
     };
 
     let request = if draft_id.is_some() {
@@ -824,10 +834,10 @@ pub async fn delete_draft(
 ) -> Result<(), String> {
     let client = reqwest::Client::new();
     let res = client
-        .delete(format!(
-            "https://gmail.googleapis.com/gmail/v1/users/me/drafts/{}",
+        .delete(gmail_api_url(&format!(
+            "/gmail/v1/users/me/drafts/{}",
             draft_id
-        ))
+        )))
         .header("Authorization", format!("Bearer {}", access_token))
         .send()
         .await
@@ -859,7 +869,7 @@ pub async fn delete_draft_by_thread(
 
     // List drafts and find the one associated with this thread
     let res = client
-        .get("https://gmail.googleapis.com/gmail/v1/users/me/drafts")
+        .get(gmail_api_url("/gmail/v1/users/me/drafts"))
         .header("Authorization", format!("Bearer {}", access_token))
         .send()
         .await
@@ -880,10 +890,10 @@ pub async fn delete_draft_by_thread(
             if msg_thread_id == thread_id && !draft_id.is_empty() {
                 // Delete this draft
                 let del_res = client
-                    .delete(format!(
-                        "https://gmail.googleapis.com/gmail/v1/users/me/drafts/{}",
+                    .delete(gmail_api_url(&format!(
+                        "/gmail/v1/users/me/drafts/{}",
                         draft_id
-                    ))
+                    )))
                     .header("Authorization", format!("Bearer {}", access_token))
                     .send()
                     .await
@@ -925,7 +935,7 @@ pub async fn get_draft_id_by_message_id(
     let client = reqwest::Client::new();
 
     let res = client
-        .get("https://gmail.googleapis.com/gmail/v1/users/me/drafts")
+        .get(gmail_api_url("/gmail/v1/users/me/drafts"))
         .header("Authorization", format!("Bearer {}", access_token))
         .send()
         .await
@@ -1265,5 +1275,1442 @@ mod tests {
         let input = r#"<table><tr><td background="https://example.com/bg.png">content</td></tr></table>"#;
         let result = sanitize_email_html(input);
         assert!(result.contains("background="), "td background attribute lost: {}", result);
+    }
+
+    // ---------------------------------------------------------------
+    // Additional build_mime_message tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_build_mime_message_with_in_reply_to_and_references() {
+        let res = build_mime_message(
+            "me@test.com",
+            "you@test.com",
+            "Re: Hello",
+            "Reply body",
+            Some("<original-msg-id@mail.test.com>"),
+            Some("<original-msg-id@mail.test.com> <another@mail.test.com>"),
+            false,
+        );
+        assert!(res.is_ok());
+        let encoded = res.unwrap();
+        let decoded = base64::decode_config(&encoded, base64::URL_SAFE_NO_PAD).unwrap();
+        let mime = String::from_utf8(decoded).unwrap();
+        assert!(
+            mime.contains("In-Reply-To:"),
+            "Missing In-Reply-To header: {}",
+            mime
+        );
+        assert!(
+            mime.contains("References:"),
+            "Missing References header: {}",
+            mime
+        );
+        assert!(mime.contains("original-msg-id@mail.test.com"));
+    }
+
+    #[test]
+    fn test_build_mime_message_allow_empty_to_draft_mode() {
+        let res = build_mime_message(
+            "me@test.com",
+            "",
+            "Draft subject",
+            "Draft body",
+            None,
+            None,
+            true,
+        );
+        assert!(res.is_ok(), "Draft mode with empty to should succeed");
+    }
+
+    #[test]
+    fn test_build_mime_message_reject_empty_to_send_mode() {
+        let res = build_mime_message(
+            "me@test.com",
+            "",
+            "Subject",
+            "Body",
+            None,
+            None,
+            false,
+        );
+        assert!(res.is_err());
+        assert!(res
+            .unwrap_err()
+            .contains("No valid recipients"));
+    }
+
+    #[test]
+    fn test_build_mime_message_unicode_subject() {
+        let res = build_mime_message(
+            "me@test.com",
+            "you@test.com",
+            "日本語のメール件名 🎉",
+            "Body",
+            None,
+            None,
+            false,
+        );
+        assert!(res.is_ok(), "Unicode subject should be accepted");
+        let encoded = res.unwrap();
+        let decoded = base64::decode_config(&encoded, base64::URL_SAFE_NO_PAD).unwrap();
+        let mime = String::from_utf8(decoded).unwrap();
+        // Subject will be encoded but should appear in the MIME output
+        assert!(mime.contains("Subject:"));
+    }
+
+    // ---------------------------------------------------------------
+    // Additional extract_body tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_extract_body_nested_parts() {
+        // "Nested HTML" base64url = "TmVzdGVkIEhUTUw="
+        let child = MessagePart {
+            part_id: Some("0.1".to_string()),
+            mime_type: "text/html".to_string(),
+            filename: None,
+            headers: None,
+            body: Some(MessagePartBody {
+                size: 11,
+                data: Some("TmVzdGVkIEhUTUw".to_string()),
+            }),
+            parts: None,
+        };
+        let parent = MessagePart {
+            part_id: Some("0".to_string()),
+            mime_type: "multipart/alternative".to_string(),
+            filename: None,
+            headers: None,
+            body: None,
+            parts: Some(vec![child]),
+        };
+        assert_eq!(
+            extract_body(&parent, "text/html"),
+            Some("Nested HTML".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_body_deeply_nested() {
+        // "Deep body" base64url = "RGVlcCBib2R5"
+        let leaf = MessagePart {
+            part_id: Some("0.0.1".to_string()),
+            mime_type: "text/plain".to_string(),
+            filename: None,
+            headers: None,
+            body: Some(MessagePartBody {
+                size: 9,
+                data: Some("RGVlcCBib2R5".to_string()),
+            }),
+            parts: None,
+        };
+        let mid = MessagePart {
+            part_id: Some("0.0".to_string()),
+            mime_type: "multipart/mixed".to_string(),
+            filename: None,
+            headers: None,
+            body: None,
+            parts: Some(vec![leaf]),
+        };
+        let root = MessagePart {
+            part_id: Some("0".to_string()),
+            mime_type: "multipart/alternative".to_string(),
+            filename: None,
+            headers: None,
+            body: None,
+            parts: Some(vec![mid]),
+        };
+        assert_eq!(
+            extract_body(&root, "text/plain"),
+            Some("Deep body".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_body_wrong_mime_type_returns_none() {
+        let part = MessagePart {
+            part_id: Some("0".to_string()),
+            mime_type: "text/plain".to_string(),
+            filename: None,
+            headers: None,
+            body: Some(MessagePartBody {
+                size: 5,
+                data: Some("SGVsbG8".to_string()),
+            }),
+            parts: None,
+        };
+        assert_eq!(extract_body(&part, "text/html"), None);
+    }
+
+    // ---------------------------------------------------------------
+    // Additional sanitize_email_html tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_sanitize_strips_base_tag() {
+        let input = r#"<html><head><base href="https://evil.com/"></head><body><p>Content</p></body></html>"#;
+        let result = sanitize_email_html(input);
+        assert!(
+            !result.contains("<base"),
+            "base tag should be stripped: {}",
+            result
+        );
+        assert!(result.contains("Content"));
+    }
+
+    #[test]
+    fn test_sanitize_preserves_data_uri_img() {
+        let input = r#"<img src="data:image/png;base64,iVBORw0KGgo=" alt="inline">"#;
+        let result = sanitize_email_html(input);
+        assert!(
+            result.contains("data:image/png;base64,iVBORw0KGgo="),
+            "data URI should be preserved: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_sanitize_preserves_inline_style_attr() {
+        let input = r#"<div style="color: red; font-size: 14px;">Styled</div>"#;
+        let result = sanitize_email_html(input);
+        assert!(
+            result.contains("style="),
+            "inline style should be preserved: {}",
+            result
+        );
+        assert!(result.contains("color"));
+        assert!(result.contains("Styled"));
+    }
+
+    #[test]
+    fn test_sanitize_strips_nested_obfuscated_scripts() {
+        // Even with attempts to nest/obfuscate script tags, the sanitizer
+        // must strip all <script> elements. Any residual text content is
+        // harmless because it is not executable.
+        let input = r#"<div><scr<script>ipt>alert('xss')</scr</script>ipt></div>"#;
+        let result = sanitize_email_html(input);
+        assert!(
+            !result.contains("<script"),
+            "script tags should be stripped: {}",
+            result
+        );
+        // The key security property: no executable script element remains.
+        // Residual text fragments like "ipt>alert..." are safe plain text.
+    }
+
+    #[test]
+    fn test_sanitize_strips_svg_script() {
+        let input = r#"<svg><script>alert('xss')</script></svg>"#;
+        let result = sanitize_email_html(input);
+        assert!(!result.contains("<script"));
+        assert!(!result.contains("alert"));
+    }
+
+    // ---------------------------------------------------------------
+    // DB-only function tests using crate::db::apply_schema
+    // ---------------------------------------------------------------
+
+    async fn test_pool() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .create_if_missing(true);
+        let pool = SqlitePool::connect_with(options).await.unwrap();
+        crate::db::apply_schema(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn test_get_unhydrated_thread_ids_returns_threads_without_messages() {
+        let pool = test_pool().await;
+
+        // Insert two threads
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t1', 'acc1', 's1', 'h1', 0)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t2', 'acc1', 's2', 'h2', 0)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t3', 'acc2', 's3', 'h3', 0)")
+            .execute(&pool).await.unwrap();
+
+        // Add a message only for t1
+        sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, subject, internal_date) VALUES ('m1', 't1', 'acc1', 'a@b.com', 'subj', 100)")
+            .execute(&pool).await.unwrap();
+
+        let unhydrated = get_unhydrated_thread_ids(&pool, "acc1").await;
+        assert_eq!(unhydrated.len(), 1);
+        assert_eq!(unhydrated[0], "t2");
+
+        // t3 belongs to acc2 so should not appear for acc1
+        let unhydrated2 = get_unhydrated_thread_ids(&pool, "acc2").await;
+        assert_eq!(unhydrated2.len(), 1);
+        assert_eq!(unhydrated2[0], "t3");
+    }
+
+    #[tokio::test]
+    async fn test_get_unhydrated_thread_ids_all_hydrated() {
+        let pool = test_pool().await;
+
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t1', 'acc1', 's1', 'h1', 0)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, subject, internal_date) VALUES ('m1', 't1', 'acc1', 'a@b.com', 'subj', 100)")
+            .execute(&pool).await.unwrap();
+
+        let unhydrated = get_unhydrated_thread_ids(&pool, "acc1").await;
+        assert!(unhydrated.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_evict_old_message_bodies() {
+        let pool = test_pool().await;
+
+        // Create 3 threads with messages, each with a different date
+        for i in 1..=3 {
+            let tid = format!("t{}", i);
+            let mid = format!("m{}", i);
+            sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES (?, 'acc1', 'snip', 'h1', 0)")
+                .bind(&tid).execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, subject, internal_date, body_html, body_plain) VALUES (?, ?, 'acc1', 'a@b.com', 'subj', ?, 'html body', 'plain body')")
+                .bind(&mid).bind(&tid).bind(i * 1000).execute(&pool).await.unwrap();
+        }
+
+        // Keep only 1 most recent thread's bodies (t3 has internal_date 3000)
+        evict_old_message_bodies(&pool, "acc1", 1).await;
+
+        // t3 should still have bodies (most recent)
+        let (html3, plain3): (String, String) = sqlx::query_as("SELECT body_html, body_plain FROM messages WHERE id = 'm3'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(html3, "html body");
+        assert_eq!(plain3, "plain body");
+
+        // t1 and t2 should be evicted
+        let (html1, plain1): (String, String) = sqlx::query_as("SELECT body_html, body_plain FROM messages WHERE id = 'm1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(html1, "", "t1 body_html should be evicted");
+        assert_eq!(plain1, "", "t1 body_plain should be evicted");
+
+        let (html2, plain2): (String, String) = sqlx::query_as("SELECT body_html, body_plain FROM messages WHERE id = 'm2'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(html2, "", "t2 body_html should be evicted");
+        assert_eq!(plain2, "", "t2 body_plain should be evicted");
+    }
+
+    #[tokio::test]
+    async fn test_evict_old_message_bodies_different_account() {
+        let pool = test_pool().await;
+
+        // Thread for acc1
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t1', 'acc1', 'snip', 'h1', 0)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, subject, internal_date, body_html, body_plain) VALUES ('m1', 't1', 'acc1', 'a@b.com', 'subj', 1000, 'html', 'plain')")
+            .execute(&pool).await.unwrap();
+
+        // Thread for acc2
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t2', 'acc2', 'snip', 'h2', 0)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, subject, internal_date, body_html, body_plain) VALUES ('m2', 't2', 'acc2', 'b@c.com', 'subj', 1000, 'html2', 'plain2')")
+            .execute(&pool).await.unwrap();
+
+        // Evict for acc1 keeping 0 recent
+        evict_old_message_bodies(&pool, "acc1", 0).await;
+
+        // acc1 message should be evicted
+        let (html1,): (String,) = sqlx::query_as("SELECT body_html FROM messages WHERE id = 'm1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(html1, "");
+
+        // acc2 message should be untouched
+        let (html2,): (String,) = sqlx::query_as("SELECT body_html FROM messages WHERE id = 'm2'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(html2, "html2");
+    }
+
+    // ---------------------------------------------------------------
+    // Additional store_thread_messages tests
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_store_thread_messages_multiple_messages() {
+        let pool = test_pool().await;
+
+        // Insert the parent thread so the UNREAD update does not fail
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t1', 'acc1', '', '', 0)")
+            .execute(&pool).await.unwrap();
+
+        let thread_details = ThreadDetailsResponse {
+            id: "t1".to_string(),
+            messages: Some(vec![
+                GmailMessage {
+                    id: "m1".to_string(),
+                    thread_id: "t1".to_string(),
+                    label_ids: Some(vec!["INBOX".to_string()]),
+                    snippet: Some("First".to_string()),
+                    internal_date: "1000".to_string(),
+                    payload: Some(MessagePart {
+                        part_id: Some("0".to_string()),
+                        mime_type: "text/plain".to_string(),
+                        filename: None,
+                        headers: Some(vec![
+                            MessagePartHeader { name: "From".to_string(), value: "a@test.com".to_string() },
+                            MessagePartHeader { name: "To".to_string(), value: "b@test.com".to_string() },
+                            MessagePartHeader { name: "Subject".to_string(), value: "Thread subject".to_string() },
+                        ]),
+                        body: Some(MessagePartBody { size: 5, data: Some("SGVsbG8".to_string()) }),
+                        parts: None,
+                    }),
+                },
+                GmailMessage {
+                    id: "m2".to_string(),
+                    thread_id: "t1".to_string(),
+                    label_ids: Some(vec!["INBOX".to_string(), "UNREAD".to_string()]),
+                    snippet: Some("Second".to_string()),
+                    internal_date: "2000".to_string(),
+                    payload: Some(MessagePart {
+                        part_id: Some("0".to_string()),
+                        mime_type: "text/plain".to_string(),
+                        filename: None,
+                        headers: Some(vec![
+                            MessagePartHeader { name: "From".to_string(), value: "b@test.com".to_string() },
+                            MessagePartHeader { name: "To".to_string(), value: "a@test.com".to_string() },
+                            MessagePartHeader { name: "Subject".to_string(), value: "Re: Thread subject".to_string() },
+                        ]),
+                        body: Some(MessagePartBody { size: 5, data: Some("V29ybGQ".to_string()) }),
+                        parts: None,
+                    }),
+                },
+            ]),
+        };
+
+        store_thread_messages(&pool, "acc1", &thread_details).await.unwrap();
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages WHERE thread_id = 't1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count.0, 2);
+
+        // Thread should be marked unread due to UNREAD label on m2
+        let (unread,): (i32,) = sqlx::query_as("SELECT unread FROM threads WHERE id = 't1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(unread, 1);
+    }
+
+    #[tokio::test]
+    async fn test_store_thread_messages_html_body_is_sanitized() {
+        let pool = test_pool().await;
+
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t1', 'acc1', '', '', 0)")
+            .execute(&pool).await.unwrap();
+
+        // HTML with script tag, base64url encoded
+        // "<p>Safe</p><script>alert('xss')</script>" =>
+        let html_raw = "<p>Safe</p><script>alert('xss')</script>";
+        let html_b64 = base64::encode_config(html_raw, base64::URL_SAFE);
+
+        let thread_details = ThreadDetailsResponse {
+            id: "t1".to_string(),
+            messages: Some(vec![GmailMessage {
+                id: "m1".to_string(),
+                thread_id: "t1".to_string(),
+                label_ids: None,
+                snippet: None,
+                internal_date: "1000".to_string(),
+                payload: Some(MessagePart {
+                    part_id: Some("0".to_string()),
+                    mime_type: "multipart/alternative".to_string(),
+                    filename: None,
+                    headers: Some(vec![
+                        MessagePartHeader { name: "From".to_string(), value: "a@b.com".to_string() },
+                    ]),
+                    body: None,
+                    parts: Some(vec![MessagePart {
+                        part_id: Some("0.1".to_string()),
+                        mime_type: "text/html".to_string(),
+                        filename: None,
+                        headers: None,
+                        body: Some(MessagePartBody { size: html_raw.len() as i32, data: Some(html_b64) }),
+                        parts: None,
+                    }]),
+                }),
+            }]),
+        };
+
+        store_thread_messages(&pool, "acc1", &thread_details).await.unwrap();
+
+        let (body_html,): (String,) = sqlx::query_as("SELECT body_html FROM messages WHERE id = 'm1'")
+            .fetch_one(&pool).await.unwrap();
+        assert!(!body_html.contains("<script>"), "script should be sanitized from stored HTML");
+        assert!(body_html.contains("Safe"));
+    }
+
+    #[tokio::test]
+    async fn test_store_thread_messages_with_labels_including_draft() {
+        let pool = test_pool().await;
+
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t1', 'acc1', '', '', 0)")
+            .execute(&pool).await.unwrap();
+
+        let thread_details = ThreadDetailsResponse {
+            id: "t1".to_string(),
+            messages: Some(vec![GmailMessage {
+                id: "m1".to_string(),
+                thread_id: "t1".to_string(),
+                label_ids: Some(vec!["DRAFT".to_string(), "INBOX".to_string()]),
+                snippet: Some("Draft msg".to_string()),
+                internal_date: "1000".to_string(),
+                payload: Some(MessagePart {
+                    part_id: Some("0".to_string()),
+                    mime_type: "text/plain".to_string(),
+                    filename: None,
+                    headers: None,
+                    body: Some(MessagePartBody { size: 5, data: Some("SGVsbG8".to_string()) }),
+                    parts: None,
+                }),
+            }]),
+        };
+
+        store_thread_messages(&pool, "acc1", &thread_details).await.unwrap();
+
+        // Verify DRAFT label was stored
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM message_labels WHERE message_id = 'm1' AND label_id = 'DRAFT'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1);
+
+        // Also in thread_labels
+        let (tl_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM thread_labels WHERE thread_id = 't1' AND label_id = 'DRAFT'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(tl_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_store_thread_messages_no_body() {
+        let pool = test_pool().await;
+
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t1', 'acc1', '', '', 0)")
+            .execute(&pool).await.unwrap();
+
+        let thread_details = ThreadDetailsResponse {
+            id: "t1".to_string(),
+            messages: Some(vec![GmailMessage {
+                id: "m1".to_string(),
+                thread_id: "t1".to_string(),
+                label_ids: None,
+                snippet: Some("No body".to_string()),
+                internal_date: "1000".to_string(),
+                payload: Some(MessagePart {
+                    part_id: Some("0".to_string()),
+                    mime_type: "text/plain".to_string(),
+                    filename: None,
+                    headers: None,
+                    body: Some(MessagePartBody { size: 0, data: None }),
+                    parts: None,
+                }),
+            }]),
+        };
+
+        store_thread_messages(&pool, "acc1", &thread_details).await.unwrap();
+
+        let (body_plain, body_html): (String, String) =
+            sqlx::query_as("SELECT body_plain, body_html FROM messages WHERE id = 'm1'")
+                .fetch_one(&pool).await.unwrap();
+        assert_eq!(body_plain, "");
+        assert_eq!(body_html, "");
+    }
+
+    #[tokio::test]
+    async fn test_store_thread_messages_no_payload() {
+        let pool = test_pool().await;
+
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t1', 'acc1', '', '', 0)")
+            .execute(&pool).await.unwrap();
+
+        let thread_details = ThreadDetailsResponse {
+            id: "t1".to_string(),
+            messages: Some(vec![GmailMessage {
+                id: "m1".to_string(),
+                thread_id: "t1".to_string(),
+                label_ids: None,
+                snippet: None,
+                internal_date: "1000".to_string(),
+                payload: None,
+            }]),
+        };
+
+        store_thread_messages(&pool, "acc1", &thread_details).await.unwrap();
+
+        let (sender, subject): (String, String) =
+            sqlx::query_as("SELECT sender, subject FROM messages WHERE id = 'm1'")
+                .fetch_one(&pool).await.unwrap();
+        assert_eq!(sender, "");
+        assert_eq!(subject, "");
+    }
+
+    // ---------------------------------------------------------------
+    // httpmock integration tests
+    // ---------------------------------------------------------------
+
+    use std::sync::Mutex;
+
+    // Env var is process-global, so serialize mock tests that set it.
+    static MOCK_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[tokio::test]
+    async fn test_fetch_and_store_labels_via_mock() {
+        let server = httpmock::MockServer::start();
+        let pool = test_pool().await;
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/labels")
+                .header("Authorization", "Bearer fake_token");
+            then.status(200).json_body(serde_json::json!({
+                "labels": [
+                    {"id": "INBOX", "name": "INBOX", "type": "system", "messagesUnread": 5},
+                    {"id": "SENT", "name": "SENT", "type": "system"},
+                    {"id": "Label_1", "name": "Work", "type": "user", "messagesUnread": 2}
+                ]
+            }));
+        });
+
+        let base = server.base_url();
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", &base);
+            let r = fetch_and_store_labels(&pool, "acc1", "fake_token").await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok(), "fetch_and_store_labels failed: {:?}", result);
+        mock.assert();
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM labels WHERE account_id = 'acc1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count.0, 3);
+
+        let (name, unread): (String, i32) =
+            sqlx::query_as("SELECT name, unread_count FROM labels WHERE id = 'INBOX'")
+                .fetch_one(&pool).await.unwrap();
+        assert_eq!(name, "INBOX");
+        assert_eq!(unread, 5);
+
+        let (name2, unread2): (String, i32) =
+            sqlx::query_as("SELECT name, unread_count FROM labels WHERE id = 'Label_1'")
+                .fetch_one(&pool).await.unwrap();
+        assert_eq!(name2, "Work");
+        assert_eq!(unread2, 2);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_and_store_labels_http_error() {
+        let server = httpmock::MockServer::start();
+        let pool = test_pool().await;
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/labels");
+            then.status(401).body("Unauthorized");
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = fetch_and_store_labels(&pool, "acc1", "bad_token").await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("401"));
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn test_fetch_and_store_threads_via_mock() {
+        let server = httpmock::MockServer::start();
+        let pool = test_pool().await;
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/threads")
+                .header("Authorization", "Bearer fake_token");
+            then.status(200).json_body(serde_json::json!({
+                "threads": [
+                    {"id": "t1", "snippet": "Hello there", "historyId": "12345"},
+                    {"id": "t2", "snippet": "Another thread", "historyId": "12346"}
+                ],
+                "nextPageToken": null
+            }));
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = fetch_and_store_threads(&pool, "acc1", "fake_token", Some(&["INBOX"]), 10).await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok(), "fetch_and_store_threads failed: {:?}", result);
+        mock.assert();
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM threads WHERE account_id = 'acc1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count.0, 2);
+
+        let (snippet,): (String,) = sqlx::query_as("SELECT snippet FROM threads WHERE id = 't1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(snippet, "Hello there");
+
+        // Verify thread_labels were created
+        let (label_count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM thread_labels WHERE thread_id = 't1' AND label_id = 'INBOX'")
+                .fetch_one(&pool).await.unwrap();
+        assert_eq!(label_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_and_store_threads_empty_response() {
+        let server = httpmock::MockServer::start();
+        let pool = test_pool().await;
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/threads");
+            then.status(200).json_body(serde_json::json!({
+                "threads": null,
+                "nextPageToken": null
+            }));
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = fetch_and_store_threads(&pool, "acc1", "fake_token", None, 10).await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok());
+        mock.assert();
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM threads WHERE account_id = 'acc1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count.0, 0);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_messages_for_thread_via_mock() {
+        let server = httpmock::MockServer::start();
+        let pool = test_pool().await;
+
+        // Insert the thread first so label/unread updates work
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t1', 'acc1', '', '', 0)")
+            .execute(&pool).await.unwrap();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/threads/t1")
+                .header("Authorization", "Bearer fake_token");
+            then.status(200).json_body(serde_json::json!({
+                "id": "t1",
+                "messages": [{
+                    "id": "m1",
+                    "threadId": "t1",
+                    "labelIds": ["INBOX", "UNREAD"],
+                    "snippet": "Test snippet",
+                    "internalDate": "1700000000000",
+                    "payload": {
+                        "partId": "0",
+                        "mimeType": "text/plain",
+                        "headers": [
+                            {"name": "From", "value": "sender@example.com"},
+                            {"name": "To", "value": "me@example.com"},
+                            {"name": "Subject", "value": "Test Subject"}
+                        ],
+                        "body": {"size": 11, "data": "SGVsbG8gV29ybGQ"}
+                    }
+                }]
+            }));
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = fetch_messages_for_thread(&pool, "acc1", "fake_token", "t1").await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok(), "fetch_messages_for_thread failed: {:?}", result);
+        mock.assert();
+
+        let (sender, subject, body): (String, String, String) =
+            sqlx::query_as("SELECT sender, subject, body_plain FROM messages WHERE id = 'm1'")
+                .fetch_one(&pool).await.unwrap();
+        assert_eq!(sender, "sender@example.com");
+        assert_eq!(subject, "Test Subject");
+        assert_eq!(body, "Hello World");
+
+        // Thread should be marked unread
+        let (unread,): (i32,) = sqlx::query_as("SELECT unread FROM threads WHERE id = 't1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(unread, 1);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_messages_for_thread_http_error() {
+        let server = httpmock::MockServer::start();
+        let pool = test_pool().await;
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/threads/t_missing");
+            then.status(404).body("Not Found");
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = fetch_messages_for_thread(&pool, "acc1", "fake_token", "t_missing").await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("404"));
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn test_modify_thread_mark_read_via_mock() {
+        let server = httpmock::MockServer::start();
+        let pool = test_pool().await;
+
+        // Insert a thread that is currently unread
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t1', 'acc1', 'snip', 'h1', 1)")
+            .execute(&pool).await.unwrap();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/gmail/v1/users/me/threads/t1/modify")
+                .header("Authorization", "Bearer fake_token")
+                .json_body(serde_json::json!({
+                    "addLabelIds": [],
+                    "removeLabelIds": ["UNREAD"]
+                }));
+            then.status(200).json_body(serde_json::json!({"id": "t1"}));
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = modify_thread(&pool, "acc1", "fake_token", "t1", vec![], vec!["UNREAD".to_string()]).await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok(), "modify_thread failed: {:?}", result);
+        mock.assert();
+
+        let (unread,): (i32,) = sqlx::query_as("SELECT unread FROM threads WHERE id = 't1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(unread, 0, "Thread should be marked as read");
+    }
+
+    #[tokio::test]
+    async fn test_modify_thread_add_star_via_mock() {
+        let server = httpmock::MockServer::start();
+        let pool = test_pool().await;
+
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t1', 'acc1', 'snip', 'h1', 0)")
+            .execute(&pool).await.unwrap();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/gmail/v1/users/me/threads/t1/modify");
+            then.status(200).json_body(serde_json::json!({"id": "t1"}));
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = modify_thread(&pool, "acc1", "fake_token", "t1", vec!["STARRED".to_string()], vec![]).await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok());
+        mock.assert();
+
+        let (count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM thread_labels WHERE thread_id = 't1' AND label_id = 'STARRED'")
+                .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1, "STARRED label should be added");
+    }
+
+    #[tokio::test]
+    async fn test_modify_thread_remove_star_via_mock() {
+        let server = httpmock::MockServer::start();
+        let pool = test_pool().await;
+
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t1', 'acc1', 'snip', 'h1', 0)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('t1', 'STARRED')")
+            .execute(&pool).await.unwrap();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/gmail/v1/users/me/threads/t1/modify");
+            then.status(200).json_body(serde_json::json!({"id": "t1"}));
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = modify_thread(&pool, "acc1", "fake_token", "t1", vec![], vec!["STARRED".to_string()]).await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok());
+        mock.assert();
+
+        let (count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM thread_labels WHERE thread_id = 't1' AND label_id = 'STARRED'")
+                .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 0, "STARRED label should be removed");
+    }
+
+    #[tokio::test]
+    async fn test_trash_thread_via_mock() {
+        let server = httpmock::MockServer::start();
+        let pool = test_pool().await;
+
+        // Set up thread with messages and labels
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t1', 'acc1', 'snip', 'h1', 0)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, subject, internal_date) VALUES ('m1', 't1', 'acc1', 'a@b.com', 'subj', 100)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('t1', 'INBOX')")
+            .execute(&pool).await.unwrap();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/gmail/v1/users/me/threads/t1/trash")
+                .header("Authorization", "Bearer fake_token");
+            then.status(200).json_body(serde_json::json!({"id": "t1"}));
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = trash_thread(&pool, "acc1", "fake_token", "t1").await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok(), "trash_thread failed: {:?}", result);
+        mock.assert();
+
+        // Thread, messages, and labels should all be deleted
+        let (thread_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM threads WHERE id = 't1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(thread_count, 0, "Thread should be deleted");
+
+        let (msg_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages WHERE thread_id = 't1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(msg_count, 0, "Messages should be deleted");
+
+        let (label_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM thread_labels WHERE thread_id = 't1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(label_count, 0, "Thread labels should be deleted");
+    }
+
+    #[tokio::test]
+    async fn test_untrash_thread_via_mock() {
+        let server = httpmock::MockServer::start();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/gmail/v1/users/me/threads/t1/untrash")
+                .header("Authorization", "Bearer fake_token");
+            then.status(200).json_body(serde_json::json!({"id": "t1"}));
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = untrash_thread("fake_token", "t1").await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok(), "untrash_thread failed: {:?}", result);
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn test_untrash_thread_http_error() {
+        let server = httpmock::MockServer::start();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/gmail/v1/users/me/threads/t1/untrash");
+            then.status(500).body("Internal Server Error");
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = untrash_thread("fake_token", "t1").await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("500"));
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn test_send_message_via_mock() {
+        let server = httpmock::MockServer::start();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/gmail/v1/users/me/messages/send")
+                .header("Authorization", "Bearer fake_token");
+            then.status(200).json_body(serde_json::json!({
+                "id": "msg_new",
+                "threadId": "t1",
+                "labelIds": ["SENT"]
+            }));
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = send_message(
+                "acc1", "me@test.com", "fake_token",
+                "you@test.com", "Hello", "<p>Hi there</p>",
+                Some("t1"), None, None,
+            ).await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok(), "send_message failed: {:?}", result);
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn test_send_message_http_error() {
+        let server = httpmock::MockServer::start();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/gmail/v1/users/me/messages/send");
+            then.status(403).body("Forbidden");
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = send_message(
+                "acc1", "me@test.com", "fake_token",
+                "you@test.com", "Hello", "body",
+                None, None, None,
+            ).await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("403"));
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn test_save_draft_create_via_mock() {
+        let server = httpmock::MockServer::start();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/gmail/v1/users/me/drafts")
+                .header("Authorization", "Bearer fake_token");
+            then.status(200).json_body(serde_json::json!({
+                "id": "draft_123",
+                "message": {"id": "msg_abc", "threadId": "t1"}
+            }));
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = save_draft(
+                "acc1", "me@test.com", "fake_token",
+                "you@test.com", "Draft Subject", "<p>Draft body</p>",
+                Some("t1"), None, None, None,
+            ).await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok(), "save_draft create failed: {:?}", result);
+        assert_eq!(result.unwrap(), "draft_123");
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn test_save_draft_update_via_mock() {
+        let server = httpmock::MockServer::start();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::PUT)
+                .path("/gmail/v1/users/me/drafts/draft_existing")
+                .header("Authorization", "Bearer fake_token");
+            then.status(200).json_body(serde_json::json!({
+                "id": "draft_existing",
+                "message": {"id": "msg_updated"}
+            }));
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = save_draft(
+                "acc1", "me@test.com", "fake_token",
+                "you@test.com", "Updated Subject", "<p>Updated</p>",
+                None, None, None, Some("draft_existing"),
+            ).await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok(), "save_draft update failed: {:?}", result);
+        assert_eq!(result.unwrap(), "draft_existing");
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn test_save_draft_empty_to_via_mock() {
+        let server = httpmock::MockServer::start();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/gmail/v1/users/me/drafts");
+            then.status(200).json_body(serde_json::json!({
+                "id": "draft_no_to",
+                "message": {"id": "msg_no_to"}
+            }));
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = save_draft(
+                "acc1", "me@test.com", "fake_token",
+                "", "Empty To Draft", "<p>No recipient yet</p>",
+                None, None, None, None,
+            ).await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok(), "save_draft with empty to failed: {:?}", result);
+        assert_eq!(result.unwrap(), "draft_no_to");
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn test_delete_draft_via_mock() {
+        let server = httpmock::MockServer::start();
+        let pool = test_pool().await;
+
+        // Insert a local draft to verify cleanup
+        sqlx::query("INSERT INTO drafts (id, account_id, subject) VALUES ('d1', 'acc1', 'Draft')")
+            .execute(&pool).await.unwrap();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::DELETE)
+                .path("/gmail/v1/users/me/drafts/d1")
+                .header("Authorization", "Bearer fake_token");
+            then.status(204);
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = delete_draft(&pool, "acc1", "me@test.com", "fake_token", "d1").await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok(), "delete_draft failed: {:?}", result);
+        mock.assert();
+
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM drafts WHERE id = 'd1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 0, "Local draft should be cleaned up");
+    }
+
+    #[tokio::test]
+    async fn test_delete_draft_by_thread_via_mock() {
+        let server = httpmock::MockServer::start();
+        let pool = test_pool().await;
+
+        // Insert a local draft to verify cleanup
+        sqlx::query("INSERT INTO drafts (id, account_id, subject) VALUES ('d1', 'acc1', 'Draft')")
+            .execute(&pool).await.unwrap();
+
+        // Mock list drafts
+        let list_mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/drafts")
+                .header("Authorization", "Bearer fake_token");
+            then.status(200).json_body(serde_json::json!({
+                "drafts": [
+                    {"id": "d1", "message": {"id": "msg1", "threadId": "t1"}},
+                    {"id": "d2", "message": {"id": "msg2", "threadId": "t2"}}
+                ]
+            }));
+        });
+
+        // Mock delete draft d1 (the one matching thread t1)
+        let delete_mock = server.mock(|when, then| {
+            when.method(httpmock::Method::DELETE)
+                .path("/gmail/v1/users/me/drafts/d1")
+                .header("Authorization", "Bearer fake_token");
+            then.status(204);
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = delete_draft_by_thread(&pool, "acc1", "fake_token", "t1").await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok(), "delete_draft_by_thread failed: {:?}", result);
+        list_mock.assert();
+        delete_mock.assert();
+
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM drafts WHERE id = 'd1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 0, "Local draft should be cleaned up");
+    }
+
+    #[tokio::test]
+    async fn test_delete_draft_by_thread_not_found() {
+        let server = httpmock::MockServer::start();
+        let pool = test_pool().await;
+
+        let list_mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/drafts");
+            then.status(200).json_body(serde_json::json!({
+                "drafts": [
+                    {"id": "d1", "message": {"id": "msg1", "threadId": "t_other"}}
+                ]
+            }));
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = delete_draft_by_thread(&pool, "acc1", "fake_token", "t_nonexistent").await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("No draft found"));
+        list_mock.assert();
+    }
+
+    #[tokio::test]
+    async fn test_get_draft_id_by_message_id_via_mock() {
+        let server = httpmock::MockServer::start();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/drafts")
+                .header("Authorization", "Bearer fake_token");
+            then.status(200).json_body(serde_json::json!({
+                "drafts": [
+                    {"id": "d1", "message": {"id": "msg1", "threadId": "t1"}},
+                    {"id": "d2", "message": {"id": "msg2", "threadId": "t2"}}
+                ]
+            }));
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = get_draft_id_by_message_id("acc1", "fake_token", "msg2").await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "d2");
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn test_get_draft_id_by_message_id_not_found() {
+        let server = httpmock::MockServer::start();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/drafts");
+            then.status(200).json_body(serde_json::json!({
+                "drafts": [
+                    {"id": "d1", "message": {"id": "msg1", "threadId": "t1"}}
+                ]
+            }));
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = get_draft_id_by_message_id("acc1", "fake_token", "msg_nonexistent").await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("No draft found"));
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn test_batch_hydrate_threads_via_mock() {
+        let server = httpmock::MockServer::start();
+        let pool = test_pool().await;
+
+        // Insert threads so label/unread updates work
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t1', 'acc1', '', '', 0)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t2', 'acc1', '', '', 0)")
+            .execute(&pool).await.unwrap();
+
+        let mock_t1 = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/threads/t1");
+            then.status(200).json_body(serde_json::json!({
+                "id": "t1",
+                "messages": [{
+                    "id": "m1",
+                    "threadId": "t1",
+                    "labelIds": ["INBOX"],
+                    "snippet": "First thread",
+                    "internalDate": "1000",
+                    "payload": {
+                        "partId": "0",
+                        "mimeType": "text/plain",
+                        "headers": [
+                            {"name": "From", "value": "a@test.com"},
+                            {"name": "Subject", "value": "Subject 1"}
+                        ],
+                        "body": {"size": 5, "data": "SGVsbG8"}
+                    }
+                }]
+            }));
+        });
+
+        let mock_t2 = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/threads/t2");
+            then.status(200).json_body(serde_json::json!({
+                "id": "t2",
+                "messages": [{
+                    "id": "m2",
+                    "threadId": "t2",
+                    "labelIds": ["INBOX"],
+                    "snippet": "Second thread",
+                    "internalDate": "2000",
+                    "payload": {
+                        "partId": "0",
+                        "mimeType": "text/plain",
+                        "headers": [
+                            {"name": "From", "value": "b@test.com"},
+                            {"name": "Subject", "value": "Subject 2"}
+                        ],
+                        "body": {"size": 5, "data": "V29ybGQ"}
+                    }
+                }]
+            }));
+        });
+
+        let (total, completed) = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = batch_hydrate_threads(
+                &pool, "acc1", "fake_token",
+                vec!["t1".to_string(), "t2".to_string()],
+            ).await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert_eq!(total, 2);
+        assert_eq!(completed, 2);
+        mock_t1.assert();
+        mock_t2.assert();
+
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages WHERE account_id = 'acc1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_batch_hydrate_threads_partial_failure() {
+        let server = httpmock::MockServer::start();
+        let pool = test_pool().await;
+
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t1', 'acc1', '', '', 0)")
+            .execute(&pool).await.unwrap();
+
+        let mock_t1 = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/threads/t1");
+            then.status(200).json_body(serde_json::json!({
+                "id": "t1",
+                "messages": [{
+                    "id": "m1",
+                    "threadId": "t1",
+                    "labelIds": ["INBOX"],
+                    "internalDate": "1000",
+                    "payload": {
+                        "partId": "0",
+                        "mimeType": "text/plain",
+                        "headers": [{"name": "From", "value": "a@test.com"}],
+                        "body": {"size": 5, "data": "SGVsbG8"}
+                    }
+                }]
+            }));
+        });
+
+        let mock_t_fail = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/threads/t_fail");
+            then.status(500).body("Server Error");
+        });
+
+        let (total, completed) = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = batch_hydrate_threads(
+                &pool, "acc1", "fake_token",
+                vec!["t1".to_string(), "t_fail".to_string()],
+            ).await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert_eq!(total, 2);
+        assert_eq!(completed, 1, "Only t1 should succeed");
+        mock_t1.assert();
+        mock_t_fail.assert();
     }
 }

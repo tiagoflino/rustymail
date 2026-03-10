@@ -5,18 +5,7 @@ use tauri::Manager;
 
 const CURRENT_SCHEMA_VERSION: &str = "2";
 
-pub async fn init_db(app_handle: &tauri::AppHandle) -> Result<SqlitePool> {
-    let app_dir = app_handle.path().app_data_dir().expect("Failed to get app data dir");
-    std::fs::create_dir_all(&app_dir)?;
-
-    let db_path = app_dir.join("rustymail.db");
-
-    let options = SqliteConnectOptions::from_str(
-        &format!("sqlite://{}", db_path.to_string_lossy())
-    )?.create_if_missing(true);
-
-    let pool = SqlitePool::connect_with(options).await?;
-
+pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
     let schema = r#"
     CREATE TABLE IF NOT EXISTS accounts (
         id TEXT PRIMARY KEY,
@@ -113,23 +102,22 @@ pub async fn init_db(app_handle: &tauri::AppHandle) -> Result<SqlitePool> {
     PRAGMA journal_mode=WAL;
     "#;
 
-    sqlx::query(schema).execute(&pool).await?;
+    sqlx::query(schema).execute(pool).await?;
 
-    // Set schema version for future migration tracking.
     sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES ('schema_version', ?)")
         .bind(CURRENT_SCHEMA_VERSION)
-        .execute(&pool)
+        .execute(pool)
         .await?;
 
     sqlx::query(
         "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(sender, subject, body_plain, content=messages, content_rowid=rowid)"
-    ).execute(&pool).await.ok();
+    ).execute(pool).await.ok();
 
     let defaults = [
         ("theme", "system"),
         ("density", "default"),
         ("default_mailbox", "INBOX"),
-        ("mark_read_delay", "instant"),
+        ("mark_read_delay", "2"),
         ("reading_pane", "right"),
         ("signature", ""),
         ("reply_position", "above"),
@@ -138,16 +126,30 @@ pub async fn init_db(app_handle: &tauri::AppHandle) -> Result<SqlitePool> {
         ("sync_frequency", "30"),
         ("max_threads_sync", "100"),
         ("max_cache_mb", "500"),
-        ("mark_read_delay", "2"),
-        ("default_mailbox", "INBOX"),
     ];
     for (key, value) in defaults {
         let _ = sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)")
             .bind(key)
             .bind(value)
-            .execute(&pool)
+            .execute(pool)
             .await;
     }
+
+    Ok(())
+}
+
+pub async fn init_db(app_handle: &tauri::AppHandle) -> Result<SqlitePool> {
+    let app_dir = app_handle.path().app_data_dir().expect("Failed to get app data dir");
+    std::fs::create_dir_all(&app_dir)?;
+
+    let db_path = app_dir.join("rustymail.db");
+
+    let options = SqliteConnectOptions::from_str(
+        &format!("sqlite://{}", db_path.to_string_lossy())
+    )?.create_if_missing(true);
+
+    let pool = SqlitePool::connect_with(options).await?;
+    apply_schema(&pool).await?;
 
     Ok(pool)
 }
@@ -155,62 +157,125 @@ pub async fn init_db(app_handle: &tauri::AppHandle) -> Result<SqlitePool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
 
-    #[tokio::test]
-    async fn test_init_db_schema() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test.db");
-        let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.to_string_lossy()))
+    async fn test_pool() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
             .unwrap()
             .create_if_missing(true);
-        let pool = SqlitePool::connect_with(options).await.unwrap();
+        SqlitePool::connect_with(options).await.unwrap()
+    }
 
-        // Normally we'd call init_db, but it requires AppHandle.
-        // We'll test the schema application logic directly if we can refactor init_db 
-        // Or we can just verify the expected tables exist after running the schema.
-        
-        let schema = r#"
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-        "#;
-        sqlx::query(schema).execute(&pool).await.unwrap();
+    #[tokio::test]
+    async fn test_apply_schema_creates_all_tables() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
 
-        let row: (String,) = sqlx::query_as("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(row.0, "settings");
+        let tables: Vec<(String,)> = sqlx::query_as(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        ).fetch_all(&pool).await.unwrap();
+
+        let names: Vec<&str> = tables.iter().map(|r| r.0.as_str()).collect();
+        for expected in &[
+            "accounts", "attachments", "drafts", "history_state", "labels",
+            "message_labels", "messages", "messages_fts", "settings",
+            "thread_labels", "threads",
+        ] {
+            assert!(names.contains(expected), "Missing table: {expected}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_apply_schema_creates_indexes() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+
+        let indexes: Vec<(String,)> = sqlx::query_as(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%' ORDER BY name"
+        ).fetch_all(&pool).await.unwrap();
+
+        let names: Vec<&str> = indexes.iter().map(|r| r.0.as_str()).collect();
+        for expected in &[
+            "idx_labels_account", "idx_message_labels_label",
+            "idx_messages_account", "idx_messages_internal_date", "idx_messages_thread",
+            "idx_thread_labels_label", "idx_thread_labels_thread", "idx_threads_account",
+        ] {
+            assert!(names.contains(expected), "Missing index: {expected}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_apply_schema_seeds_defaults() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM settings")
+            .fetch_one(&pool).await.unwrap();
+        assert!(count.0 >= 12, "Expected at least 12 default settings, got {}", count.0);
+
+        let theme: (String,) = sqlx::query_as("SELECT value FROM settings WHERE key = 'theme'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(theme.0, "system");
+    }
+
+    #[tokio::test]
+    async fn test_apply_schema_sets_version() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+
+        let version: (String,) = sqlx::query_as("SELECT value FROM settings WHERE key = 'schema_version'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(version.0, CURRENT_SCHEMA_VERSION);
+    }
+
+    #[tokio::test]
+    async fn test_apply_schema_idempotent() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+        apply_schema(&pool).await.unwrap();
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM settings WHERE key = 'theme'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count.0, 1, "Schema should be idempotent");
     }
 
     #[tokio::test]
     async fn test_settings_upsert() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test_upsert.db");
-        let options = sqlx::sqlite::SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.to_string_lossy()))
-            .unwrap()
-            .create_if_missing(true);
-        let pool = sqlx::SqlitePool::connect_with(options).await.unwrap();
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
 
-        sqlx::query("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
-            .execute(&pool).await.unwrap();
-        
-        // Insert
-        sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?)")
+        sqlx::query("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
             .bind("test_key").bind("test_value").execute(&pool).await.unwrap();
-        
+
         let val: (String,) = sqlx::query_as("SELECT value FROM settings WHERE key = 'test_key'")
             .fetch_one(&pool).await.unwrap();
         assert_eq!(val.0, "test_value");
 
-        // Update (UPSERT style)
         sqlx::query("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
             .bind("test_key").bind("new_value").execute(&pool).await.unwrap();
-        
+
         let new_val: (String,) = sqlx::query_as("SELECT value FROM settings WHERE key = 'test_key'")
             .fetch_one(&pool).await.unwrap();
         assert_eq!(new_val.0, "new_value");
+    }
+
+    #[tokio::test]
+    async fn test_fts_search() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+
+        sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, subject, body_plain) VALUES (?, ?, ?, ?, ?, ?)")
+            .bind("m1").bind("t1").bind("acc1").bind("alice@example.com").bind("Meeting tomorrow").bind("Let's meet at 3pm")
+            .execute(&pool).await.unwrap();
+
+        sqlx::query("INSERT INTO messages_fts (rowid, sender, subject, body_plain) VALUES ((SELECT rowid FROM messages WHERE id = 'm1'), ?, ?, ?)")
+            .bind("alice@example.com").bind("Meeting tomorrow").bind("Let's meet at 3pm")
+            .execute(&pool).await.unwrap();
+
+        let results: Vec<(String,)> = sqlx::query_as(
+            "SELECT m.thread_id FROM messages m JOIN messages_fts f ON m.rowid = f.rowid WHERE messages_fts MATCH 'meeting'"
+        ).fetch_all(&pool).await.unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "t1");
     }
 }

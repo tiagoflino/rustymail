@@ -22,6 +22,30 @@ struct ActiveAccountRow {
     token_expiry: Option<i64>,
 }
 
+#[allow(dead_code)] // used in tests
+pub(crate) async fn get_active_account_row(pool: &sqlx::SqlitePool) -> Result<(String, Option<i64>), String> {
+    let row = sqlx::query_as::<_, ActiveAccountRow>(
+        "SELECT id, token_expiry FROM accounts WHERE is_active = 1 LIMIT 1"
+    )
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("No active account found: {}", e))?;
+    Ok((row.id, row.token_expiry))
+}
+
+#[allow(dead_code)] // used in tests
+pub(crate) async fn check_auth_status_db(pool: &sqlx::SqlitePool) -> Result<Option<String>, String> {
+    #[derive(sqlx::FromRow)]
+    struct IdRow { id: String }
+    let row = sqlx::query_as::<_, IdRow>(
+        "SELECT id FROM accounts WHERE is_active = 1 LIMIT 1"
+    )
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(row.map(|r| r.id))
+}
+
 async fn get_active_account(pool: &sqlx::SqlitePool) -> Result<ActiveAccountFull, String> {
     let row = sqlx::query_as::<_, ActiveAccountRow>(
         "SELECT id, token_expiry FROM accounts WHERE is_active = 1 LIMIT 1"
@@ -450,10 +474,7 @@ async fn refresh_and_update(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn get_accounts(app_handle: tauri::AppHandle) -> Result<Vec<AccountInfo>, String> {
-    let pool = app_handle.state::<sqlx::SqlitePool>();
-
+pub(crate) async fn get_accounts_inner(pool: &sqlx::SqlitePool) -> Result<Vec<AccountInfo>, String> {
     #[derive(sqlx::FromRow)]
     struct Row {
         id: String,
@@ -464,7 +485,7 @@ pub async fn get_accounts(app_handle: tauri::AppHandle) -> Result<Vec<AccountInf
     }
 
     let rows: Vec<Row> = sqlx::query_as("SELECT id, email, display_name, avatar_url, is_active FROM accounts ORDER BY created_at ASC")
-        .fetch_all(pool.inner())
+        .fetch_all(pool)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -481,20 +502,61 @@ pub async fn get_accounts(app_handle: tauri::AppHandle) -> Result<Vec<AccountInf
 }
 
 #[tauri::command]
+pub async fn get_accounts(app_handle: tauri::AppHandle) -> Result<Vec<AccountInfo>, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    get_accounts_inner(pool.inner()).await
+}
+
+pub(crate) async fn switch_account_inner(pool: &sqlx::SqlitePool, account_id: &str) -> Result<(), String> {
+    sqlx::query("UPDATE accounts SET is_active = 0")
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("UPDATE accounts SET is_active = 1 WHERE id = ?")
+        .bind(account_id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn switch_account(
     app_handle: tauri::AppHandle,
     account_id: String,
 ) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
-    sqlx::query("UPDATE accounts SET is_active = 0")
-        .execute(pool.inner())
+    switch_account_inner(pool.inner(), &account_id).await
+}
+
+pub(crate) async fn remove_account_inner(pool: &sqlx::SqlitePool, account_id: &str) -> Result<(), String> {
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM messages WHERE account_id = ?")
+        .bind(account_id)
+        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
-    sqlx::query("UPDATE accounts SET is_active = 1 WHERE id = ?")
-        .bind(&account_id)
-        .execute(pool.inner())
+    sqlx::query("DELETE FROM threads WHERE account_id = ?")
+        .bind(account_id)
+        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM labels WHERE account_id = ?")
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM accounts WHERE id = ?")
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+
+    let _ = sqlx::query("UPDATE accounts SET is_active = 1 WHERE rowid = (SELECT MIN(rowid) FROM accounts WHERE is_active = 0)")
+        .execute(pool)
+        .await;
+
     Ok(())
 }
 
@@ -507,34 +569,7 @@ pub async fn remove_account(
 
     let _ = crate::credentials::delete_tokens(&account_id);
 
-    let mut tx = pool.inner().begin().await.map_err(|e| e.to_string())?;
-    sqlx::query("DELETE FROM messages WHERE account_id = ?")
-        .bind(&account_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
-    sqlx::query("DELETE FROM threads WHERE account_id = ?")
-        .bind(&account_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
-    sqlx::query("DELETE FROM labels WHERE account_id = ?")
-        .bind(&account_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
-    sqlx::query("DELETE FROM accounts WHERE id = ?")
-        .bind(&account_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
-    tx.commit().await.map_err(|e| e.to_string())?;
-
-    let _ = sqlx::query("UPDATE accounts SET is_active = 1 WHERE rowid = (SELECT MIN(rowid) FROM accounts WHERE is_active = 0)")
-        .execute(pool.inner())
-        .await;
-
-    Ok(())
+    remove_account_inner(pool.inner(), &account_id).await
 }
 
 #[derive(serde::Serialize)]
@@ -543,10 +578,7 @@ pub struct SettingEntry {
     pub value: String,
 }
 
-#[tauri::command]
-pub async fn get_settings(app_handle: tauri::AppHandle) -> Result<Vec<SettingEntry>, String> {
-    let pool = app_handle.state::<sqlx::SqlitePool>();
-
+pub(crate) async fn get_settings_inner(pool: &sqlx::SqlitePool) -> Result<Vec<SettingEntry>, String> {
     #[derive(sqlx::FromRow)]
     struct Row {
         key: String,
@@ -554,7 +586,7 @@ pub async fn get_settings(app_handle: tauri::AppHandle) -> Result<Vec<SettingEnt
     }
 
     let rows: Vec<Row> = sqlx::query_as("SELECT key, value FROM settings")
-        .fetch_all(pool.inner())
+        .fetch_all(pool)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -568,14 +600,34 @@ pub async fn get_settings(app_handle: tauri::AppHandle) -> Result<Vec<SettingEnt
 }
 
 #[tauri::command]
-pub async fn get_setting(app_handle: tauri::AppHandle, key: String) -> Result<String, String> {
+pub async fn get_settings(app_handle: tauri::AppHandle) -> Result<Vec<SettingEntry>, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
+    get_settings_inner(pool.inner()).await
+}
+
+pub(crate) async fn get_setting_inner(pool: &sqlx::SqlitePool, key: &str) -> Result<String, String> {
     let row: Option<(String,)> = sqlx::query_as("SELECT value FROM settings WHERE key = ?")
-        .bind(&key)
-        .fetch_optional(pool.inner())
+        .bind(key)
+        .fetch_optional(pool)
         .await
         .map_err(|e| e.to_string())?;
     Ok(row.map(|r| r.0).unwrap_or_default())
+}
+
+#[tauri::command]
+pub async fn get_setting(app_handle: tauri::AppHandle, key: String) -> Result<String, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    get_setting_inner(pool.inner(), &key).await
+}
+
+pub(crate) async fn update_setting_inner(pool: &sqlx::SqlitePool, key: &str, value: &str) -> Result<(), String> {
+    sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+        .bind(key)
+        .bind(value)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -585,13 +637,7 @@ pub async fn update_setting(
     value: String,
 ) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
-    sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-        .bind(&key)
-        .bind(&value)
-        .execute(pool.inner())
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    update_setting_inner(pool.inner(), &key, &value).await
 }
 
 #[tauri::command]
@@ -693,11 +739,7 @@ pub struct LocalLabel {
     pub unread_count: i32,
 }
 
-#[tauri::command]
-pub async fn get_labels(app_handle: tauri::AppHandle) -> Result<Vec<LocalLabel>, String> {
-    let pool = app_handle.state::<sqlx::SqlitePool>();
-    let account = get_active_account(pool.inner()).await?;
-
+pub(crate) async fn get_labels_inner(pool: &sqlx::SqlitePool, account_id: &str) -> Result<Vec<LocalLabel>, String> {
     #[derive(sqlx::FromRow)]
     struct LabelRow {
         id: String,
@@ -707,14 +749,14 @@ pub async fn get_labels(app_handle: tauri::AppHandle) -> Result<Vec<LocalLabel>,
     }
 
     let rows: Vec<LabelRow> = sqlx::query_as(
-        "SELECT id, name, type, unread_count FROM labels 
-         WHERE account_id = ? 
+        "SELECT id, name, type, unread_count FROM labels
+         WHERE account_id = ?
          AND UPPER(id) NOT IN ('YELLOW_STAR', 'CHAT', 'VOICEMAIL')
          AND UPPER(name) NOT IN ('YELLOW_STAR', 'YELLOW STAR', 'CHAT', 'VOICEMAIL')
          ORDER BY CASE WHEN type = 'system' THEN 0 ELSE 1 END, name ASC",
     )
-    .bind(&account.id)
-    .fetch_all(pool.inner())
+    .bind(account_id)
+    .fetch_all(pool)
     .await
     .map_err(|e| e.to_string())?;
 
@@ -727,6 +769,13 @@ pub async fn get_labels(app_handle: tauri::AppHandle) -> Result<Vec<LocalLabel>,
             unread_count: r.unread_count.unwrap_or(0),
         })
         .collect())
+}
+
+#[tauri::command]
+pub async fn get_labels(app_handle: tauri::AppHandle) -> Result<Vec<LocalLabel>, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+    get_labels_inner(pool.inner(), &account.id).await
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
@@ -754,18 +803,13 @@ fn clean_sender_name(raw: Option<String>) -> String {
     s.replace("\"", "")
 }
 
-#[tauri::command]
-pub async fn get_threads(
-    app_handle: tauri::AppHandle,
-    label_id: Option<String>,
-    offset: Option<i32>,
-    limit: Option<i32>,
+pub(crate) async fn get_threads_inner(
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
+    label_id: Option<&str>,
+    offset: i32,
+    limit: i32,
 ) -> Result<Vec<LocalThread>, String> {
-    let pool = app_handle.state::<sqlx::SqlitePool>();
-    let account = get_active_account(pool.inner()).await?;
-    let lim = limit.unwrap_or(50);
-    let off = offset.unwrap_or(0);
-
     #[derive(sqlx::FromRow)]
     struct TR {
         id: String,
@@ -778,7 +822,7 @@ pub async fn get_threads(
         starred: Option<i32>,
     }
 
-    let rows: Vec<TR> = if let Some(ref lid) = label_id {
+    let rows: Vec<TR> = if let Some(lid) = label_id {
         sqlx::query_as(
             "SELECT t.id, t.snippet, t.history_id, t.unread,
                     (SELECT m2.sender FROM messages m2 WHERE m2.thread_id = t.id ORDER BY m2.internal_date DESC LIMIT 1) as sender,
@@ -790,8 +834,8 @@ pub async fn get_threads(
              WHERE t.account_id = ?
              ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
              LIMIT ? OFFSET ?"
-        ).bind(lid).bind(&account.id).bind(lim).bind(off)
-        .fetch_all(pool.inner()).await.map_err(|e| e.to_string())?
+        ).bind(lid).bind(account_id).bind(limit).bind(offset)
+        .fetch_all(pool).await.map_err(|e| e.to_string())?
     } else {
         sqlx::query_as(
             "SELECT t.id, t.snippet, t.history_id, t.unread,
@@ -803,8 +847,8 @@ pub async fn get_threads(
              WHERE t.account_id = ?
              ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
              LIMIT ? OFFSET ?"
-        ).bind(&account.id).bind(lim).bind(off)
-        .fetch_all(pool.inner()).await.map_err(|e| e.to_string())?
+        ).bind(account_id).bind(limit).bind(offset)
+        .fetch_all(pool).await.map_err(|e| e.to_string())?
     };
 
     Ok(rows
@@ -820,6 +864,20 @@ pub async fn get_threads(
             starred: r.starred.unwrap_or(0) == 1,
         })
         .collect())
+}
+
+#[tauri::command]
+pub async fn get_threads(
+    app_handle: tauri::AppHandle,
+    label_id: Option<String>,
+    offset: Option<i32>,
+    limit: Option<i32>,
+) -> Result<Vec<LocalThread>, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+    let lim = limit.unwrap_or(50);
+    let off = offset.unwrap_or(0);
+    get_threads_inner(pool.inner(), &account.id, label_id.as_deref(), off, lim).await
 }
 
 #[tauri::command]
@@ -893,13 +951,10 @@ pub struct LocalMessage {
     pub is_draft: bool,
 }
 
-#[tauri::command]
-pub async fn get_messages(
-    app_handle: tauri::AppHandle,
-    thread_id: String,
+pub(crate) async fn get_messages_inner(
+    pool: &sqlx::SqlitePool,
+    thread_id: &str,
 ) -> Result<Vec<LocalMessage>, String> {
-    let pool = app_handle.state::<sqlx::SqlitePool>();
-
     #[derive(sqlx::FromRow)]
     struct Row {
         id: String,
@@ -915,10 +970,10 @@ pub async fn get_messages(
     }
 
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT m.id, m.thread_id, m.sender, m.recipients, m.subject, m.snippet, m.internal_date, m.body_html, m.body_plain, 
+        "SELECT m.id, m.thread_id, m.sender, m.recipients, m.subject, m.snippet, m.internal_date, m.body_html, m.body_plain,
          EXISTS(SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.label_id = 'DRAFT') as is_draft
          FROM messages m WHERE m.thread_id = ? ORDER BY m.internal_date ASC"
-    ).bind(thread_id).fetch_all(pool.inner()).await.map_err(|e| e.to_string())?;
+    ).bind(thread_id).fetch_all(pool).await.map_err(|e| e.to_string())?;
 
     Ok(rows
         .into_iter()
@@ -935,6 +990,15 @@ pub async fn get_messages(
             is_draft: r.is_draft,
         })
         .collect())
+}
+
+#[tauri::command]
+pub async fn get_messages(
+    app_handle: tauri::AppHandle,
+    thread_id: String,
+) -> Result<Vec<LocalMessage>, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    get_messages_inner(pool.inner(), &thread_id).await
 }
 
 #[tauri::command]
@@ -1093,24 +1157,23 @@ fn parse_query_operators(query: &str) -> ParsedQuery {
     }
 }
 
-#[tauri::command]
-pub async fn search_messages(
-    app_handle: tauri::AppHandle,
-    query: String,
-) -> Result<Vec<LocalThread>, String> {
-    let pool = app_handle.state::<sqlx::SqlitePool>();
-    let account = get_active_account(pool.inner()).await?;
+/// Performs local-only search: parse operators, FTS5 match, LIKE fallback.
+/// Returns a deduplicated list of thread IDs found locally.
+pub(crate) async fn search_messages_local(
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
+    query: &str,
+) -> Result<Vec<String>, String> {
     let mut all_thread_ids: Vec<String> = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
-    let parsed = parse_query_operators(&query);
+    let parsed = parse_query_operators(query);
 
-    // Build targeted SQL conditions from operators
     let has_operators = parsed.from.is_some() || parsed.to.is_some() || parsed.subject.is_some() || parsed.has_attachment || parsed.is_unread.is_some();
 
     if has_operators {
         let mut conditions = vec!["m.account_id = ?".to_string()];
-        let mut binds: Vec<String> = vec![account.id.clone()];
+        let mut binds: Vec<String> = vec![account_id.to_string()];
 
         if let Some(ref f) = parsed.from {
             conditions.push("m.sender LIKE ?".to_string());
@@ -1145,7 +1208,7 @@ pub async fn search_messages(
         for b in &binds {
             q = q.bind(b);
         }
-        let rows: Vec<TidRow> = q.fetch_all(pool.inner()).await.unwrap_or_default();
+        let rows: Vec<TidRow> = q.fetch_all(pool).await.unwrap_or_default();
         for r in rows {
             if let Some(tid) = r.thread_id {
                 if seen.insert(tid.clone()) {
@@ -1167,8 +1230,8 @@ pub async fn search_messages(
              LIMIT 50",
         )
         .bind(&fts_query)
-        .bind(&account.id)
-        .fetch_all(pool.inner())
+        .bind(account_id)
+        .fetch_all(pool)
         .await
         .unwrap_or_default();
 
@@ -1186,8 +1249,8 @@ pub async fn search_messages(
         let pattern = format!("%{}%", parsed.free_text);
         let like_results: Vec<LikeRow> = sqlx::query_as(
             "SELECT DISTINCT thread_id FROM messages WHERE account_id = ? AND (sender LIKE ? OR subject LIKE ?) LIMIT 30"
-        ).bind(&account.id).bind(&pattern).bind(&pattern)
-        .fetch_all(pool.inner()).await.unwrap_or_default();
+        ).bind(account_id).bind(&pattern).bind(&pattern)
+        .fetch_all(pool).await.unwrap_or_default();
         for r in like_results {
             if let Some(tid) = r.thread_id {
                 if seen.insert(tid.clone()) {
@@ -1196,6 +1259,53 @@ pub async fn search_messages(
             }
         }
     }
+
+    Ok(all_thread_ids)
+}
+
+/// Toggle the STARRED label on a thread locally (insert or delete from thread_labels).
+#[allow(dead_code)] // used in tests
+pub(crate) async fn toggle_star_local(pool: &sqlx::SqlitePool, thread_id: &str, starred: bool) -> Result<(), String> {
+    if starred {
+        sqlx::query("INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?, 'STARRED')")
+            .bind(thread_id)
+            .execute(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+    } else {
+        sqlx::query("DELETE FROM thread_labels WHERE thread_id = ? AND label_id = 'STARRED'")
+            .bind(thread_id)
+            .execute(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Mark a thread as read or unread locally (update threads.unread column).
+#[allow(dead_code)] // used in tests
+pub(crate) async fn mark_read_status_local(pool: &sqlx::SqlitePool, thread_id: &str, unread: bool) -> Result<(), String> {
+    let val = if unread { 1 } else { 0 };
+    sqlx::query("UPDATE threads SET unread = ? WHERE id = ?")
+        .bind(val)
+        .bind(thread_id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn search_messages(
+    app_handle: tauri::AppHandle,
+    query: String,
+) -> Result<Vec<LocalThread>, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+
+    // Local search (operators + FTS5 + LIKE fallback)
+    let mut all_thread_ids = search_messages_local(pool.inner(), &account.id, &query).await?;
+    let mut seen: std::collections::HashSet<String> = all_thread_ids.iter().cloned().collect();
 
     // Gmail API search with the full original query (already supports operators)
     let api_ids = search_gmail_api(&account.access_token, &query).await;
@@ -1236,10 +1346,23 @@ pub async fn search_messages(
     fetch_threads_by_ids(pool.inner(), &all_thread_ids, &account.id).await
 }
 
-async fn search_gmail_api(access_token: &str, query: &str) -> Vec<String> {
+fn auth_gmail_api_url(path: &str) -> String {
+    #[cfg(test)]
+    {
+        let base = std::env::var("TEST_AUTH_GMAIL_API_BASE")
+            .unwrap_or_else(|_| "https://gmail.googleapis.com".to_string());
+        format!("{}{}", base, path)
+    }
+    #[cfg(not(test))]
+    {
+        format!("https://gmail.googleapis.com{}", path)
+    }
+}
+
+pub(crate) async fn search_gmail_api(access_token: &str, query: &str) -> Vec<String> {
     let client = reqwest::Client::new();
     let res = match client
-        .get("https://gmail.googleapis.com/gmail/v1/users/me/messages")
+        .get(auth_gmail_api_url("/gmail/v1/users/me/messages"))
         .query(&[("q", query), ("maxResults", "30")])
         .header("Authorization", format!("Bearer {}", access_token))
         .send()
@@ -1280,7 +1403,7 @@ async fn search_gmail_api(access_token: &str, query: &str) -> Vec<String> {
     }
 }
 
-async fn fetch_threads_by_ids(
+pub(crate) async fn fetch_threads_by_ids(
     pool: &sqlx::SqlitePool,
     ids: &[String],
     account_id: &str,
@@ -1341,13 +1464,10 @@ pub struct HydrationProgress {
     pub hydrated: usize,
 }
 
-#[tauri::command]
-pub async fn get_hydration_progress(
-    app_handle: tauri::AppHandle,
+pub(crate) async fn get_hydration_progress_inner(
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
 ) -> Result<HydrationProgress, String> {
-    let pool = app_handle.state::<sqlx::SqlitePool>();
-    let account = get_active_account(pool.inner()).await?;
-
     #[derive(sqlx::FromRow)]
     struct Count {
         cnt: i32,
@@ -1355,17 +1475,26 @@ pub async fn get_hydration_progress(
 
     let total =
         sqlx::query_as::<_, Count>("SELECT COUNT(*) as cnt FROM threads WHERE account_id = ?")
-            .bind(&account.id)
-            .fetch_one(pool.inner())
+            .bind(account_id)
+            .fetch_one(pool)
             .await
             .map(|r| r.cnt)
             .unwrap_or(0) as usize;
 
     let hydrated = sqlx::query_as::<_, Count>(
         "SELECT COUNT(DISTINCT t.id) as cnt FROM threads t INNER JOIN messages m ON t.id = m.thread_id WHERE t.account_id = ?"
-    ).bind(&account.id).fetch_one(pool.inner()).await.map(|r| r.cnt).unwrap_or(0) as usize;
+    ).bind(account_id).fetch_one(pool).await.map(|r| r.cnt).unwrap_or(0) as usize;
 
     Ok(HydrationProgress { total, hydrated })
+}
+
+#[tauri::command]
+pub async fn get_hydration_progress(
+    app_handle: tauri::AppHandle,
+) -> Result<HydrationProgress, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+    get_hydration_progress_inner(pool.inner(), &account.id).await
 }
 
 #[tauri::command]
@@ -1413,29 +1542,27 @@ pub struct SearchSuggestion {
     pub detail: String,
 }
 
-#[tauri::command]
-pub async fn get_search_suggestions(
-    app_handle: tauri::AppHandle,
-    operator: Option<String>,
-    value: String,
-    full_query: String,
+pub(crate) async fn get_search_suggestions_inner(
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
+    operator: Option<&str>,
+    value: &str,
+    full_query: &str,
 ) -> Result<Vec<SearchSuggestion>, String> {
-    let pool = app_handle.state::<sqlx::SqlitePool>();
-    let account = get_active_account(pool.inner()).await?;
     let mut suggestions = Vec::new();
 
-    match operator.as_deref() {
+    match operator {
         Some("from") => {
-            if value.len() >= 1 {
+            if !value.is_empty() {
                 #[derive(sqlx::FromRow)]
                 struct SenderRow { sender: String }
                 let pattern = format!("%{}%", value);
                 let contacts: Vec<SenderRow> = sqlx::query_as(
                     "SELECT DISTINCT sender FROM messages WHERE account_id = ? AND sender LIKE ? LIMIT 8",
                 )
-                .bind(&account.id)
+                .bind(account_id)
                 .bind(&pattern)
-                .fetch_all(pool.inner())
+                .fetch_all(pool)
                 .await
                 .unwrap_or_default();
 
@@ -1450,16 +1577,16 @@ pub async fn get_search_suggestions(
             }
         }
         Some("to") => {
-            if value.len() >= 1 {
+            if !value.is_empty() {
                 #[derive(sqlx::FromRow)]
                 struct RecipRow { recipients: String }
                 let pattern = format!("%{}%", value);
                 let rows: Vec<RecipRow> = sqlx::query_as(
                     "SELECT DISTINCT recipients FROM messages WHERE account_id = ? AND recipients LIKE ? LIMIT 20",
                 )
-                .bind(&account.id)
+                .bind(account_id)
                 .bind(&pattern)
-                .fetch_all(pool.inner())
+                .fetch_all(pool)
                 .await
                 .unwrap_or_default();
 
@@ -1490,16 +1617,16 @@ pub async fn get_search_suggestions(
             }
         }
         Some("subject") => {
-            if value.len() >= 1 {
+            if !value.is_empty() {
                 #[derive(sqlx::FromRow)]
                 struct SubjectRow { subject: String }
                 let pattern = format!("%{}%", value);
                 let subjects: Vec<SubjectRow> = sqlx::query_as(
                     "SELECT DISTINCT subject FROM messages WHERE account_id = ? AND subject LIKE ? LIMIT 8",
                 )
-                .bind(&account.id)
+                .bind(account_id)
                 .bind(&pattern)
-                .fetch_all(pool.inner())
+                .fetch_all(pool)
                 .await
                 .unwrap_or_default();
 
@@ -1513,12 +1640,11 @@ pub async fn get_search_suggestions(
             }
         }
         _ => {
-            // Free text: existing behavior using full_query
             #[derive(sqlx::FromRow)]
             struct SettingRow { value: String }
             if let Ok(Some(row)) =
                 sqlx::query_as::<_, SettingRow>("SELECT value FROM settings WHERE key = 'recent_searches'")
-                    .fetch_optional(pool.inner())
+                    .fetch_optional(pool)
                     .await
             {
                 if let Ok(recents) = serde_json::from_str::<Vec<String>>(&row.value) {
@@ -1541,9 +1667,9 @@ pub async fn get_search_suggestions(
                 let contacts: Vec<SenderRow> = sqlx::query_as(
                     "SELECT DISTINCT sender FROM messages WHERE account_id = ? AND sender LIKE ? LIMIT 5",
                 )
-                .bind(&account.id)
+                .bind(account_id)
                 .bind(&pattern)
-                .fetch_all(pool.inner())
+                .fetch_all(pool)
                 .await
                 .unwrap_or_default();
 
@@ -1560,9 +1686,9 @@ pub async fn get_search_suggestions(
                 let subjects: Vec<SubjectRow> = sqlx::query_as(
                     "SELECT DISTINCT subject FROM messages WHERE account_id = ? AND subject LIKE ? LIMIT 3",
                 )
-                .bind(&account.id)
+                .bind(account_id)
                 .bind(&pattern)
-                .fetch_all(pool.inner())
+                .fetch_all(pool)
                 .await
                 .unwrap_or_default();
 
@@ -1581,30 +1707,45 @@ pub async fn get_search_suggestions(
 }
 
 #[tauri::command]
-pub async fn save_recent_search(app_handle: tauri::AppHandle, query: String) -> Result<(), String> {
+pub async fn get_search_suggestions(
+    app_handle: tauri::AppHandle,
+    operator: Option<String>,
+    value: String,
+    full_query: String,
+) -> Result<Vec<SearchSuggestion>, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+    get_search_suggestions_inner(pool.inner(), &account.id, operator.as_deref(), &value, &full_query).await
+}
 
+pub(crate) async fn save_recent_search_inner(pool: &sqlx::SqlitePool, query: &str) -> Result<(), String> {
     #[derive(sqlx::FromRow)]
     struct SettingRow {
         value: String,
     }
     let mut recents: Vec<String> =
         sqlx::query_as::<_, SettingRow>("SELECT value FROM settings WHERE key = 'recent_searches'")
-            .fetch_optional(pool.inner())
+            .fetch_optional(pool)
             .await
             .unwrap_or(None)
             .and_then(|r| serde_json::from_str(&r.value).ok())
             .unwrap_or_default();
 
-    recents.retain(|r| r != &query);
-    recents.insert(0, query);
+    recents.retain(|r| r != query);
+    recents.insert(0, query.to_string());
     recents.truncate(10);
 
     let json = serde_json::to_string(&recents).unwrap_or_default();
     sqlx::query("INSERT INTO settings (key, value) VALUES ('recent_searches', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-        .bind(&json).execute(pool.inner()).await.map_err(|e| e.to_string())?;
+        .bind(&json).execute(pool).await.map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn save_recent_search(app_handle: tauri::AppHandle, query: String) -> Result<(), String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    save_recent_search_inner(pool.inner(), &query).await
 }
 
 #[tauri::command]
@@ -1675,13 +1816,11 @@ pub struct ContactSuggestion {
     pub raw: String,
 }
 
-#[tauri::command]
-pub async fn search_contacts(
-    app_handle: tauri::AppHandle,
-    query: String,
+pub(crate) async fn search_contacts_inner(
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
+    query: &str,
 ) -> Result<Vec<ContactSuggestion>, String> {
-    let pool = app_handle.state::<sqlx::SqlitePool>();
-    let account = get_active_account(pool.inner()).await?;
     let pattern = format!("%{}%", query);
 
     #[derive(sqlx::FromRow)]
@@ -1695,9 +1834,9 @@ pub async fn search_contacts(
          SELECT DISTINCT recipients as contact FROM messages WHERE account_id = ? AND recipients LIKE ?
          LIMIT 20"
     )
-    .bind(&account.id).bind(&pattern)
-    .bind(&account.id).bind(&pattern)
-    .fetch_all(pool.inner()).await.unwrap_or_default();
+    .bind(account_id).bind(&pattern)
+    .bind(account_id).bind(&pattern)
+    .fetch_all(pool).await.unwrap_or_default();
 
     let mut seen = std::collections::HashSet::new();
     let mut suggestions = Vec::new();
@@ -1732,6 +1871,16 @@ pub async fn search_contacts(
     suggestions.sort_by(|a, b| a.email.len().cmp(&b.email.len()));
     suggestions.truncate(10);
     Ok(suggestions)
+}
+
+#[tauri::command]
+pub async fn search_contacts(
+    app_handle: tauri::AppHandle,
+    query: String,
+) -> Result<Vec<ContactSuggestion>, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+    search_contacts_inner(pool.inner(), &account.id, &query).await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1854,11 +2003,16 @@ pub async fn get_upcoming_events(
     crate::calendar_api::get_upcoming_events(&account.access_token).await
 }
 
-#[tauri::command]
-pub async fn open_external_url(url: String) -> Result<(), String> {
+pub(crate) fn validate_external_url(url: &str) -> Result<(), String> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err("Only http and https URLs are allowed".to_string());
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn open_external_url(url: String) -> Result<(), String> {
+    validate_external_url(&url)?;
     tauri_plugin_opener::open_url(&url, None::<&str>)
         .map_err(|e| format!("Failed to open URL: {}", e))
 }
@@ -1871,49 +2025,35 @@ mod tests {
     use std::env;
     use std::str::FromStr;
 
-    // Helper to create an in-memory DB with schema for refresh and FTS5 tests.
-    // Using sqlite::memory: avoids tempdir lifetime issues.
     async fn setup_test_db() -> SqlitePool {
         let options = SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
         let pool = SqlitePool::connect_with(options).await.unwrap();
-        // Schema: accounts, messages, and FTS5 virtual table
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS accounts (
-                id TEXT PRIMARY KEY,
-                email TEXT,
-                display_name TEXT,
-                avatar_url TEXT,
-                token_expiry INTEGER,
-                is_active INTEGER DEFAULT 1,
-                created_at INTEGER
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS messages (
-                id TEXT PRIMARY KEY,
-                thread_id TEXT,
-                account_id TEXT,
-                sender TEXT,
-                recipients TEXT,
-                subject TEXT,
-                snippet TEXT,
-                internal_date INTEGER,
-                body_plain TEXT,
-                body_html TEXT,
-                has_attachments INTEGER
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(sender, subject, body_plain, content=messages, content_rowid=rowid)"
-        ).execute(&pool).await.unwrap();
+        crate::db::apply_schema(&pool).await.unwrap();
         pool
     }
+
+    // Helper to insert an account
+    async fn insert_account(pool: &SqlitePool, id: &str, email: &str, display_name: &str, is_active: i32, created_at: i64) {
+        sqlx::query("INSERT INTO accounts (id, email, display_name, avatar_url, token_expiry, is_active, created_at) VALUES (?, ?, ?, '', 9999999999, ?, ?)")
+            .bind(id).bind(email).bind(display_name).bind(is_active).bind(created_at)
+            .execute(pool).await.unwrap();
+    }
+
+    // Helper to insert a message
+    async fn insert_message(pool: &SqlitePool, id: &str, thread_id: &str, account_id: &str, sender: &str, recipients: &str, subject: &str, internal_date: i64) {
+        sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments) VALUES (?, ?, ?, ?, ?, ?, '', ?, '', '', 0)")
+            .bind(id).bind(thread_id).bind(account_id).bind(sender).bind(recipients).bind(subject).bind(internal_date)
+            .execute(pool).await.unwrap();
+    }
+
+    // Helper to insert a thread
+    async fn insert_thread(pool: &SqlitePool, id: &str, account_id: &str) {
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES (?, ?, '', '', 0)")
+            .bind(id).bind(account_id)
+            .execute(pool).await.unwrap();
+    }
+
+    // ===== Existing tests (kept) =====
 
     #[test]
     fn test_clean_sender_name() {
@@ -1934,7 +2074,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_refresh_and_update_missing_client_id() {
-        // Ensure env vars are not set
         env::remove_var("RUSTYMAIL_CLIENT_ID");
         env::set_var("RUSTYMAIL_CLIENT_SECRET", "dummy_secret");
         let pool = setup_test_db().await;
@@ -1953,57 +2092,28 @@ mod tests {
 
     #[tokio::test]
     async fn test_refresh_and_update_http_error() {
-        // Set valid env vars but the request will fail because we are hitting the real Google endpoint.
-        // The function should return an error indicating a network failure or token refresh failure.
         env::set_var("RUSTYMAIL_CLIENT_ID", "dummy_id");
         env::set_var("RUSTYMAIL_CLIENT_SECRET", "dummy_secret");
         let pool = setup_test_db().await;
         let result = refresh_and_update(&pool, "acc1", "refresh_token").await;
-        // The exact error string may vary; we just ensure it is an Err.
         assert!(result.is_err());
     }
+
     #[tokio::test]
     async fn test_search_messages_fts5() {
-        // Setup DB with messages and FTS5 virtual table
         let pool = setup_test_db().await;
-        // Insert dummy account
         sqlx::query("INSERT INTO accounts (id) VALUES (?)")
-            .bind("acc1")
-            .execute(&pool)
-            .await
-            .unwrap();
-        // Insert a message with searchable content
+            .bind("acc1").execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-            .bind("msg1")
-            .bind("thread1")
-            .bind("acc1")
-            .bind("sender@example.com")
-            .bind("recipient@example.com")
-            .bind("Test Subject")
-            .bind("snippet")
-            .bind(0i64)
-            .bind("This is a searchterm inside the body")
-            .bind("")
-            .bind(0)
-            .execute(&pool)
-            .await
-            .unwrap();
-        // FTS5 external-content tables must be populated manually after insert
+            .bind("msg1").bind("thread1").bind("acc1").bind("sender@example.com").bind("recipient@example.com")
+            .bind("Test Subject").bind("snippet").bind(0i64).bind("This is a searchterm inside the body").bind("").bind(0)
+            .execute(&pool).await.unwrap();
         sqlx::query("INSERT OR REPLACE INTO messages_fts(rowid, sender, subject, body_plain) SELECT rowid, sender, subject, body_plain FROM messages WHERE id = ?")
-            .bind("msg1")
-            .execute(&pool)
-            .await
-            .unwrap();
-        // Run the same query as in search_messages for FTS5
+            .bind("msg1").execute(&pool).await.unwrap();
         let fts_query = "searchterm*".to_string();
         let rows: Vec<(String,)> = sqlx::query_as(
             "SELECT DISTINCT m.thread_id FROM messages m INNER JOIN messages_fts ON messages_fts.rowid = m.rowid WHERE messages_fts MATCH ? AND m.account_id = ?"
-        )
-        .bind(&fts_query)
-        .bind("acc1")
-        .fetch_all(&pool)
-        .await
-        .unwrap();
+        ).bind(&fts_query).bind("acc1").fetch_all(&pool).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0, "thread1");
     }
@@ -2014,13 +2124,1299 @@ mod tests {
         #[derive(sqlx::FromRow)]
         struct ColInfo { name: String }
         let cols: Vec<ColInfo> = sqlx::query_as("PRAGMA table_info(accounts)")
-            .fetch_all(&pool)
-            .await
-            .unwrap();
+            .fetch_all(&pool).await.unwrap();
         let col_names: Vec<&str> = cols.iter().map(|c| c.name.as_str()).collect();
         assert!(!col_names.contains(&"access_token"), "access_token should not be in accounts table");
         assert!(!col_names.contains(&"refresh_token"), "refresh_token should not be in accounts table");
         assert!(col_names.contains(&"id"));
         assert!(col_names.contains(&"token_expiry"));
+    }
+
+    // ===== parse_query_operators tests =====
+
+    #[test]
+    fn test_parse_query_simple_free_text() {
+        let p = parse_query_operators("hello world");
+        assert_eq!(p.free_text, "hello world");
+        assert!(p.from.is_none());
+        assert!(p.to.is_none());
+        assert!(p.subject.is_none());
+        assert!(!p.has_attachment);
+        assert!(p.is_unread.is_none());
+    }
+
+    #[test]
+    fn test_parse_query_from_operator() {
+        let p = parse_query_operators("from:alice@example.com");
+        assert_eq!(p.from, Some("alice@example.com".to_string()));
+        assert!(p.free_text.is_empty());
+    }
+
+    #[test]
+    fn test_parse_query_to_operator() {
+        let p = parse_query_operators("to:bob@example.com");
+        assert_eq!(p.to, Some("bob@example.com".to_string()));
+        assert!(p.free_text.is_empty());
+    }
+
+    #[test]
+    fn test_parse_query_subject_operator() {
+        let p = parse_query_operators("subject:meeting");
+        assert_eq!(p.subject, Some("meeting".to_string()));
+        assert!(p.free_text.is_empty());
+    }
+
+    #[test]
+    fn test_parse_query_quoted_values() {
+        let p = parse_query_operators("from:\"Alice Doe\"");
+        assert_eq!(p.from, Some("Alice Doe".to_string()));
+    }
+
+    #[test]
+    fn test_parse_query_has_attachment() {
+        let p = parse_query_operators("has:attachment");
+        assert!(p.has_attachment);
+        assert!(p.free_text.is_empty());
+    }
+
+    #[test]
+    fn test_parse_query_is_unread() {
+        let p = parse_query_operators("is:unread");
+        assert_eq!(p.is_unread, Some(true));
+    }
+
+    #[test]
+    fn test_parse_query_is_read() {
+        let p = parse_query_operators("is:read");
+        assert_eq!(p.is_unread, Some(false));
+    }
+
+    #[test]
+    fn test_parse_query_mixed_operators() {
+        let p = parse_query_operators("from:alice subject:meeting hello");
+        assert_eq!(p.from, Some("alice".to_string()));
+        assert_eq!(p.subject, Some("meeting".to_string()));
+        assert_eq!(p.free_text, "hello");
+    }
+
+    #[test]
+    fn test_parse_query_passthrough_operators() {
+        let p = parse_query_operators("before:2024/01/01");
+        assert!(p.free_text.contains("before:2024/01/01"));
+        assert!(p.from.is_none());
+    }
+
+    #[test]
+    fn test_parse_query_has_link_passthrough() {
+        let p = parse_query_operators("has:link");
+        assert!(p.free_text.contains("has:link"));
+    }
+
+    #[test]
+    fn test_parse_query_empty_operator_value() {
+        let p = parse_query_operators("from: something");
+        // "from:" with empty value is not set
+        assert!(p.from.is_none());
+        assert_eq!(p.free_text, "something");
+    }
+
+    // ===== open_external_url validation tests =====
+
+    #[test]
+    fn test_validate_url_javascript_rejected() {
+        let result = validate_external_url("javascript:alert(1)");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Only http and https URLs are allowed"));
+    }
+
+    #[test]
+    fn test_validate_url_ftp_rejected() {
+        let result = validate_external_url("ftp://example.com");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Only http and https URLs are allowed"));
+    }
+
+    #[test]
+    fn test_validate_url_empty_rejected() {
+        let result = validate_external_url("");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Only http and https URLs are allowed"));
+    }
+
+    #[test]
+    fn test_validate_url_data_rejected() {
+        assert!(validate_external_url("data:text/html,<h1>hi</h1>").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_http_accepted() {
+        assert!(validate_external_url("http://example.com").is_ok());
+    }
+
+    #[test]
+    fn test_validate_url_https_accepted() {
+        assert!(validate_external_url("https://example.com").is_ok());
+    }
+
+    // ===== get_accounts_inner tests =====
+
+    #[tokio::test]
+    async fn test_get_accounts_inner_empty() {
+        let pool = setup_test_db().await;
+        let accounts = get_accounts_inner(&pool).await.unwrap();
+        assert!(accounts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_accounts_inner_returns_ordered() {
+        let pool = setup_test_db().await;
+        insert_account(&pool, "acc2", "b@test.com", "B User", 0, 200).await;
+        insert_account(&pool, "acc1", "a@test.com", "A User", 1, 100).await;
+
+        let accounts = get_accounts_inner(&pool).await.unwrap();
+        assert_eq!(accounts.len(), 2);
+        // Ordered by created_at ASC
+        assert_eq!(accounts[0].id, "acc1");
+        assert_eq!(accounts[0].email, "a@test.com");
+        assert!(accounts[0].is_active);
+        assert_eq!(accounts[1].id, "acc2");
+        assert!(!accounts[1].is_active);
+    }
+
+    // ===== get_setting_inner / update_setting_inner tests =====
+
+    #[tokio::test]
+    async fn test_get_setting_inner_default_values() {
+        let pool = setup_test_db().await;
+        let theme = get_setting_inner(&pool, "theme").await.unwrap();
+        assert_eq!(theme, "system");
+        let density = get_setting_inner(&pool, "density").await.unwrap();
+        assert_eq!(density, "default");
+    }
+
+    #[tokio::test]
+    async fn test_get_setting_inner_nonexistent() {
+        let pool = setup_test_db().await;
+        let val = get_setting_inner(&pool, "nonexistent_key").await.unwrap();
+        assert_eq!(val, "");
+    }
+
+    #[tokio::test]
+    async fn test_update_setting_inner() {
+        let pool = setup_test_db().await;
+        let original = get_setting_inner(&pool, "theme").await.unwrap();
+        assert_eq!(original, "system");
+
+        update_setting_inner(&pool, "theme", "dark").await.unwrap();
+        let updated = get_setting_inner(&pool, "theme").await.unwrap();
+        assert_eq!(updated, "dark");
+    }
+
+    #[tokio::test]
+    async fn test_update_setting_inner_creates_new_key() {
+        let pool = setup_test_db().await;
+        update_setting_inner(&pool, "custom_key", "custom_value").await.unwrap();
+        let val = get_setting_inner(&pool, "custom_key").await.unwrap();
+        assert_eq!(val, "custom_value");
+    }
+
+    // ===== get_labels_inner tests =====
+
+    #[tokio::test]
+    async fn test_get_labels_inner_empty() {
+        let pool = setup_test_db().await;
+        let labels = get_labels_inner(&pool, "acc1").await.unwrap();
+        assert!(labels.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_labels_inner_filters_hidden_labels() {
+        let pool = setup_test_db().await;
+        // Insert labels including ones that should be filtered
+        for (id, name, ltype) in &[
+            ("INBOX", "INBOX", "system"),
+            ("SENT", "SENT", "system"),
+            ("CHAT", "CHAT", "system"),
+            ("VOICEMAIL", "VOICEMAIL", "system"),
+            ("YELLOW_STAR", "YELLOW_STAR", "system"),
+            ("Label_1", "Work", "user"),
+        ] {
+            sqlx::query("INSERT INTO labels (id, account_id, name, type, unread_count) VALUES (?, 'acc1', ?, ?, 0)")
+                .bind(id).bind(name).bind(ltype)
+                .execute(&pool).await.unwrap();
+        }
+
+        let labels = get_labels_inner(&pool, "acc1").await.unwrap();
+        let label_ids: Vec<&str> = labels.iter().map(|l| l.id.as_str()).collect();
+        assert!(label_ids.contains(&"INBOX"));
+        assert!(label_ids.contains(&"SENT"));
+        assert!(label_ids.contains(&"Label_1"));
+        assert!(!label_ids.contains(&"CHAT"));
+        assert!(!label_ids.contains(&"VOICEMAIL"));
+        assert!(!label_ids.contains(&"YELLOW_STAR"));
+    }
+
+    #[tokio::test]
+    async fn test_get_labels_inner_ordering() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO labels (id, account_id, name, type, unread_count) VALUES ('Label_Z', 'acc1', 'Zebra', 'user', 0)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO labels (id, account_id, name, type, unread_count) VALUES ('INBOX', 'acc1', 'INBOX', 'system', 5)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO labels (id, account_id, name, type, unread_count) VALUES ('Label_A', 'acc1', 'Alpha', 'user', 0)")
+            .execute(&pool).await.unwrap();
+
+        let labels = get_labels_inner(&pool, "acc1").await.unwrap();
+        // System labels first, then user labels alphabetically
+        assert_eq!(labels[0].id, "INBOX");
+        assert_eq!(labels[1].id, "Label_A");
+        assert_eq!(labels[2].id, "Label_Z");
+    }
+
+    #[tokio::test]
+    async fn test_get_labels_inner_account_isolation() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO labels (id, account_id, name, type, unread_count) VALUES ('INBOX', 'acc1', 'INBOX', 'system', 3)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO labels (id, account_id, name, type, unread_count) VALUES ('INBOX2', 'acc2', 'INBOX', 'system', 1)")
+            .execute(&pool).await.unwrap();
+
+        let labels = get_labels_inner(&pool, "acc1").await.unwrap();
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].unread_count, 3);
+    }
+
+    // ===== get_threads_inner tests =====
+
+    #[tokio::test]
+    async fn test_get_threads_inner_empty() {
+        let pool = setup_test_db().await;
+        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        assert!(threads.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_threads_inner_with_messages() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_thread(&pool, "t2", "acc1").await;
+        insert_message(&pool, "m1", "t1", "acc1", "Alice <alice@test.com>", "bob@test.com", "Hello", 1000).await;
+        insert_message(&pool, "m2", "t2", "acc1", "Bob <bob@test.com>", "alice@test.com", "World", 2000).await;
+
+        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        assert_eq!(threads.len(), 2);
+        // Ordered by most recent message first
+        assert_eq!(threads[0].id, "t2");
+        assert_eq!(threads[0].sender, "Bob");
+        assert_eq!(threads[0].subject, "World");
+        assert_eq!(threads[1].id, "t1");
+        assert_eq!(threads[1].sender, "Alice");
+    }
+
+    #[tokio::test]
+    async fn test_get_threads_inner_label_filtering() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_thread(&pool, "t2", "acc1").await;
+        insert_message(&pool, "m1", "t1", "acc1", "sender@test.com", "", "Sub1", 1000).await;
+        insert_message(&pool, "m2", "t2", "acc1", "sender@test.com", "", "Sub2", 2000).await;
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('t1', 'INBOX')")
+            .execute(&pool).await.unwrap();
+
+        let inbox_threads = get_threads_inner(&pool, "acc1", Some("INBOX"), 0, 50).await.unwrap();
+        assert_eq!(inbox_threads.len(), 1);
+        assert_eq!(inbox_threads[0].id, "t1");
+
+        let all_threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        assert_eq!(all_threads.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_threads_inner_starred_flag() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "", "Sub", 1000).await;
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('t1', 'STARRED')")
+            .execute(&pool).await.unwrap();
+
+        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        assert_eq!(threads.len(), 1);
+        assert!(threads[0].starred);
+    }
+
+    #[tokio::test]
+    async fn test_get_threads_inner_pagination() {
+        let pool = setup_test_db().await;
+        for i in 0..5 {
+            let tid = format!("t{}", i);
+            let mid = format!("m{}", i);
+            insert_thread(&pool, &tid, "acc1").await;
+            insert_message(&pool, &mid, &tid, "acc1", "s@t.com", "", "Sub", (i * 1000) as i64).await;
+        }
+
+        let page1 = get_threads_inner(&pool, "acc1", None, 0, 2).await.unwrap();
+        assert_eq!(page1.len(), 2);
+        let page2 = get_threads_inner(&pool, "acc1", None, 2, 2).await.unwrap();
+        assert_eq!(page2.len(), 2);
+        // Pages should not overlap
+        assert_ne!(page1[0].id, page2[0].id);
+    }
+
+    #[tokio::test]
+    async fn test_get_threads_inner_no_subject_fallback() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        // Thread with no messages -> subject should be "No Subject"
+        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        assert_eq!(threads[0].subject, "No Subject");
+    }
+
+    // ===== get_messages_inner tests =====
+
+    #[tokio::test]
+    async fn test_get_messages_inner_empty() {
+        let pool = setup_test_db().await;
+        let messages = get_messages_inner(&pool, "nonexistent").await.unwrap();
+        assert!(messages.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_messages_inner_ordered_by_date() {
+        let pool = setup_test_db().await;
+        insert_message(&pool, "m2", "t1", "acc1", "bob@test.com", "alice@test.com", "Reply", 2000).await;
+        insert_message(&pool, "m1", "t1", "acc1", "alice@test.com", "bob@test.com", "Original", 1000).await;
+
+        let messages = get_messages_inner(&pool, "t1").await.unwrap();
+        assert_eq!(messages.len(), 2);
+        // ASC order by internal_date
+        assert_eq!(messages[0].id, "m1");
+        assert_eq!(messages[0].subject, "Original");
+        assert_eq!(messages[1].id, "m2");
+        assert_eq!(messages[1].subject, "Reply");
+    }
+
+    #[tokio::test]
+    async fn test_get_messages_inner_draft_flag() {
+        let pool = setup_test_db().await;
+        insert_message(&pool, "m1", "t1", "acc1", "alice@test.com", "", "Draft msg", 1000).await;
+        sqlx::query("INSERT INTO message_labels (message_id, label_id) VALUES ('m1', 'DRAFT')")
+            .execute(&pool).await.unwrap();
+
+        let messages = get_messages_inner(&pool, "t1").await.unwrap();
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].is_draft);
+    }
+
+    #[tokio::test]
+    async fn test_get_messages_inner_non_draft() {
+        let pool = setup_test_db().await;
+        insert_message(&pool, "m1", "t1", "acc1", "alice@test.com", "", "Regular", 1000).await;
+
+        let messages = get_messages_inner(&pool, "t1").await.unwrap();
+        assert_eq!(messages.len(), 1);
+        assert!(!messages[0].is_draft);
+    }
+
+    // ===== get_hydration_progress_inner tests =====
+
+    #[tokio::test]
+    async fn test_get_hydration_progress_inner_empty() {
+        let pool = setup_test_db().await;
+        let progress = get_hydration_progress_inner(&pool, "acc1").await.unwrap();
+        assert_eq!(progress.total, 0);
+        assert_eq!(progress.hydrated, 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_hydration_progress_inner_partial() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_thread(&pool, "t2", "acc1").await;
+        insert_thread(&pool, "t3", "acc1").await;
+        // Only t1 has messages (hydrated)
+        insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "", "Sub", 1000).await;
+
+        let progress = get_hydration_progress_inner(&pool, "acc1").await.unwrap();
+        assert_eq!(progress.total, 3);
+        assert_eq!(progress.hydrated, 1);
+    }
+
+    #[tokio::test]
+    async fn test_get_hydration_progress_inner_all_hydrated() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_thread(&pool, "t2", "acc1").await;
+        insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "", "Sub", 1000).await;
+        insert_message(&pool, "m2", "t2", "acc1", "s@t.com", "", "Sub", 2000).await;
+
+        let progress = get_hydration_progress_inner(&pool, "acc1").await.unwrap();
+        assert_eq!(progress.total, 2);
+        assert_eq!(progress.hydrated, 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_hydration_progress_inner_account_isolation() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_thread(&pool, "t2", "acc2").await;
+        insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "", "Sub", 1000).await;
+
+        let progress = get_hydration_progress_inner(&pool, "acc1").await.unwrap();
+        assert_eq!(progress.total, 1);
+        assert_eq!(progress.hydrated, 1);
+    }
+
+    // ===== search_contacts_inner tests =====
+
+    #[tokio::test]
+    async fn test_search_contacts_inner_empty() {
+        let pool = setup_test_db().await;
+        let contacts = search_contacts_inner(&pool, "acc1", "alice").await.unwrap();
+        assert!(contacts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_search_contacts_inner_finds_senders() {
+        let pool = setup_test_db().await;
+        insert_message(&pool, "m1", "t1", "acc1", "Alice Doe <alice@example.com>", "bob@example.com", "Hi", 1000).await;
+
+        let contacts = search_contacts_inner(&pool, "acc1", "alice").await.unwrap();
+        assert!(!contacts.is_empty());
+        assert_eq!(contacts[0].email, "alice@example.com");
+        assert_eq!(contacts[0].name, "Alice Doe");
+    }
+
+    #[tokio::test]
+    async fn test_search_contacts_inner_finds_recipients() {
+        let pool = setup_test_db().await;
+        insert_message(&pool, "m1", "t1", "acc1", "someone@test.com", "Bob Smith <bob@example.com>", "Hi", 1000).await;
+
+        let contacts = search_contacts_inner(&pool, "acc1", "bob").await.unwrap();
+        assert!(!contacts.is_empty());
+        assert_eq!(contacts[0].email, "bob@example.com");
+    }
+
+    #[tokio::test]
+    async fn test_search_contacts_inner_deduplication() {
+        let pool = setup_test_db().await;
+        insert_message(&pool, "m1", "t1", "acc1", "alice@example.com", "", "Hi", 1000).await;
+        insert_message(&pool, "m2", "t2", "acc1", "alice@example.com", "", "Hi again", 2000).await;
+
+        let contacts = search_contacts_inner(&pool, "acc1", "alice").await.unwrap();
+        assert_eq!(contacts.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_search_contacts_inner_sorted_by_email_length() {
+        let pool = setup_test_db().await;
+        insert_message(&pool, "m1", "t1", "acc1", "alice_longname@verylongdomain.com", "", "Hi", 1000).await;
+        insert_message(&pool, "m2", "t2", "acc1", "alice@short.com", "", "Hi", 2000).await;
+
+        let contacts = search_contacts_inner(&pool, "acc1", "alice").await.unwrap();
+        assert_eq!(contacts.len(), 2);
+        // Shorter email first
+        assert!(contacts[0].email.len() <= contacts[1].email.len());
+    }
+
+    // ===== save_recent_search_inner tests =====
+
+    #[tokio::test]
+    async fn test_save_recent_search_inner_stores_search() {
+        let pool = setup_test_db().await;
+        save_recent_search_inner(&pool, "test query").await.unwrap();
+
+        let val = get_setting_inner(&pool, "recent_searches").await.unwrap();
+        let recents: Vec<String> = serde_json::from_str(&val).unwrap();
+        assert_eq!(recents.len(), 1);
+        assert_eq!(recents[0], "test query");
+    }
+
+    #[tokio::test]
+    async fn test_save_recent_search_inner_ordering() {
+        let pool = setup_test_db().await;
+        save_recent_search_inner(&pool, "first").await.unwrap();
+        save_recent_search_inner(&pool, "second").await.unwrap();
+
+        let val = get_setting_inner(&pool, "recent_searches").await.unwrap();
+        let recents: Vec<String> = serde_json::from_str(&val).unwrap();
+        assert_eq!(recents[0], "second");
+        assert_eq!(recents[1], "first");
+    }
+
+    #[tokio::test]
+    async fn test_save_recent_search_inner_deduplication() {
+        let pool = setup_test_db().await;
+        save_recent_search_inner(&pool, "query").await.unwrap();
+        save_recent_search_inner(&pool, "other").await.unwrap();
+        save_recent_search_inner(&pool, "query").await.unwrap();
+
+        let val = get_setting_inner(&pool, "recent_searches").await.unwrap();
+        let recents: Vec<String> = serde_json::from_str(&val).unwrap();
+        assert_eq!(recents.len(), 2);
+        assert_eq!(recents[0], "query"); // Most recent first
+        assert_eq!(recents[1], "other");
+    }
+
+    #[tokio::test]
+    async fn test_save_recent_search_inner_truncation() {
+        let pool = setup_test_db().await;
+        for i in 0..15 {
+            save_recent_search_inner(&pool, &format!("query_{}", i)).await.unwrap();
+        }
+
+        let val = get_setting_inner(&pool, "recent_searches").await.unwrap();
+        let recents: Vec<String> = serde_json::from_str(&val).unwrap();
+        assert_eq!(recents.len(), 10); // Truncated to 10
+        assert_eq!(recents[0], "query_14"); // Most recent
+    }
+
+    // ===== get_search_suggestions_inner tests =====
+
+    #[tokio::test]
+    async fn test_get_search_suggestions_inner_from_operator() {
+        let pool = setup_test_db().await;
+        insert_message(&pool, "m1", "t1", "acc1", "Alice <alice@example.com>", "", "Subject", 1000).await;
+
+        let suggestions = get_search_suggestions_inner(&pool, "acc1", Some("from"), "alice", "").await.unwrap();
+        assert!(!suggestions.is_empty());
+        assert_eq!(suggestions[0].kind, "contact");
+    }
+
+    #[tokio::test]
+    async fn test_get_search_suggestions_inner_subject_operator() {
+        let pool = setup_test_db().await;
+        insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "", "Weekly Meeting Notes", 1000).await;
+
+        let suggestions = get_search_suggestions_inner(&pool, "acc1", Some("subject"), "meeting", "").await.unwrap();
+        assert!(!suggestions.is_empty());
+        assert_eq!(suggestions[0].kind, "subject");
+        assert!(suggestions[0].text.contains("Weekly Meeting Notes"));
+    }
+
+    #[tokio::test]
+    async fn test_get_search_suggestions_inner_free_text_with_recents() {
+        let pool = setup_test_db().await;
+        save_recent_search_inner(&pool, "project alpha").await.unwrap();
+        save_recent_search_inner(&pool, "budget report").await.unwrap();
+
+        let suggestions = get_search_suggestions_inner(&pool, "acc1", None, "", "").await.unwrap();
+        let recent_suggestions: Vec<&SearchSuggestion> = suggestions.iter().filter(|s| s.kind == "recent").collect();
+        assert_eq!(recent_suggestions.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_search_suggestions_inner_free_text_filters_recents() {
+        let pool = setup_test_db().await;
+        save_recent_search_inner(&pool, "project alpha").await.unwrap();
+        save_recent_search_inner(&pool, "budget report").await.unwrap();
+
+        let suggestions = get_search_suggestions_inner(&pool, "acc1", None, "", "project").await.unwrap();
+        let recent_suggestions: Vec<&SearchSuggestion> = suggestions.iter().filter(|s| s.kind == "recent").collect();
+        assert_eq!(recent_suggestions.len(), 1);
+        assert!(recent_suggestions[0].text.contains("project"));
+    }
+
+    #[tokio::test]
+    async fn test_get_search_suggestions_inner_free_text_contacts_and_subjects() {
+        let pool = setup_test_db().await;
+        insert_message(&pool, "m1", "t1", "acc1", "Alice <alice@example.com>", "", "Budget Report Q4", 1000).await;
+
+        let suggestions = get_search_suggestions_inner(&pool, "acc1", None, "", "budget").await.unwrap();
+        let contact_count = suggestions.iter().filter(|s| s.kind == "contact").count();
+        let subject_count = suggestions.iter().filter(|s| s.kind == "subject").count();
+        // "budget" is >= 2 chars, so should search contacts and subjects
+        assert!(contact_count > 0 || subject_count > 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_search_suggestions_inner_to_operator() {
+        let pool = setup_test_db().await;
+        insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "Bob <bob@example.com>", "Hi", 1000).await;
+
+        let suggestions = get_search_suggestions_inner(&pool, "acc1", Some("to"), "bob", "").await.unwrap();
+        assert!(!suggestions.is_empty());
+        assert_eq!(suggestions[0].kind, "contact");
+    }
+
+    #[tokio::test]
+    async fn test_get_search_suggestions_inner_empty_value() {
+        let pool = setup_test_db().await;
+        let suggestions = get_search_suggestions_inner(&pool, "acc1", Some("from"), "", "").await.unwrap();
+        assert!(suggestions.is_empty());
+    }
+
+    // ===== switch_account_inner tests =====
+
+    #[tokio::test]
+    async fn test_switch_account_inner() {
+        let pool = setup_test_db().await;
+        insert_account(&pool, "acc1", "a@test.com", "A", 1, 100).await;
+        insert_account(&pool, "acc2", "b@test.com", "B", 0, 200).await;
+
+        switch_account_inner(&pool, "acc2").await.unwrap();
+
+        let accounts = get_accounts_inner(&pool).await.unwrap();
+        let acc1 = accounts.iter().find(|a| a.id == "acc1").unwrap();
+        let acc2 = accounts.iter().find(|a| a.id == "acc2").unwrap();
+        assert!(!acc1.is_active);
+        assert!(acc2.is_active);
+    }
+
+    #[tokio::test]
+    async fn test_switch_account_inner_idempotent() {
+        let pool = setup_test_db().await;
+        insert_account(&pool, "acc1", "a@test.com", "A", 1, 100).await;
+
+        switch_account_inner(&pool, "acc1").await.unwrap();
+
+        let accounts = get_accounts_inner(&pool).await.unwrap();
+        assert!(accounts[0].is_active);
+    }
+
+    // ===== remove_account_inner tests =====
+
+    #[tokio::test]
+    async fn test_remove_account_inner_cleans_all_data() {
+        let pool = setup_test_db().await;
+        insert_account(&pool, "acc1", "a@test.com", "A", 1, 100).await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "", "Sub", 1000).await;
+        sqlx::query("INSERT INTO labels (id, account_id, name, type, unread_count) VALUES ('INBOX', 'acc1', 'INBOX', 'system', 0)")
+            .execute(&pool).await.unwrap();
+
+        remove_account_inner(&pool, "acc1").await.unwrap();
+
+        let accounts = get_accounts_inner(&pool).await.unwrap();
+        assert!(accounts.is_empty());
+
+        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        assert!(threads.is_empty());
+
+        let messages = get_messages_inner(&pool, "t1").await.unwrap();
+        assert!(messages.is_empty());
+
+        let labels = get_labels_inner(&pool, "acc1").await.unwrap();
+        assert!(labels.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_remove_account_inner_activates_remaining() {
+        let pool = setup_test_db().await;
+        insert_account(&pool, "acc1", "a@test.com", "A", 1, 100).await;
+        insert_account(&pool, "acc2", "b@test.com", "B", 0, 200).await;
+
+        remove_account_inner(&pool, "acc1").await.unwrap();
+
+        let accounts = get_accounts_inner(&pool).await.unwrap();
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].id, "acc2");
+        assert!(accounts[0].is_active);
+    }
+
+    #[tokio::test]
+    async fn test_remove_account_inner_preserves_other_account_data() {
+        let pool = setup_test_db().await;
+        insert_account(&pool, "acc1", "a@test.com", "A", 1, 100).await;
+        insert_account(&pool, "acc2", "b@test.com", "B", 0, 200).await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_thread(&pool, "t2", "acc2").await;
+        insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "", "Sub", 1000).await;
+        insert_message(&pool, "m2", "t2", "acc2", "s@t.com", "", "Sub", 2000).await;
+
+        remove_account_inner(&pool, "acc1").await.unwrap();
+
+        let threads = get_threads_inner(&pool, "acc2", None, 0, 50).await.unwrap();
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].id, "t2");
+
+        let messages = get_messages_inner(&pool, "t2").await.unwrap();
+        assert_eq!(messages.len(), 1);
+    }
+
+    // ===== get_active_account_row tests =====
+
+    #[tokio::test]
+    async fn test_get_active_account_row_returns_active() {
+        let pool = setup_test_db().await;
+        insert_account(&pool, "acc1", "a@test.com", "A", 1, 100).await;
+        insert_account(&pool, "acc2", "b@test.com", "B", 0, 200).await;
+
+        let (id, expiry) = get_active_account_row(&pool).await.unwrap();
+        assert_eq!(id, "acc1");
+        assert!(expiry.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_get_active_account_row_no_active() {
+        let pool = setup_test_db().await;
+        insert_account(&pool, "acc1", "a@test.com", "A", 0, 100).await;
+
+        let result = get_active_account_row(&pool).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("No active account found"));
+    }
+
+    #[tokio::test]
+    async fn test_get_active_account_row_empty_db() {
+        let pool = setup_test_db().await;
+        let result = get_active_account_row(&pool).await;
+        assert!(result.is_err());
+    }
+
+    // ===== check_auth_status_db tests =====
+
+    #[tokio::test]
+    async fn test_check_auth_status_db_with_active() {
+        let pool = setup_test_db().await;
+        insert_account(&pool, "acc1", "a@test.com", "A", 1, 100).await;
+
+        let result = check_auth_status_db(&pool).await.unwrap();
+        assert_eq!(result, Some("acc1".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_check_auth_status_db_no_active() {
+        let pool = setup_test_db().await;
+        insert_account(&pool, "acc1", "a@test.com", "A", 0, 100).await;
+
+        let result = check_auth_status_db(&pool).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_check_auth_status_db_empty() {
+        let pool = setup_test_db().await;
+        let result = check_auth_status_db(&pool).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_check_auth_status_db_multiple_accounts_one_active() {
+        let pool = setup_test_db().await;
+        insert_account(&pool, "acc1", "a@test.com", "A", 0, 100).await;
+        insert_account(&pool, "acc2", "b@test.com", "B", 1, 200).await;
+        insert_account(&pool, "acc3", "c@test.com", "C", 0, 300).await;
+
+        let result = check_auth_status_db(&pool).await.unwrap();
+        assert_eq!(result, Some("acc2".to_string()));
+    }
+
+    // ===== get_settings_inner tests =====
+
+    #[tokio::test]
+    async fn test_get_settings_inner_returns_defaults() {
+        let pool = setup_test_db().await;
+        let settings = get_settings_inner(&pool).await.unwrap();
+        // apply_schema inserts schema_version + 12 defaults = at least 13
+        assert!(settings.len() >= 13, "Expected at least 13 settings, got {}", settings.len());
+
+        let theme = settings.iter().find(|s| s.key == "theme");
+        assert!(theme.is_some());
+        assert_eq!(theme.unwrap().value, "system");
+
+        let density = settings.iter().find(|s| s.key == "density");
+        assert!(density.is_some());
+        assert_eq!(density.unwrap().value, "default");
+    }
+
+    #[tokio::test]
+    async fn test_get_settings_inner_reflects_updates() {
+        let pool = setup_test_db().await;
+        update_setting_inner(&pool, "theme", "dark").await.unwrap();
+
+        let settings = get_settings_inner(&pool).await.unwrap();
+        let theme = settings.iter().find(|s| s.key == "theme").unwrap();
+        assert_eq!(theme.value, "dark");
+    }
+
+    #[tokio::test]
+    async fn test_get_settings_inner_includes_custom_keys() {
+        let pool = setup_test_db().await;
+        update_setting_inner(&pool, "my_custom", "val123").await.unwrap();
+
+        let settings = get_settings_inner(&pool).await.unwrap();
+        let custom = settings.iter().find(|s| s.key == "my_custom");
+        assert!(custom.is_some());
+        assert_eq!(custom.unwrap().value, "val123");
+    }
+
+    // ===== fetch_threads_by_ids tests =====
+
+    #[tokio::test]
+    async fn test_fetch_threads_by_ids_empty_list() {
+        let pool = setup_test_db().await;
+        let result = fetch_threads_by_ids(&pool, &[], "acc1").await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_threads_by_ids_returns_matching() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_thread(&pool, "t2", "acc1").await;
+        insert_thread(&pool, "t3", "acc1").await;
+        insert_message(&pool, "m1", "t1", "acc1", "Alice <alice@test.com>", "", "Hello", 1000).await;
+        insert_message(&pool, "m2", "t2", "acc1", "Bob <bob@test.com>", "", "World", 2000).await;
+        insert_message(&pool, "m3", "t3", "acc1", "Carol <carol@test.com>", "", "Test", 3000).await;
+
+        let ids = vec!["t1".to_string(), "t3".to_string()];
+        let result = fetch_threads_by_ids(&pool, &ids, "acc1").await.unwrap();
+        assert_eq!(result.len(), 2);
+        // Ordered by internal_date DESC
+        assert_eq!(result[0].id, "t3");
+        assert_eq!(result[1].id, "t1");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_threads_by_ids_account_isolation() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_thread(&pool, "t2", "acc2").await;
+        insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "", "Sub", 1000).await;
+        insert_message(&pool, "m2", "t2", "acc2", "s@t.com", "", "Sub", 2000).await;
+
+        let ids = vec!["t1".to_string(), "t2".to_string()];
+        let result = fetch_threads_by_ids(&pool, &ids, "acc1").await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "t1");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_threads_by_ids_with_starred() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "", "Sub", 1000).await;
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('t1', 'STARRED')")
+            .execute(&pool).await.unwrap();
+
+        let ids = vec!["t1".to_string()];
+        let result = fetch_threads_by_ids(&pool, &ids, "acc1").await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].starred);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_threads_by_ids_nonexistent() {
+        let pool = setup_test_db().await;
+        let ids = vec!["nonexistent".to_string()];
+        let result = fetch_threads_by_ids(&pool, &ids, "acc1").await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    // ===== search_messages_local tests =====
+
+    #[tokio::test]
+    async fn test_search_messages_local_empty_db() {
+        let pool = setup_test_db().await;
+        let result = search_messages_local(&pool, "acc1", "hello").await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_search_messages_local_like_fallback_sender() {
+        let pool = setup_test_db().await;
+        insert_message(&pool, "m1", "t1", "acc1", "Alice <alice@example.com>", "bob@test.com", "Hello", 1000).await;
+
+        let result = search_messages_local(&pool, "acc1", "alice").await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "t1");
+    }
+
+    #[tokio::test]
+    async fn test_search_messages_local_like_fallback_subject() {
+        let pool = setup_test_db().await;
+        insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "", "Important Meeting Notes", 1000).await;
+
+        let result = search_messages_local(&pool, "acc1", "meeting").await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "t1");
+    }
+
+    #[tokio::test]
+    async fn test_search_messages_local_fts5() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+            .bind("m1").bind("t1").bind("acc1").bind("s@t.com").bind("")
+            .bind("Subject").bind("").bind(1000i64).bind("unique_searchterm_xyz in body").bind("").bind(0)
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT OR REPLACE INTO messages_fts(rowid, sender, subject, body_plain) SELECT rowid, sender, subject, body_plain FROM messages WHERE id = ?")
+            .bind("m1").execute(&pool).await.unwrap();
+
+        let result = search_messages_local(&pool, "acc1", "unique_searchterm_xyz").await.unwrap();
+        assert!(result.contains(&"t1".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_search_messages_local_from_operator() {
+        let pool = setup_test_db().await;
+        insert_message(&pool, "m1", "t1", "acc1", "Alice <alice@example.com>", "", "Sub", 1000).await;
+        insert_message(&pool, "m2", "t2", "acc1", "Bob <bob@example.com>", "", "Sub", 2000).await;
+
+        let result = search_messages_local(&pool, "acc1", "from:alice").await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "t1");
+    }
+
+    #[tokio::test]
+    async fn test_search_messages_local_subject_operator() {
+        let pool = setup_test_db().await;
+        insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "", "Budget Review", 1000).await;
+        insert_message(&pool, "m2", "t2", "acc1", "s@t.com", "", "Project Update", 2000).await;
+
+        let result = search_messages_local(&pool, "acc1", "subject:budget").await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "t1");
+    }
+
+    #[tokio::test]
+    async fn test_search_messages_local_deduplicates() {
+        let pool = setup_test_db().await;
+        // Two messages in the same thread, both matching
+        insert_message(&pool, "m1", "t1", "acc1", "alice@test.com", "", "Hello Alice", 1000).await;
+        insert_message(&pool, "m2", "t1", "acc1", "alice@test.com", "", "Reply Alice", 2000).await;
+
+        let result = search_messages_local(&pool, "acc1", "alice").await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "t1");
+    }
+
+    #[tokio::test]
+    async fn test_search_messages_local_account_isolation() {
+        let pool = setup_test_db().await;
+        insert_message(&pool, "m1", "t1", "acc1", "alice@test.com", "", "Hello", 1000).await;
+        insert_message(&pool, "m2", "t2", "acc2", "alice@test.com", "", "Hello", 2000).await;
+
+        let result = search_messages_local(&pool, "acc1", "alice").await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "t1");
+    }
+
+    // ===== toggle_star_local tests =====
+
+    #[tokio::test]
+    async fn test_toggle_star_local_add_star() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+
+        toggle_star_local(&pool, "t1", true).await.unwrap();
+
+        #[derive(sqlx::FromRow)]
+        struct LabelRow { label_id: String }
+        let labels: Vec<LabelRow> = sqlx::query_as("SELECT label_id FROM thread_labels WHERE thread_id = 't1'")
+            .fetch_all(&pool).await.unwrap();
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].label_id, "STARRED");
+    }
+
+    #[tokio::test]
+    async fn test_toggle_star_local_remove_star() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('t1', 'STARRED')")
+            .execute(&pool).await.unwrap();
+
+        toggle_star_local(&pool, "t1", false).await.unwrap();
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM thread_labels WHERE thread_id = 't1' AND label_id = 'STARRED'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count.0, 0);
+    }
+
+    #[tokio::test]
+    async fn test_toggle_star_local_idempotent_add() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+
+        toggle_star_local(&pool, "t1", true).await.unwrap();
+        toggle_star_local(&pool, "t1", true).await.unwrap();
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM thread_labels WHERE thread_id = 't1' AND label_id = 'STARRED'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count.0, 1);
+    }
+
+    #[tokio::test]
+    async fn test_toggle_star_local_idempotent_remove() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+
+        toggle_star_local(&pool, "t1", false).await.unwrap();
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM thread_labels WHERE thread_id = 't1' AND label_id = 'STARRED'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count.0, 0);
+    }
+
+    #[tokio::test]
+    async fn test_toggle_star_local_verified_via_threads() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "", "Sub", 1000).await;
+
+        // Initially not starred
+        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        assert!(!threads[0].starred);
+
+        toggle_star_local(&pool, "t1", true).await.unwrap();
+
+        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        assert!(threads[0].starred);
+
+        toggle_star_local(&pool, "t1", false).await.unwrap();
+
+        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        assert!(!threads[0].starred);
+    }
+
+    // ===== mark_read_status_local tests =====
+
+    #[tokio::test]
+    async fn test_mark_read_status_local_mark_unread() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+
+        mark_read_status_local(&pool, "t1", true).await.unwrap();
+
+        #[derive(sqlx::FromRow)]
+        struct UnreadRow { unread: Option<i32> }
+        let row: UnreadRow = sqlx::query_as("SELECT unread FROM threads WHERE id = 't1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(row.unread, Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_mark_read_status_local_mark_read() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        // First mark as unread
+        mark_read_status_local(&pool, "t1", true).await.unwrap();
+
+        // Now mark as read
+        mark_read_status_local(&pool, "t1", false).await.unwrap();
+
+        #[derive(sqlx::FromRow)]
+        struct UnreadRow { unread: Option<i32> }
+        let row: UnreadRow = sqlx::query_as("SELECT unread FROM threads WHERE id = 't1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(row.unread, Some(0));
+    }
+
+    #[tokio::test]
+    async fn test_mark_read_status_local_verified_via_threads() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "", "Sub", 1000).await;
+
+        // Default is 0 (read)
+        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        assert_eq!(threads[0].unread, 0);
+
+        mark_read_status_local(&pool, "t1", true).await.unwrap();
+
+        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        assert_eq!(threads[0].unread, 1);
+
+        mark_read_status_local(&pool, "t1", false).await.unwrap();
+
+        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        assert_eq!(threads[0].unread, 0);
+    }
+
+    #[tokio::test]
+    async fn test_mark_read_status_local_nonexistent_thread() {
+        let pool = setup_test_db().await;
+        // Should not error, just affect 0 rows
+        let result = mark_read_status_local(&pool, "nonexistent", true).await;
+        assert!(result.is_ok());
+    }
+
+    // ===== search_gmail_api tests =====
+
+    use std::sync::Mutex;
+    static AUTH_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[tokio::test]
+    async fn test_search_gmail_api_success() {
+        let _lock = AUTH_ENV_LOCK.lock().unwrap();
+        let server = httpmock::MockServer::start();
+        env::set_var("TEST_AUTH_GMAIL_API_BASE", server.base_url());
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/messages");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(serde_json::json!({
+                    "messages": [
+                        {"id": "m1", "threadId": "t1"},
+                        {"id": "m2", "threadId": "t2"},
+                        {"id": "m3", "threadId": "t1"}
+                    ]
+                }));
+        });
+
+        let result = search_gmail_api("fake_token", "test query").await;
+        mock.assert();
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&"t1".to_string()));
+        assert!(result.contains(&"t2".to_string()));
+
+        env::remove_var("TEST_AUTH_GMAIL_API_BASE");
+    }
+
+    #[tokio::test]
+    async fn test_search_gmail_api_empty_response() {
+        let _lock = AUTH_ENV_LOCK.lock().unwrap();
+        let server = httpmock::MockServer::start();
+        env::set_var("TEST_AUTH_GMAIL_API_BASE", server.base_url());
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/messages");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(serde_json::json!({}));
+        });
+
+        let result = search_gmail_api("fake_token", "no results").await;
+        mock.assert();
+        assert!(result.is_empty());
+
+        env::remove_var("TEST_AUTH_GMAIL_API_BASE");
+    }
+
+    #[tokio::test]
+    async fn test_search_gmail_api_http_error() {
+        let _lock = AUTH_ENV_LOCK.lock().unwrap();
+        let server = httpmock::MockServer::start();
+        env::set_var("TEST_AUTH_GMAIL_API_BASE", server.base_url());
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/messages");
+            then.status(401);
+        });
+
+        let result = search_gmail_api("bad_token", "query").await;
+        mock.assert();
+        assert!(result.is_empty());
+
+        env::remove_var("TEST_AUTH_GMAIL_API_BASE");
+    }
+
+    #[tokio::test]
+    async fn test_search_gmail_api_deduplicates_threads() {
+        let _lock = AUTH_ENV_LOCK.lock().unwrap();
+        let server = httpmock::MockServer::start();
+        env::set_var("TEST_AUTH_GMAIL_API_BASE", server.base_url());
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/messages");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(serde_json::json!({
+                    "messages": [
+                        {"id": "m1", "threadId": "t1"},
+                        {"id": "m2", "threadId": "t1"},
+                        {"id": "m3", "threadId": "t1"}
+                    ]
+                }));
+        });
+
+        let result = search_gmail_api("fake_token", "query").await;
+        mock.assert();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "t1");
+
+        env::remove_var("TEST_AUTH_GMAIL_API_BASE");
+    }
+
+    // ===== open_external_url full tests =====
+
+
+    // ===== Additional edge case tests =====
+
+    #[test]
+    fn test_clean_sender_name_empty_string() {
+        assert_eq!(clean_sender_name(Some("".to_string())), "");
+    }
+
+    #[test]
+    fn test_clean_sender_name_whitespace_only() {
+        assert_eq!(clean_sender_name(Some("   ".to_string())), "   ");
+    }
+
+    #[test]
+    fn test_clean_sender_name_multiple_brackets() {
+        assert_eq!(
+            clean_sender_name(Some("Name <email> <extra>".to_string())),
+            "Name"
+        );
+    }
+
+    #[test]
+    fn test_clean_sender_name_no_brackets() {
+        assert_eq!(
+            clean_sender_name(Some("just-a-name".to_string())),
+            "just-a-name"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_threads_inner_clean_sender_name_integration() {
+        let pool = setup_test_db().await;
+        insert_account(&pool, "acc1", "test@test.com", "Test", 1, 1000).await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_message(&pool, "m1", "t1", "acc1", "\"John Doe\" <john@example.com>", "", "Test Subject", 1000).await;
+
+        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].sender, "John Doe");
+    }
+
+    #[tokio::test]
+    async fn test_get_messages_inner_with_html_body() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, subject, internal_date, body_html, body_plain) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+            .bind("m1").bind("t1").bind("acc1").bind("alice@test.com").bind("HTML Test").bind(1000i64)
+            .bind("<p>Hello <b>World</b></p>").bind("Hello World")
+            .execute(&pool).await.unwrap();
+
+        let msgs = get_messages_inner(&pool, "t1").await.unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].body_html, "<p>Hello <b>World</b></p>");
+        assert_eq!(msgs[0].body_plain, "Hello World");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_threads_by_ids_with_messages_and_sender() {
+        let pool = setup_test_db().await;
+        insert_account(&pool, "acc1", "test@test.com", "Test", 1, 1000).await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_thread(&pool, "t2", "acc1").await;
+        insert_message(&pool, "m1", "t1", "acc1", "Alice <a@test.com>", "", "Subject 1", 2000).await;
+        insert_message(&pool, "m2", "t2", "acc1", "Bob <b@test.com>", "", "Subject 2", 1000).await;
+
+        let ids = vec!["t1".to_string(), "t2".to_string()];
+        let threads = fetch_threads_by_ids(&pool, &ids, "acc1").await.unwrap();
+        assert_eq!(threads.len(), 2);
+        assert_eq!(threads[0].id, "t1");
+        assert_eq!(threads[1].id, "t2");
+    }
+
+    #[tokio::test]
+    async fn test_get_search_suggestions_inner_to_operator_dedup() {
+        let pool = setup_test_db().await;
+        insert_account(&pool, "acc1", "test@test.com", "Test", 1, 1000).await;
+        sqlx::query("INSERT INTO messages (id, thread_id, account_id, recipients, sender, subject, internal_date) VALUES (?, ?, ?, ?, ?, ?, ?)")
+            .bind("m1").bind("t1").bind("acc1")
+            .bind("alice@test.com, bob@test.com, alice@test.com")
+            .bind("sender@test.com").bind("Test").bind(1000i64)
+            .execute(&pool).await.unwrap();
+
+        let suggestions = get_search_suggestions_inner(&pool, "acc1", Some("to"), "alice", "").await.unwrap();
+        let alice_count = suggestions.iter().filter(|s| s.detail.contains("alice")).count();
+        assert_eq!(alice_count, 1);
     }
 }

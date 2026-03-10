@@ -6,6 +6,17 @@ vi.mock('@tauri-apps/api/core', () => ({
     invoke: vi.fn(),
 }));
 
+// Mock Tauri's window API
+vi.mock('@tauri-apps/api/window', () => ({
+    getCurrentWindow: vi.fn(() => ({
+        setDecorations: vi.fn(() => Promise.resolve()),
+        minimize: vi.fn(() => Promise.resolve()),
+        maximize: vi.fn(() => Promise.resolve()),
+        toggleMaximize: vi.fn(() => Promise.resolve()),
+        close: vi.fn(() => Promise.resolve()),
+    })),
+}));
+
 // Mock window.matchMedia
 Object.defineProperty(window, 'matchMedia', {
     writable: true,

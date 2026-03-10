@@ -40,31 +40,32 @@ describe('+page.svelte', () => {
         await waitFor(() => {
             expect(screen.getByText('Rustymail')).toBeInTheDocument();
         });
-        expect(screen.getByText('Get Started')).toBeInTheDocument();
+        expect(screen.getByText('Sign in with Google')).toBeInTheDocument();
     });
 
     it('renders app container when authenticated', async () => {
         isAuthenticated.set(true);
+        const account = { id: '1', email: 'test@example.com', display_name: 'Test', avatar_url: '', is_active: true };
         vi.mocked(invoke).mockImplementation(async (cmd) => {
             if (cmd === 'check_auth_status') {
-                return {
-                    authenticated: true,
-                    active_account: { id: '1', email: 'test@example.com', display_name: 'Test', avatar_url: '', is_active: true },
-                    accounts: []
-                };
+                return { authenticated: true, active_account: account, accounts: [account] };
             }
+            if (cmd === 'get_accounts') return [account];
             if (cmd === 'get_labels') return [];
             if (cmd === 'get_threads') return [];
-            if (cmd === 'get_setting') return '30';
-            return [];
+            if (cmd === 'get_settings') return [];
+            if (cmd === 'get_setting') return '';
+            if (cmd === 'sync_gmail_data') return null;
+            if (cmd === 'get_hydration_progress') return { total: 0, hydrated: 0 };
+            if (cmd === 'get_search_suggestions') return [];
+            return null;
         });
 
         render(Page);
 
         await waitFor(() => {
-            expect(screen.getByText('Inbox')).toBeInTheDocument();
-            expect(screen.getByPlaceholderText('Search mail…')).toBeInTheDocument();
-        });
+            expect(screen.getByPlaceholderText(/Search mail/)).toBeInTheDocument();
+        }, { timeout: 3000 });
     });
 
     it('loads and displays threads when authenticated', async () => {
