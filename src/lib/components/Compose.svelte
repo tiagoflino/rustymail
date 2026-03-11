@@ -208,6 +208,12 @@
         addToast(`Failed to discard draft: ${e}`, "error", 5000);
       }
     }
+    // Re-sync thread to remove stale draft message from local DB
+    if (threadId) {
+      try {
+        await invoke("sync_thread_messages", { threadId });
+      } catch (_) {}
+    }
     onClose();
   }
 
@@ -265,7 +271,7 @@
     </div>
   </header>
 
-  {#if !isMinimized}
+  <div class="compose-body" class:compose-hidden={isMinimized}>
     <div class="compose-scroll-area">
       <div class="compose-fields">
         <div class="field-row">
@@ -422,7 +428,7 @@
         >
       </div>
     </footer>
-  {/if}
+  </div>
 </div>
 
 <style>
@@ -447,6 +453,15 @@
 
   .compose-window.minimized {
     height: 40px;
+  }
+  .compose-body {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+  }
+  .compose-hidden {
+    display: none;
   }
 
   .compose-window.expanded {

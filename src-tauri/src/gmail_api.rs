@@ -382,6 +382,14 @@ async fn store_thread_messages(
             .await;
         }
 
+        // Mark thread as synced at current history_id
+        let _ = sqlx::query(
+            "UPDATE threads SET synced_history_id = history_id WHERE id = ?"
+        )
+        .bind(&thread_details.id)
+        .execute(&mut *tx)
+        .await;
+
         tx.commit().await.map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -440,9 +448,31 @@ pub async fn get_unhydrated_thread_ids(pool: &SqlitePool, account_id: &str) -> V
         id: String,
     }
     sqlx::query_as::<_, TId>(
-        "SELECT t.id FROM threads t 
-         LEFT JOIN messages m ON t.id = m.thread_id 
+        "SELECT t.id FROM threads t
+         LEFT JOIN messages m ON t.id = m.thread_id
          WHERE t.account_id = ? AND m.id IS NULL",
+    )
+    .bind(account_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .map(|r| r.id)
+    .collect()
+}
+
+/// Returns thread IDs that have been updated on Gmail (history_id changed)
+/// but haven't been re-synced locally yet.
+pub async fn get_stale_thread_ids(pool: &SqlitePool, account_id: &str) -> Vec<String> {
+    #[derive(sqlx::FromRow)]
+    struct TId {
+        id: String,
+    }
+    sqlx::query_as::<_, TId>(
+        "SELECT t.id FROM threads t
+         WHERE t.account_id = ?
+         AND t.synced_history_id IS NOT NULL
+         AND t.history_id != t.synced_history_id",
     )
     .bind(account_id)
     .fetch_all(pool)

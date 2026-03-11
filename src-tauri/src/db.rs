@@ -30,6 +30,7 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         account_id TEXT,
         snippet TEXT,
         history_id TEXT,
+        synced_history_id TEXT,
         last_message_internal_date INTEGER,
         unread INTEGER
     );
@@ -150,8 +151,27 @@ pub async fn init_db(app_handle: &tauri::AppHandle) -> Result<SqlitePool> {
 
     let pool = SqlitePool::connect_with(options).await?;
     apply_schema(&pool).await?;
+    run_migrations(&pool).await?;
 
     Ok(pool)
+}
+
+async fn run_migrations(pool: &SqlitePool) -> Result<()> {
+    // Migration: add synced_history_id column to threads (v3)
+    let has_col: bool = sqlx::query_scalar::<_, i32>(
+        "SELECT COUNT(*) FROM pragma_table_info('threads') WHERE name = 'synced_history_id'"
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0) > 0;
+
+    if !has_col {
+        sqlx::query("ALTER TABLE threads ADD COLUMN synced_history_id TEXT")
+            .execute(pool)
+            .await?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

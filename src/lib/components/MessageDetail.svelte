@@ -17,7 +17,82 @@
     messagesError,
     type LocalMessage,
   } from "$lib/stores/messages";
-  import { formatTime } from "$lib/utils/formatters.js";
+  import { formatTime, decodeEntities } from "$lib/utils/formatters.js";
+
+  let expandedMessages = $state(new Set<string>());
+  let lastExpandedThreadId: string | null = null;
+  let lastExpandedMsgIds: string | null = null;
+
+  // Expand the last message when thread changes or messages first load for a thread
+  $effect(() => {
+    const tid = $selectedThreadId;
+    const msgs = $currentMessages;
+
+    if (!tid || msgs.length === 0) {
+      // Thread deselected or no messages yet — reset
+      if (!tid) {
+        lastExpandedThreadId = null;
+        lastExpandedMsgIds = null;
+        expandedMessages = new Set();
+      }
+      return;
+    }
+
+    // Build a fingerprint of current message IDs to detect actual content changes
+    const msgFingerprint = msgs.map(m => m.id).join(',');
+
+    if (tid !== lastExpandedThreadId || lastExpandedMsgIds === null) {
+      // New thread or first load — expand only the last message
+      lastExpandedThreadId = tid;
+      lastExpandedMsgIds = msgFingerprint;
+      expandedMessages = new Set([msgs[msgs.length - 1].id]);
+    } else if (msgFingerprint !== lastExpandedMsgIds) {
+      // Same thread but messages changed (reply sent, draft save/delete, sync)
+      const oldIds = new Set(lastExpandedMsgIds ? lastExpandedMsgIds.split(',') : []);
+      lastExpandedMsgIds = msgFingerprint;
+      const validIds = new Set(msgs.map(m => m.id));
+      // Keep previously expanded messages that still exist
+      const cleaned = new Set([...expandedMessages].filter(id => validIds.has(id)));
+      // Auto-expand any NEW messages (not in the old set)
+      for (const m of msgs) {
+        if (!oldIds.has(m.id)) {
+          cleaned.add(m.id);
+        }
+      }
+      if (cleaned.size === 0) {
+        cleaned.add(msgs[msgs.length - 1].id);
+      }
+      expandedMessages = cleaned;
+    }
+  });
+
+  function toggleMessage(id: string) {
+    const next = new Set(expandedMessages);
+    if (next.has(id)) {
+      if (next.size > 1) next.delete(id);
+    } else {
+      next.add(id);
+    }
+    expandedMessages = next;
+  }
+
+  function splitPlainTextQuote(text: string): { main: string; quoted: string | null } {
+    // Detect "---------- Forwarded message ---------"
+    const fwdIdx = text.indexOf('---------- Forwarded message');
+    if (fwdIdx > 0) {
+      return { main: text.slice(0, fwdIdx).trimEnd(), quoted: text.slice(fwdIdx) };
+    }
+    // Detect "On <date>, <name> wrote:" pattern
+    const onWroteMatch = text.match(/\n(On .{10,80} wrote:\s*\n)/);
+    if (onWroteMatch && onWroteMatch.index != null && onWroteMatch.index > 0) {
+      return { main: text.slice(0, onWroteMatch.index).trimEnd(), quoted: text.slice(onWroteMatch.index) };
+    }
+    return { main: text, quoted: null };
+  }
+
+  function expandAll() {
+    expandedMessages = new Set($currentMessages.map(m => m.id));
+  }
 
   interface Props {
     isMacOS: boolean;
@@ -117,82 +192,78 @@
       <div class="error-state">{$messagesError}</div>
     {:else if $currentMessages.length > 0}
       <div class="message-scroll-area">
-        {#each $currentMessages as msg}
-          <div class="message-card animate-in">
-            <div class="message-header">
-              <div class="msg-sender">{msg.sender || "Unknown Sender"}</div>
-              <div
-                class="message-header-right"
-                style="display: flex; align-items: center; gap: 12px;"
-              >
-                <div class="msg-time">{formatTime(msg.internal_date)}</div>
-                <div
-                  class="message-actions"
-                  style="display: flex; gap: 2px;"
-                >
-                  {#if msg.is_draft}
-                    <button
-                      class="msg-action-btn"
-                      onclick={() => oneditdraft(msg)}
-                      data-tooltip="Edit Draft"
-                      style="width: auto; padding: 0 12px; font-size: 13px; font-weight: 500;"
-                    >
-                      <span
-                        style="display: flex; align-items: center; gap: 6px;"
-                      >
+        {#if $currentMessages.length > 2}
+          <div class="expand-all-row">
+            <button class="expand-all-btn" onclick={expandAll}>
+              {expandedMessages.size === $currentMessages.length ? 'All expanded' : `Expand all (${$currentMessages.length} messages)`}
+            </button>
+          </div>
+        {/if}
+        {#each $currentMessages as msg, i}
+          {#if expandedMessages.has(msg.id)}
+            <div class="message-card animate-in">
+              <div class="message-header">
+                <button class="msg-collapse-btn" onclick={() => toggleMessage(msg.id)} title="Collapse">
+                  <svg class="disclosure-icon expanded" width="10" height="10" viewBox="0 0 10 10"><path d="M2 3.5L5 6.5L8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <span class="msg-sender">{msg.sender || "Unknown Sender"}</span>
+                </button>
+                <div class="message-header-right">
+                  <div class="msg-time">{formatTime(msg.internal_date)}</div>
+                  <div class="message-actions">
+                    {#if msg.is_draft}
+                      <button class="msg-action-btn msg-action-draft" onclick={() => oneditdraft(msg)} data-tooltip="Edit Draft">
                         <span class="icon">{@html iconDraft}</span>
                         <span>Edit Draft</span>
-                      </span>
-                    </button>
-                  {:else}
-                    <button
-                      class="msg-action-btn"
-                      onclick={() => onreply(msg)}
-                      title="Reply (R)"
-                      data-tooltip="Reply (R)"
-                    >
-                      {@html iconReply}
-                    </button>
-                    <button
-                      class="msg-action-btn"
-                      onclick={() => onreplyall(msg)}
-                      data-tooltip="Reply All"
-                    >
-                      {@html iconReplyAll}
-                    </button>
-                    <button
-                      class="msg-action-btn"
-                      onclick={() => onforward(msg)}
-                      data-tooltip="Forward"
-                    >
-                      {@html iconForward}
-                    </button>
-                  {/if}
+                      </button>
+                    {:else}
+                      <button class="msg-action-btn" onclick={() => onreply(msg)} data-tooltip="Reply (R)">{@html iconReply}</button>
+                      <button class="msg-action-btn" onclick={() => onreplyall(msg)} data-tooltip="Reply All">{@html iconReplyAll}</button>
+                      <button class="msg-action-btn" onclick={() => onforward(msg)} data-tooltip="Forward">{@html iconForward}</button>
+                    {/if}
+                  </div>
                 </div>
               </div>
-            </div>
-            <h2 class="msg-subject">{msg.subject}</h2>
-            <div class="message-body">
-              {#if msg.body_html}
-                <iframe
-                  title="Email Body"
-                  sandbox="allow-scripts"
-                  style="width:100%;height:0;border:none;overflow:hidden;background:#f5f5f5;border-radius:6px;opacity:0;transition:opacity .15s;"
-                  srcdoc={`<html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: http: data: cid:;"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light only"></head><body style="margin:0;padding:0;background:#f5f5f5;overflow:hidden;"><div style="max-width:680px;margin:0 auto;padding:12px;">${msg.body_html}</div><script>(function(){var b=document.body;function post(type,data){parent.postMessage(Object.assign({type:type},data),'*');}function resize(){post('rustymail-resize',{height:b.scrollHeight});}resize();new ResizeObserver(resize).observe(b);b.querySelectorAll('img').forEach(function(img){if(!img.complete)img.addEventListener('load',resize,{once:true});});document.addEventListener('click',function(e){var t=e.target;while(t&&t.tagName!=='A')t=t.parentElement;if(!t||!t.href)return;e.preventDefault();post('rustymail-link',{url:t.href});},true);})();<\/script></body></html>`}
-                  onload={(e) => {
-                    const iframe = e.currentTarget as HTMLIFrameElement;
-                    oniframeload(iframe);
-                  }}
-                ></iframe>
-              {:else if msg.body_plain}
-                <pre class="plain-body">{msg.body_plain}</pre>
-              {:else}
-                <p class="no-body">
-                  Message body not available. Try refreshing.
-                </p>
+              {#if i === 0 || (i === $currentMessages.length - 1 && expandedMessages.size === 1)}
+                <h2 class="msg-subject">{msg.subject}</h2>
               {/if}
+              <div class="message-body">
+                {#if msg.body_html}
+                  <iframe
+                    title="Email Body"
+                    sandbox="allow-scripts"
+                    style="width:100%;height:0;border:none;overflow:hidden;background:#f5f5f5;border-radius:6px;opacity:0;transition:opacity .15s;"
+                    srcdoc={`<html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: http: data: cid:;"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light only"><style>.quote-toggle{display:inline-block;cursor:pointer;padding:2px 8px;margin:4px 0;border-radius:4px;background:rgba(0,0,0,0.06);color:#666;font-size:12px;border:none;line-height:1;font-family:-apple-system,sans-serif}.quote-toggle:hover{background:rgba(0,0,0,0.1)}.quote-hidden{display:none}</style></head><body style="margin:0;padding:0;background:#f5f5f5;overflow:hidden;"><div style="max-width:680px;margin:0 auto;padding:12px;">${msg.body_html}</div><script>(function(){var b=document.body;function post(type,data){parent.postMessage(Object.assign({type:type},data),'*');}function resize(){post('rustymail-resize',{height:b.scrollHeight});}function collapseQuotes(){var quotes=b.querySelectorAll('.gmail_quote,blockquote');quotes.forEach(function(q){if(q.closest('.quote-hidden'))return;q.classList.add('quote-hidden');var btn=document.createElement('button');btn.className='quote-toggle';btn.textContent='\\u2026';btn.title='Show trimmed content';btn.addEventListener('click',function(){q.classList.toggle('quote-hidden');btn.textContent=q.classList.contains('quote-hidden')?'\\u2026':'Hide quoted text';resize();});q.parentNode.insertBefore(btn,q);});var walker=document.createTreeWalker(b,NodeFilter.SHOW_TEXT);while(walker.nextNode()){var n=walker.currentNode;if(n.textContent.indexOf('---------- Forwarded message')!==-1){var el=n.parentElement;if(!el||el.closest('.quote-hidden'))continue;var container=document.createElement('div');var rest=[];var sib=el.nextSibling;while(sib){rest.push(sib);sib=sib.nextSibling;}if(rest.length<1)continue;var wrap=document.createElement('div');wrap.className='quote-hidden';wrap.appendChild(el.cloneNode(true));rest.forEach(function(s){wrap.appendChild(s);});el.parentNode.insertBefore(wrap,el);el.remove();var btn2=document.createElement('button');btn2.className='quote-toggle';btn2.textContent='\\u2026';btn2.title='Show forwarded message';btn2.addEventListener('click',function(){wrap.classList.toggle('quote-hidden');btn2.textContent=wrap.classList.contains('quote-hidden')?'\\u2026':'Hide forwarded message';resize();});wrap.parentNode.insertBefore(btn2,wrap);break;}}}if(!${msg.is_draft})collapseQuotes();resize();new ResizeObserver(resize).observe(b);b.querySelectorAll('img').forEach(function(img){if(!img.complete)img.addEventListener('load',resize,{once:true});});document.addEventListener('click',function(e){var t=e.target;while(t&&t.tagName!=='A')t=t.parentElement;if(!t||!t.href)return;e.preventDefault();post('rustymail-link',{url:t.href});},true);})();<\/script></body></html>`}
+                    onload={(e) => {
+                      const iframe = e.currentTarget as HTMLIFrameElement;
+                      oniframeload(iframe);
+                    }}
+                  ></iframe>
+                {:else if msg.body_plain}
+                  {@const parts = msg.is_draft ? { main: msg.body_plain, quoted: null } : splitPlainTextQuote(msg.body_plain)}
+                  <pre class="plain-body">{parts.main}</pre>
+                  {#if parts.quoted}
+                    <button class="plain-quote-toggle" onclick={(e) => {
+                      const pre = (e.currentTarget as HTMLElement).nextElementSibling;
+                      if (pre) {
+                        const hidden = pre.classList.toggle('plain-quote-hidden');
+                        (e.currentTarget as HTMLElement).textContent = hidden ? '\u2026' : 'Hide quoted text';
+                      }
+                    }}>{'\u2026'}</button>
+                    <pre class="plain-body plain-quoted plain-quote-hidden">{parts.quoted}</pre>
+                  {/if}
+                {:else}
+                  <p class="no-body">Message body not available. Try refreshing.</p>
+                {/if}
+              </div>
             </div>
-          </div>
+          {:else}
+            <button class="collapsed-message" onclick={() => toggleMessage(msg.id)}>
+              <svg class="disclosure-icon" width="10" height="10" viewBox="0 0 10 10"><path d="M3.5 2L6.5 5L3.5 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span class="collapsed-sender">{msg.sender || "Unknown Sender"}</span>
+              <span class="collapsed-snippet">{decodeEntities(msg.snippet || msg.subject || '')}</span>
+              <span class="collapsed-time">{formatTime(msg.internal_date)}</span>
+            </button>
+          {/if}
         {/each}
       </div>
     {:else}
@@ -340,6 +411,92 @@
     overflow-y: auto;
     padding: 20px;
   }
+  .expand-all-row {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 8px;
+  }
+  .expand-all-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 11px;
+    line-height: 14px;
+    cursor: pointer;
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-family: var(--font-family);
+    transition: background 0.1s;
+  }
+  .expand-all-btn:hover {
+    background: var(--sidebar-hover);
+    color: var(--text-primary);
+  }
+  .collapsed-message {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 16px;
+    margin-bottom: 4px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: transparent;
+    cursor: pointer;
+    font-family: var(--font-family);
+    color: var(--text-primary);
+    text-align: left;
+    transition: background 0.1s;
+  }
+  .collapsed-message:hover {
+    background: var(--sidebar-hover);
+  }
+  .collapsed-sender {
+    font-size: 13px;
+    line-height: 16px;
+    font-weight: 500;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .collapsed-snippet {
+    font-size: 12px;
+    line-height: 15px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+  }
+  .collapsed-time {
+    font-size: 11px;
+    line-height: 14px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .disclosure-icon {
+    color: var(--text-secondary);
+    flex-shrink: 0;
+    transition: transform 0.15s ease;
+  }
+  .msg-collapse-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    font-family: var(--font-family);
+  }
+  .msg-collapse-btn .msg-sender {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 18px;
+    letter-spacing: -0.08px;
+  }
   .error-state {
     padding: 2rem;
     text-align: center;
@@ -379,12 +536,24 @@
     line-height: 16px;
     letter-spacing: -0.08px;
   }
-  .msg-sender {
-    font-weight: 600;
-    color: var(--text-primary);
-    font-size: 14px;
-    line-height: 18px;
-    letter-spacing: -0.08px;
+  .message-header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .message-actions {
+    display: flex;
+    gap: 2px;
+  }
+  .msg-action-draft {
+    width: auto;
+    padding: 0 12px;
+    font-size: 13px;
+    font-weight: 500;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
   }
   .msg-time {
     color: var(--text-secondary);
@@ -417,6 +586,30 @@
     color: var(--text-primary);
     padding: 12px;
     border-radius: 6px;
+  }
+  .plain-quote-toggle {
+    display: inline-block;
+    cursor: pointer;
+    padding: 2px 8px;
+    margin: 4px 0 4px 12px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.06);
+    color: var(--text-secondary);
+    font-size: 12px;
+    border: none;
+    line-height: 1;
+    font-family: var(--font-family);
+    transition: background 0.1s;
+  }
+  .plain-quote-toggle:hover {
+    background: rgba(0, 0, 0, 0.1);
+  }
+  .plain-quoted {
+    opacity: 0.7;
+    border-left: 2px solid var(--border-color);
+  }
+  .plain-quote-hidden {
+    display: none;
   }
   .no-body {
     color: var(--text-secondary);

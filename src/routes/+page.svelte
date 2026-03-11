@@ -137,7 +137,19 @@
     initialDraftId: null as string | null,
   });
 
-  function openCompose(props: Partial<typeof composeProps> = {}) {
+  async function openCompose(props: Partial<typeof composeProps> = {}) {
+    // If replying to a thread, find existing draft to update instead of creating a new one
+    let draftId = props.initialDraftId ?? null;
+    if (!draftId && props.threadId) {
+      const draftMsg = $currentMessages.find(m => m.is_draft);
+      if (draftMsg) {
+        try {
+          const existingId = await invoke("get_draft_id_by_message_id", { messageId: draftMsg.id }) as string | null;
+          if (existingId) draftId = existingId;
+        } catch (_) {}
+      }
+    }
+
     composeProps = {
       initialTo: "",
       initialCc: "",
@@ -146,7 +158,7 @@
       threadId: null,
       inReplyTo: null,
       references: null,
-      initialDraftId: null,
+      initialDraftId: draftId,
       ...props,
     };
     composeKey++;
@@ -842,9 +854,6 @@
       initialTo: "",
       initialSubject: subject,
       initialBodyHTML: quote,
-      threadId: msg.thread_id,
-      inReplyTo: msg.id,
-      references: msg.id,
     });
   }
 
@@ -1022,7 +1031,33 @@
 {#key composeKey}
   {#if showCompose}
     <Compose
-      onClose={() => (showCompose = false)}
+      onClose={async () => {
+        showCompose = false;
+        const tid = $selectedThreadId;
+        if (!tid) return;
+
+        async function refreshThread() {
+          try {
+            await invoke("sync_thread_messages", { threadId: tid });
+          } catch (_) {}
+          try {
+            const freshMsgs: LocalMessage[] = await invoke("get_messages", { threadId: tid });
+            if ($selectedThreadId === tid) {
+              currentMessages.set(freshMsgs);
+              if (freshMsgs.length === 0) {
+                selectedThreadId.set(null);
+                currentMessages.set([]);
+              }
+            }
+          } catch (_) {}
+          await loadThreads(true, true);
+        }
+
+        // Immediate refresh (picks up draft changes)
+        await refreshThread();
+        // Delayed retry (picks up sent messages after Gmail processes them)
+        setTimeout(() => refreshThread(), 2000);
+      }}
       {...composeProps}
       onDraftSaved={(id) => (composeProps.initialDraftId = id)}
     />

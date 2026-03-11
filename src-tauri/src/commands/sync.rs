@@ -38,6 +38,20 @@ pub async fn sync_gmail_data(
         .map(|r| r.value == "true")
         .unwrap_or(false);
 
+    // Re-hydrate threads with new activity (history_id changed on Gmail)
+    let stale = crate::gmail_api::get_stale_thread_ids(pool.inner(), &account.id).await;
+    if !stale.is_empty() {
+        println!("[Sync] Re-hydrating {} stale threads", stale.len());
+        crate::gmail_api::batch_hydrate_threads(
+            pool.inner(),
+            &account.id,
+            &account.access_token,
+            stale,
+        )
+        .await;
+    }
+
+    // Hydrate threads that have never been fetched
     let unhydrated = crate::gmail_api::get_unhydrated_thread_ids(pool.inner(), &account.id).await;
     if !unhydrated.is_empty() {
         let limit = if prefetch { unhydrated.len() } else { 100 };
