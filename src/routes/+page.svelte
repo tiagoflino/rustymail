@@ -1190,22 +1190,17 @@
         {/if}
       </div>
 
-      <div
-        class="sidebar-compose"
-        style="padding: 12px 12px 4px 12px; display: flex; gap: 8px;"
-      >
+      <div class="sidebar-compose">
         <button
-          class="btn-sidebar flex-grow"
+          class="btn-sidebar flex-grow sidebar-compose-btn"
           onclick={() => openCompose()}
-          style="font-size: 13px; font-weight: 500; padding: 8px; background: var(--accent-blue); color: white; border: none; box-shadow: 0 2px 5px rgba(10,132,255,0.3);"
         >
           <span class="icon">{@html iconPlus}</span><span class="sidebar-text"> Compose</span>
         </button>
         <button
-          class="btn-sidebar"
+          class="btn-sidebar sidebar-calendar-btn"
           onclick={() => (showCalendar = !showCalendar)}
           title="Toggle Calendar"
-          style="width: 36px; padding: 0; display: flex; align-items: center; justify-content: center; background: var(--bg-view); border: 1px solid var(--border-color);"
         >
           {@html iconCalendar}
         </button>
@@ -1745,6 +1740,7 @@
   .link-dialog-subtitle {
     margin: 0 0 12px;
     font-size: 12px;
+    line-height: 15px;
     color: var(--text-secondary);
   }
   .link-url-box {
@@ -1757,7 +1753,7 @@
     font-size: 11px;
     color: var(--text-secondary);
     word-break: break-all;
-    line-height: 1.45;
+    line-height: 14px;
     display: block;
     text-align: left;
     max-height: 60px;
@@ -1774,7 +1770,7 @@
   .link-warning-line {
     margin: 0;
     font-size: 11px;
-    line-height: 1.45;
+    line-height: 14px;
   }
   .link-warning-caution .link-warning-line { color: #c87e00; }
   .link-warning-danger .link-warning-line { color: #ff3b30; }
@@ -1894,6 +1890,7 @@
   }
   .onboard-subtitle {
     font-size: 14px;
+    line-height: 18px;
     color: var(--text-secondary, #8e8e93);
     margin-bottom: 32px;
   }
@@ -1924,16 +1921,17 @@
   .onboard-footer {
     margin-top: 16px;
     font-size: 11px;
+    line-height: 14px;
     color: var(--text-secondary, #8e8e93);
     padding: 8px;
     font-family: inherit;
-    letter-spacing: 0.2px;
+    letter-spacing: normal;
     transition: color 0.2s;
   }
   .error {
     color: #ff453a;
-    margin-bottom: 166px;
     font-size: 12px;
+    line-height: 15px;
     font-weight: 300;
   }
 
@@ -1985,6 +1983,8 @@
     display: block;
     font-weight: 600;
     font-size: 13px;
+    line-height: 16px;
+    letter-spacing: -0.08px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1992,6 +1992,7 @@
   .brand-email {
     display: block;
     font-size: 10px;
+    line-height: 13px;
     color: var(--text-secondary);
     white-space: nowrap;
     overflow: hidden;
@@ -2070,10 +2071,12 @@
     display: block;
     font-weight: 500;
     font-size: 12px;
+    line-height: 15px;
   }
   .dropdown-email {
     display: block;
     font-size: 10px;
+    line-height: 13px;
     color: var(--text-secondary);
   }
   .dropdown-divider {
@@ -2154,13 +2157,14 @@
     padding: 12px;
   }
   .sidebar-heading {
-    font-size: 10px;
-    text-transform: uppercase;
+    font-size: 11px;
+    line-height: 14px;
+    text-transform: none;
     color: var(--text-secondary);
-    letter-spacing: 0.8px;
-    margin: 14px 8px 6px;
-    font-weight: 700;
-    opacity: 0.7;
+    letter-spacing: normal;
+    padding: 16px 12px 4px;
+    margin: 0;
+    font-weight: 500;
   }
   .sidebar-menu {
     list-style: none;
@@ -2173,6 +2177,8 @@
     margin: 2px 0;
     border-radius: 8px;
     font-size: 13px;
+    line-height: 16px;
+    letter-spacing: -0.08px;
     color: var(--text-primary);
     cursor: pointer;
     width: 100%;
@@ -2209,6 +2215,7 @@
   }
   .sidebar-item .badge {
     font-size: 11px;
+    line-height: 14px;
     font-weight: 600;
     color: var(--text-secondary);
     min-width: 20px;
@@ -2219,16 +2226,16 @@
     font-weight: 400;
   }
   .sidebar-item.active {
-    background: var(--accent-blue);
-    color: white;
+    background: rgba(10, 132, 255, 0.12);
+    color: var(--accent-blue);
     font-weight: 400;
   }
   .sidebar-item.active .icon {
     opacity: 1;
-    color: white;
+    color: var(--accent-blue);
   }
   .sidebar-item.active .badge {
-    color: rgba(255, 255, 255, 0.8);
+    color: var(--accent-blue);
   }
   .sidebar-bottom {
     flex-shrink: 0;
@@ -2253,6 +2260,7 @@
     color: var(--text-primary);
     cursor: pointer;
     font-size: 12px;
+    line-height: 15px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2269,6 +2277,34 @@
   .btn-sidebar:hover {
     background: var(--sidebar-hover);
   }
+  .sidebar-compose {
+    padding: 12px 12px 4px 12px;
+    display: flex;
+    gap: 8px;
+  }
+  .sidebar-compose-btn {
+    font-size: 13px;
+    font-weight: 500;
+    padding: 7px 14px;
+    background: var(--accent-blue);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    box-shadow: none;
+  }
+  .sidebar-compose-btn:hover {
+    background: var(--accent-blue);
+    opacity: 0.9;
+  }
+  .sidebar-calendar-btn {
+    width: 36px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-view);
+    border: 1px solid var(--border-color);
+  }
   .btn-sidebar.flex-grow {
     flex: 1;
     min-width: 0;
@@ -2282,6 +2318,7 @@
   .sidebar-error {
     margin-top: 8px;
     font-size: 11px;
+    line-height: 14px;
     padding: 0 4px;
   }
   .spin {
@@ -2321,6 +2358,8 @@
     background: transparent;
     outline: none;
     font-size: 13px;
+    line-height: 16px;
+    letter-spacing: -0.08px;
     color: var(--text-primary);
     font-family: var(--font-family);
   }
@@ -2367,6 +2406,7 @@
   .suggestion-section {
     padding: 6px 12px;
     font-size: 10px;
+    line-height: 13px;
     text-transform: uppercase;
     color: var(--text-secondary);
     letter-spacing: 0.5px;
@@ -2382,6 +2422,7 @@
     border: none;
     cursor: pointer;
     font-size: 12px;
+    line-height: 15px;
     color: var(--text-primary);
     font-family: var(--font-family);
     text-align: left;
@@ -2402,6 +2443,7 @@
   }
   .suggestion-detail {
     font-size: 11px;
+    line-height: 14px;
     color: var(--text-secondary);
     max-width: 120px;
     overflow: hidden;
@@ -2493,10 +2535,13 @@
   .list-header h3 {
     font-weight: 600;
     font-size: 13px;
+    line-height: 16px;
+    letter-spacing: -0.08px;
     color: var(--text-primary);
   }
   .thread-count {
     font-size: 11px;
+    line-height: 14px;
     color: var(--text-secondary);
     font-weight: 500;
   }
@@ -2511,20 +2556,27 @@
     text-align: center;
     color: var(--text-secondary);
     font-size: 13px;
+    line-height: 16px;
+    letter-spacing: -0.08px;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 8px;
   }
   .centered-empty {
-    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
     justify-content: center;
+    height: 100%;
+    gap: 8px;
+    opacity: 0.5;
   }
   .empty-icon {
     width: 48px;
     height: 48px;
     color: var(--text-secondary);
-    opacity: 0.3;
+    opacity: 0.25;
     margin-bottom: 8px;
   }
   .empty-icon :global(svg) {
@@ -2533,8 +2585,9 @@
   }
   .empty-hint {
     font-size: 11px;
+    line-height: 14px;
     color: var(--text-secondary);
-    opacity: 0.6;
+    opacity: 0.5;
   }
   .empty-hint kbd {
     background: var(--sidebar-hover);
@@ -2587,9 +2640,10 @@
   }
   .thread-item:hover {
     background-color: var(--sidebar-hover);
+    border-radius: 6px;
   }
   .thread-item.selected {
-    background-color: rgba(10, 132, 255, 0.1);
+    background-color: rgba(10, 132, 255, 0.08);
   }
   .thread-item-leading {
     display: flex;
@@ -2646,12 +2700,15 @@
   .thread-sender {
     font-weight: 500;
     font-size: 13px;
+    line-height: 16px;
+    letter-spacing: -0.08px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .thread-time {
     font-size: 11px;
+    line-height: 14px;
     color: var(--text-secondary);
     white-space: nowrap;
     margin-left: 8px;
@@ -2660,6 +2717,8 @@
   }
   .thread-subject {
     font-size: 13px;
+    line-height: 16px;
+    letter-spacing: -0.08px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -2668,6 +2727,7 @@
   }
   .thread-snippet {
     font-size: 12px;
+    line-height: 15px;
     color: var(--text-secondary);
     white-space: nowrap;
     overflow: hidden;
@@ -2709,17 +2769,18 @@
     flex-shrink: 0;
   }
   .toolbar-btn {
-    background: transparent;
-    border: none;
-    border-radius: 6px;
-    padding: 6px 10px;
-    font-size: 12px;
-    color: var(--text-secondary);
-    cursor: pointer;
     display: flex;
     align-items: center;
-    gap: 5px;
-    transition: all 0.1s ease;
+    gap: 6px;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 15px;
+    transition: background 0.1s;
     font-family: var(--font-family);
   }
   .toolbar-icon {
@@ -2832,22 +2893,28 @@
     align-items: center;
     margin-bottom: 10px;
     font-size: 13px;
+    line-height: 16px;
+    letter-spacing: -0.08px;
   }
   .msg-sender {
     font-weight: 600;
     color: var(--text-primary);
     font-size: 14px;
+    line-height: 18px;
+    letter-spacing: -0.08px;
   }
   .msg-time {
     color: var(--text-secondary);
     font-size: 12px;
+    line-height: 15px;
     flex-shrink: 0;
   }
   .msg-subject {
     font-size: 17px;
+    line-height: 22px;
     font-weight: 600;
     margin: 0 0 14px 0;
-    letter-spacing: -0.2px;
+    letter-spacing: -0.1px;
     color: var(--text-primary);
   }
   .message-body {
@@ -2860,9 +2927,11 @@
     white-space: pre-wrap;
     font-family: inherit;
     font-size: 13px;
+    line-height: 16px;
+    letter-spacing: -0.08px;
     margin: 0;
-    background: #ffffff;
-    color: #1c1c1e;
+    background: var(--bg-view);
+    color: var(--text-primary);
     padding: 12px;
     border-radius: 6px;
   }
@@ -2870,5 +2939,7 @@
     color: var(--text-secondary);
     font-style: italic;
     font-size: 13px;
+    line-height: 16px;
+    letter-spacing: -0.08px;
   }
 </style>
