@@ -808,9 +808,15 @@
           });
           if ($selectedThreadId === threadId) {
             currentMessages.set(freshMsgs);
+            isMessagesLoading.set(false);
           }
         })
-        .catch(() => {});
+        .catch((err) => {
+          console.error("[SyncMessages] Failed:", err);
+          if ($selectedThreadId === threadId) {
+            isMessagesLoading.set(false);
+          }
+        });
       const msgs = cachedMsgs;
 
       const delaySetting = (await invoke("get_setting", {
