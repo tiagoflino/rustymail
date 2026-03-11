@@ -109,8 +109,35 @@
 
   let editorEl = $state<HTMLDivElement>();
 
+  const fonts = [
+    { label: "Sans Serif", value: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" },
+    { label: "Serif", value: "Georgia, 'Times New Roman', Times, serif" },
+    { label: "Monospace", value: "'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, monospace" },
+    { label: "Arial", value: "Arial, Helvetica, sans-serif" },
+    { label: "Verdana", value: "Verdana, Geneva, sans-serif" },
+    { label: "Tahoma", value: "Tahoma, Geneva, sans-serif" },
+    { label: "Georgia", value: "Georgia, 'Times New Roman', serif" },
+    { label: "Courier", value: "'Courier New', Courier, monospace" },
+  ];
+  let selectedFont = $state(fonts[0].value);
+  let selectedFontLabel = $derived(fonts.find(f => f.value === selectedFont)?.label ?? "Sans Serif");
+  let showFontDropdown = $state(false);
+  let fontPickerEl = $state<HTMLDivElement>();
+
+  function handleWindowClick(e: MouseEvent) {
+    if (showFontDropdown && fontPickerEl && !fontPickerEl.contains(e.target as Node)) {
+      showFontDropdown = false;
+    }
+  }
+
   function format(command: string, value: string | undefined = undefined) {
     document.execCommand(command, false, value);
+    editorEl?.focus();
+  }
+
+  function applyFont(fontFamily: string) {
+    selectedFont = fontFamily;
+    document.execCommand("fontName", false, fontFamily);
     editorEl?.focus();
   }
 
@@ -163,6 +190,7 @@
       isSending = false;
     }
   }
+
 
   async function saveDraft() {
     try {
@@ -223,6 +251,8 @@
   const iconItalic = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="4" x2="10" y2="4"></line><line x1="14" y1="20" x2="5" y2="20"></line><line x1="15" y1="4" x2="9" y2="20"></line></svg>`;
   const iconUnderline = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v7a6 6 0 0 0 6 6 6 6 0 0 0 6-6V3"></path><line x1="4" y1="21" x2="20" y2="21"></line></svg>`;
 </script>
+
+<svelte:window onclick={handleWindowClick} />
 
 <div
   class="compose-window"
@@ -408,6 +438,29 @@
           {/if}
         </button>
         <div class="divider"></div>
+        <div class="font-picker" bind:this={fontPickerEl}>
+          <button
+            class="font-select"
+            onclick={() => showFontDropdown = !showFontDropdown}
+            title="Font"
+          >
+            <span style:font-family={selectedFont}>{selectedFontLabel}</span>
+            <svg width="8" height="5" viewBox="0 0 8 5"><path d="M0.5 0.5L4 4L7.5 0.5" stroke="currentColor" fill="none" stroke-linecap="round"/></svg>
+          </button>
+          {#if showFontDropdown}
+            <div class="font-dropdown">
+              {#each fonts as f}
+                <button
+                  class="font-dropdown-item"
+                  class:active={selectedFont === f.value}
+                  style:font-family={f.value}
+                  onmousedown={(e) => { e.preventDefault(); applyFont(f.value); showFontDropdown = false; }}
+                >{f.label}</button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+        <div class="divider"></div>
         <button class="format-btn" title="Bold" onclick={() => format("bold")}
           >{@html iconBold}</button
         >
@@ -491,7 +544,7 @@
   .header-actions {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: 4px;
   }
 
   .action-btn {
@@ -508,12 +561,17 @@
     transition: background 0.15s;
   }
 
+  .action-btn:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: -2px;
+  }
+
   .action-btn:hover {
     background: rgba(0, 0, 0, 0.05);
   }
 
   .close-btn:hover {
-    background: #ff3b30;
+    background: var(--destructive-red, #ff3b30);
     color: white;
   }
 
@@ -533,7 +591,7 @@
     display: flex;
     align-items: center;
     border-bottom: 1px solid var(--border-color);
-    min-height: 38px;
+    min-height: 32px;
   }
 
   .field-row:last-child {
@@ -556,6 +614,11 @@
     outline: none;
     padding: 8px 0;
     width: 100%;
+  }
+
+  .field-input:focus-visible {
+    outline: none;
+    box-shadow: 0 1px 0 0 var(--accent-blue);
   }
 
   .input-container {
@@ -591,6 +654,11 @@
     gap: 2px;
   }
 
+  .suggestion-item:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: -2px;
+  }
+
   .suggestion-item:hover,
   .suggestion-item.active {
     background: var(--sidebar-hover);
@@ -603,7 +671,8 @@
   }
 
   .s-email {
-    font-size: 11px;
+    font-size: 12px;
+    line-height: 15px;
     color: var(--text-secondary);
   }
 
@@ -691,12 +760,77 @@
     margin: 0 6px;
   }
 
+  .font-picker {
+    position: relative;
+  }
+  .font-select {
+    height: 28px;
+    padding: 0 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 90px;
+    font-family: var(--font-family);
+    transition: border-color 0.1s;
+  }
+  .font-select svg {
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+  .font-select:focus-visible {
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.2);
+  }
+  .font-select:hover {
+    border-color: var(--text-secondary);
+  }
+  .font-dropdown {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    margin-bottom: 4px;
+    background: var(--bg-view);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    min-width: 160px;
+    padding: 4px;
+    z-index: 100;
+  }
+  .font-dropdown-item {
+    display: block;
+    width: 100%;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 16px;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .font-dropdown-item:hover {
+    background: var(--sidebar-hover);
+  }
+  .font-dropdown-item.active {
+    background: rgba(10, 132, 255, 0.1);
+    color: var(--accent-blue);
+  }
   .format-btn {
     width: 32px;
     height: 32px;
     background: transparent;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
+    transition: background 0.15s, color 0.15s;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -709,12 +843,17 @@
     color: var(--text-primary);
   }
 
+  .format-btn:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: -2px;
+  }
+
   .trash-btn {
-    width: 36px;
-    height: 36px;
+    width: 32px;
+    height: 32px;
     background: transparent;
     border: none;
-    border-radius: 50%;
+    border-radius: 6px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -722,9 +861,14 @@
     cursor: pointer;
   }
 
+  .trash-btn:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: -2px;
+  }
+
   .trash-btn:hover {
     background: var(--sidebar-hover);
-    color: #ff3b30;
+    color: var(--destructive-red, #ff3b30);
   }
 
   .spinner {
