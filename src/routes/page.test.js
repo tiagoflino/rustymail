@@ -19,6 +19,9 @@ vi.mock('$lib/components/CalendarSidebar.svelte', () => ({
 vi.mock('$lib/components/Toasts.svelte', () => ({
     default: vi.fn(() => ({ type: 'Toasts' }))
 }));
+vi.mock('$lib/components/LinkSafetyDialog.svelte', () => ({
+    default: vi.fn(() => ({ type: 'LinkSafetyDialog' }))
+}));
 
 describe('+page.svelte', () => {
     beforeEach(() => {
