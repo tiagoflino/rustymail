@@ -65,6 +65,8 @@
 
   let isMacOS = $state(false);
   let sidebarCollapsed = $state(false);
+  let density = $state("default");
+  let readingPane = $state("right");
   let linkBehavior = $state("ask");
   let pendingLinkUrl = $state<string | null>(null);
   let pendingLinkAnalysis = $state<LinkAnalysis | null>(null);
@@ -902,6 +904,11 @@
     const saved = (dbTheme || localStorage.getItem("rustymail-theme") || "system") as ThemeMode;
     applyTheme(saved, false);
 
+    const savedDensity = await invoke("get_setting", { key: "density" }).catch(() => "") as string;
+    density = savedDensity || "default";
+    const savedPane = await invoke("get_setting", { key: "reading_pane" }).catch(() => "") as string;
+    readingPane = savedPane || "right";
+
     await refreshAccountState();
     if (appState === "authenticated") {
       await loadLabels();
@@ -962,7 +969,7 @@
     </div>
   </main>
 {:else}
-  <div class="app-container">
+  <div class="app-container density-{density} pane-{readingPane}">
     <Sidebar
       {activeAccount}
       {allAccounts}
@@ -1025,6 +1032,8 @@
     onAccountAdd={addAccount}
     onAccountRemove={removeAccount}
     onThemeChange={(mode) => applyTheme(mode as ThemeMode, false)}
+    onDensityChange={(d) => density = d}
+    onReadingPaneChange={(p) => readingPane = p}
   />
 {/if}
 

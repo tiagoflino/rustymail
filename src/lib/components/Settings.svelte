@@ -23,6 +23,8 @@
     onAccountAdd: () => void;
     onAccountRemove: (id: string) => void;
     onThemeChange?: (mode: string) => void;
+    onDensityChange?: (density: string) => void;
+    onReadingPaneChange?: (pane: string) => void;
   }
 
   let {
@@ -33,6 +35,8 @@
     onAccountAdd = () => {},
     onAccountRemove = () => {},
     onThemeChange = () => {},
+    onDensityChange = () => {},
+    onReadingPaneChange = () => {},
   }: SettingsProps = $props();
 
   let activeTab = $state("accounts");
@@ -366,6 +370,46 @@
               </p>
 
               <div class="setting-card">
+                <div class="card-row">
+                  <div class="setting-row-inline">
+                    <div class="setting-label">
+                      <span class="setting-name">Density</span>
+                      <span class="setting-hint">Adjust spacing between email rows</span>
+                    </div>
+                    <div class="option-group">
+                      {#each [["compact", "Compact"], ["default", "Default"], ["comfortable", "Comfortable"]] as [val, label]}
+                        <button
+                          class="option-btn {(settings.density || 'default') === val ? 'selected' : ''}"
+                          onclick={() => {
+                            saveSetting("density", val);
+                            onDensityChange?.(val);
+                          }}
+                        >{label}</button>
+                      {/each}
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card-row">
+                  <div class="setting-row-inline">
+                    <div class="setting-label">
+                      <span class="setting-name">Reading Pane</span>
+                      <span class="setting-hint">Where the message view appears</span>
+                    </div>
+                    <div class="option-group">
+                      {#each [["right", "Right"], ["bottom", "Bottom"]] as [val, label]}
+                        <button
+                          class="option-btn {(settings.reading_pane || 'right') === val ? 'selected' : ''}"
+                          onclick={() => {
+                            saveSetting("reading_pane", val);
+                            onReadingPaneChange?.(val);
+                          }}
+                        >{label}</button>
+                      {/each}
+                    </div>
+                  </div>
+                </div>
+
                 <div class="card-row">
                   <div class="setting-row-inline">
                     <div class="setting-label">
@@ -722,18 +766,14 @@
     line-height: 1.4;
   }
 
-  /* Card containers for grouped settings */
   .setting-card {
-    background: var(--bg-sidebar, rgba(0, 0, 0, 0.03));
-    border-radius: 10px;
     padding: 0;
-    margin-bottom: 16px;
-    overflow: hidden;
+    margin-bottom: 0;
   }
 
   .card-row {
-    padding: 12px 16px;
-    border-bottom: 1px solid var(--border-color, rgba(0, 0, 0, 0.06));
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border-color);
   }
   .card-row.last,
   .card-row:last-child {
