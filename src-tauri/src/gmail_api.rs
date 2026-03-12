@@ -91,6 +91,59 @@ pub struct ThreadDetailsResponse {
     pub messages: Option<Vec<GmailMessage>>,
 }
 
+#[derive(Deserialize, Debug)]
+struct HistoryMessage {
+    id: String,
+    #[serde(rename = "threadId")]
+    thread_id: String,
+    #[serde(rename = "labelIds")]
+    label_ids: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, Debug)]
+struct HistoryMessageWrapper {
+    message: HistoryMessage,
+}
+
+#[derive(Deserialize, Debug)]
+struct HistoryLabelWrapper {
+    message: HistoryMessage,
+    #[serde(rename = "labelIds")]
+    #[serde(default)]
+    label_ids: Vec<String>,
+}
+
+#[derive(Deserialize, Debug)]
+struct HistoryRecord {
+    #[serde(default)]
+    #[serde(rename = "messagesAdded")]
+    messages_added: Vec<HistoryMessageWrapper>,
+    #[serde(default)]
+    #[serde(rename = "messagesDeleted")]
+    messages_deleted: Vec<HistoryMessageWrapper>,
+    #[serde(default)]
+    #[serde(rename = "labelsAdded")]
+    labels_added: Vec<HistoryLabelWrapper>,
+    #[serde(default)]
+    #[serde(rename = "labelsRemoved")]
+    labels_removed: Vec<HistoryLabelWrapper>,
+}
+
+#[derive(Deserialize, Debug)]
+struct HistoryResponse {
+    history: Option<Vec<HistoryRecord>>,
+    #[serde(rename = "historyId")]
+    history_id: String,
+    #[serde(rename = "nextPageToken")]
+    next_page_token: Option<String>,
+}
+
+pub struct SyncDelta {
+    pub threads_to_hydrate: Vec<String>,
+    pub new_inbox_message_ids: Vec<String>,
+    pub new_history_id: String,
+}
+
 fn sanitize_email_html(raw: &str) -> String {
     if raw.is_empty() {
         return String::new();
@@ -266,6 +319,15 @@ pub async fn fetch_and_store_labels(
     let labels_res: LabelsResponse = res.json().await.map_err(|e| e.to_string())?;
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
 
+    let inbox_has_gmail_count = labels_res.labels.iter()
+        .any(|l| l.id == "INBOX" && l.messages_unread.is_some());
+
+    for label in &labels_res.labels {
+        if label.id == "INBOX" {
+            println!("[Labels] INBOX messagesUnread={:?}", label.messages_unread);
+        }
+    }
+
     for label in labels_res.labels {
         sqlx::query(
             "INSERT INTO labels (id, account_id, name, type, unread_count)
@@ -283,6 +345,29 @@ pub async fn fetch_and_store_labels(
     }
 
     tx.commit().await.map_err(|e| e.to_string())?;
+
+    // If Gmail didn't return messagesUnread for INBOX (it's optional),
+    // compute from local thread data instead
+    if !inbox_has_gmail_count {
+        let local_unread: (i32,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM threads t
+             INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'INBOX'
+             WHERE t.account_id = ? AND t.unread = 1"
+        )
+        .bind(account_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or((0,));
+
+        let _ = sqlx::query("UPDATE labels SET unread_count = ? WHERE id = 'INBOX' AND account_id = ?")
+            .bind(local_unread.0)
+            .bind(account_id)
+            .execute(pool)
+            .await;
+
+        println!("[Labels] INBOX unread from local data: {}", local_unread.0);
+    }
+
     Ok(())
 }
 
@@ -347,6 +432,11 @@ pub async fn fetch_and_store_threads(
             }
         }
         tx.commit().await.map_err(|e| e.to_string())?;
+
+        // Seed history watermark from the highest historyId in the fetched threads
+        if let Some(max_hid) = threads.iter().map(|t| &t.history_id).max() {
+            set_last_history_id(pool, account_id, max_hid).await;
+        }
     }
 
     Ok(())
@@ -606,6 +696,174 @@ pub async fn evict_old_message_bodies(pool: &SqlitePool, account_id: &str, max_c
         }
         Err(e) => println!("[Cache] Eviction error: {}", e),
     }
+}
+
+pub async fn get_last_history_id(pool: &SqlitePool, account_id: &str) -> Option<String> {
+    sqlx::query_scalar("SELECT last_history_id FROM history_state WHERE account_id = ?")
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None)
+}
+
+pub async fn set_last_history_id(pool: &SqlitePool, account_id: &str, history_id: &str) {
+    let _ = sqlx::query(
+        "INSERT INTO history_state (account_id, last_history_id) VALUES (?, ?)
+         ON CONFLICT(account_id) DO UPDATE SET last_history_id = excluded.last_history_id"
+    )
+    .bind(account_id)
+    .bind(history_id)
+    .execute(pool)
+    .await;
+}
+
+#[allow(unused_assignments)]
+pub async fn fetch_history(
+    pool: &SqlitePool,
+    _account_id: &str,
+    access_token: &str,
+    start_history_id: &str,
+) -> Result<Option<SyncDelta>, String> {
+    let client = Client::new();
+    let mut all_records: Vec<HistoryRecord> = Vec::new();
+    let mut page_token: Option<String> = None;
+    let mut latest_history_id = String::new();
+
+    loop {
+        let mut params = vec![
+            ("startHistoryId", start_history_id.to_string()),
+            ("historyTypes", "messageAdded".to_string()),
+            ("historyTypes", "messageDeleted".to_string()),
+            ("historyTypes", "labelAdded".to_string()),
+            ("historyTypes", "labelRemoved".to_string()),
+        ];
+        if let Some(ref token) = page_token {
+            params.push(("pageToken", token.clone()));
+        }
+
+        let res = client
+            .get(gmail_api_url("/gmail/v1/users/me/history"))
+            .query(&params)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if res.status() == 404 {
+            return Ok(None);
+        }
+        if !res.status().is_success() {
+            return Err(format!("History API error: {}", res.status()));
+        }
+
+        let history_res: HistoryResponse = res.json().await.map_err(|e| e.to_string())?;
+        println!("[History] Response historyId={}, records={}", history_res.history_id,
+            history_res.history.as_ref().map(|r| r.len()).unwrap_or(0));
+        latest_history_id = history_res.history_id;
+
+        if let Some(records) = history_res.history {
+            for rec in &records {
+                if !rec.messages_added.is_empty() { println!("[History] messagesAdded: {}", rec.messages_added.len()); }
+                if !rec.messages_deleted.is_empty() { println!("[History] messagesDeleted: {}", rec.messages_deleted.len()); }
+                if !rec.labels_added.is_empty() { println!("[History] labelsAdded: {} (labels: {:?})", rec.labels_added.len(), rec.labels_added.iter().map(|l| &l.label_ids).collect::<Vec<_>>()); }
+                if !rec.labels_removed.is_empty() { println!("[History] labelsRemoved: {} (labels: {:?})", rec.labels_removed.len(), rec.labels_removed.iter().map(|l| &l.label_ids).collect::<Vec<_>>()); }
+            }
+            all_records.extend(records);
+        }
+
+        match history_res.next_page_token {
+            Some(token) => page_token = Some(token),
+            None => break,
+        }
+    }
+
+    let mut threads_to_hydrate: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut new_inbox_message_ids: Vec<String> = Vec::new();
+
+    for record in &all_records {
+        for added in &record.messages_added {
+            threads_to_hydrate.insert(added.message.thread_id.clone());
+            if let Some(ref labels) = added.message.label_ids {
+                if labels.contains(&"INBOX".to_string()) && labels.contains(&"UNREAD".to_string()) {
+                    new_inbox_message_ids.push(added.message.id.clone());
+                }
+            }
+        }
+
+        for deleted in &record.messages_deleted {
+            threads_to_hydrate.insert(deleted.message.thread_id.clone());
+        }
+
+        // labelsAdded: label_ids = the labels that were ADDED
+        for added in &record.labels_added {
+            for label in &added.label_ids {
+                let _ = sqlx::query(
+                    "INSERT OR IGNORE INTO message_labels (message_id, label_id) VALUES (?, ?)"
+                )
+                .bind(&added.message.id)
+                .bind(label)
+                .execute(pool)
+                .await;
+                let _ = sqlx::query(
+                    "INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?, ?)"
+                )
+                .bind(&added.message.thread_id)
+                .bind(label)
+                .execute(pool)
+                .await;
+            }
+            if added.label_ids.iter().any(|l| l == "UNREAD") {
+                let _ = sqlx::query("UPDATE threads SET unread = 1 WHERE id = ?")
+                    .bind(&added.message.thread_id)
+                    .execute(pool)
+                    .await;
+            }
+        }
+
+        // labelsRemoved: label_ids = the labels that were REMOVED
+        for removed in &record.labels_removed {
+            for label in &removed.label_ids {
+                let _ = sqlx::query(
+                    "DELETE FROM message_labels WHERE message_id = ? AND label_id = ?"
+                )
+                .bind(&removed.message.id)
+                .bind(label)
+                .execute(pool)
+                .await;
+            }
+            if removed.label_ids.iter().any(|l| l == "UNREAD") {
+                let has_unread: (i32,) = sqlx::query_as(
+                    "SELECT COUNT(*) FROM message_labels ml
+                     JOIN messages m ON ml.message_id = m.id
+                     WHERE m.thread_id = ? AND ml.label_id = 'UNREAD'"
+                )
+                .bind(&removed.message.thread_id)
+                .fetch_one(pool)
+                .await
+                .unwrap_or((0,));
+                if has_unread.0 == 0 {
+                    let _ = sqlx::query("UPDATE threads SET unread = 0 WHERE id = ?")
+                        .bind(&removed.message.thread_id)
+                            .execute(pool)
+                            .await;
+                    }
+                }
+            if removed.label_ids.iter().any(|l| l == "INBOX") {
+                let _ = sqlx::query(
+                    "DELETE FROM thread_labels WHERE thread_id = ? AND label_id = 'INBOX'"
+                )
+                .bind(&removed.message.thread_id)
+                .execute(pool)
+                .await;
+            }
+        }
+    }
+
+    Ok(Some(SyncDelta {
+        threads_to_hydrate: threads_to_hydrate.into_iter().collect(),
+        new_inbox_message_ids,
+        new_history_id: latest_history_id,
+    }))
 }
 
 #[derive(serde::Serialize)]
@@ -3239,5 +3497,175 @@ mod tests {
         let result = read_attachment_files(&[]);
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
+    }
+
+    // ---------------------------------------------------------------
+    // History API tests
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_set_last_history_id() {
+        let pool = test_pool().await;
+
+        // Initially no history
+        let result = get_last_history_id(&pool, "acc1").await;
+        assert!(result.is_none());
+
+        // Set history
+        set_last_history_id(&pool, "acc1", "12345").await;
+        let result = get_last_history_id(&pool, "acc1").await;
+        assert_eq!(result, Some("12345".to_string()));
+
+        // Update history
+        set_last_history_id(&pool, "acc1", "67890").await;
+        let result = get_last_history_id(&pool, "acc1").await;
+        assert_eq!(result, Some("67890".to_string()));
+
+        // Different account isolation
+        set_last_history_id(&pool, "acc2", "11111").await;
+        assert_eq!(get_last_history_id(&pool, "acc1").await, Some("67890".to_string()));
+        assert_eq!(get_last_history_id(&pool, "acc2").await, Some("11111".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_history_expired_returns_none() {
+        let pool = test_pool().await;
+        let server = httpmock::MockServer::start();
+
+        let mock = server.mock(|when, then| {
+            when.method("GET").path("/gmail/v1/users/me/history");
+            then.status(404);
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = fetch_history(&pool, "acc1", "token", "old_id").await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.unwrap().is_none());
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn test_fetch_history_success_with_new_messages() {
+        let pool = test_pool().await;
+        let server = httpmock::MockServer::start();
+
+        // Need a thread in the DB for label operations
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t1', 'acc1', '', '100', 0)")
+            .execute(&pool).await.unwrap();
+
+        let mock = server.mock(|when, then| {
+            when.method("GET").path("/gmail/v1/users/me/history");
+            then.status(200).json_body(serde_json::json!({
+                "history": [{
+                    "messagesAdded": [{
+                        "message": {
+                            "id": "msg1",
+                            "threadId": "t1",
+                            "labelIds": ["INBOX", "UNREAD"]
+                        }
+                    }]
+                }],
+                "historyId": "200"
+            }));
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = fetch_history(&pool, "acc1", "token", "100").await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok());
+        let delta = result.unwrap().unwrap();
+        assert!(delta.threads_to_hydrate.contains(&"t1".to_string()));
+        assert_eq!(delta.new_inbox_message_ids, vec!["msg1".to_string()]);
+        assert_eq!(delta.new_history_id, "200");
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn test_fetch_history_no_changes() {
+        let pool = test_pool().await;
+        let server = httpmock::MockServer::start();
+
+        let mock = server.mock(|when, then| {
+            when.method("GET").path("/gmail/v1/users/me/history");
+            then.status(200).json_body(serde_json::json!({
+                "historyId": "150"
+            }));
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = fetch_history(&pool, "acc1", "token", "100").await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok());
+        let delta = result.unwrap().unwrap();
+        assert!(delta.threads_to_hydrate.is_empty());
+        assert!(delta.new_inbox_message_ids.is_empty());
+        assert_eq!(delta.new_history_id, "150");
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn test_fetch_history_label_changes() {
+        let pool = test_pool().await;
+        let server = httpmock::MockServer::start();
+
+        // Set up thread and message
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t1', 'acc1', '', '100', 0)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, subject, internal_date) VALUES ('msg1', 't1', 'acc1', 'test@test.com', 'Test', 1000)")
+            .execute(&pool).await.unwrap();
+
+        let mock = server.mock(|when, then| {
+            when.method("GET").path("/gmail/v1/users/me/history");
+            then.status(200).json_body(serde_json::json!({
+                "history": [{
+                    "labelsAdded": [{
+                        "message": {
+                            "id": "msg1",
+                            "threadId": "t1"
+                        },
+                        "labelIds": ["STARRED"]
+                    }]
+                }],
+                "historyId": "200"
+            }));
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = fetch_history(&pool, "acc1", "token", "100").await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        let delta = result.unwrap().unwrap();
+
+        // Label changes should NOT trigger hydration
+        assert!(delta.threads_to_hydrate.is_empty());
+
+        // Verify label was applied locally
+        let label_count: (i32,) = sqlx::query_as("SELECT COUNT(*) FROM message_labels WHERE message_id = 'msg1' AND label_id = 'STARRED'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(label_count.0, 1);
+
+        let thread_label_count: (i32,) = sqlx::query_as("SELECT COUNT(*) FROM thread_labels WHERE thread_id = 't1' AND label_id = 'STARRED'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(thread_label_count.0, 1);
+        mock.assert();
     }
 }

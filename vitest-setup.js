@@ -43,6 +43,13 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
     confirm: vi.fn(() => Promise.resolve(false)),
 }));
 
+// Mock Tauri notification plugin
+vi.mock('@tauri-apps/plugin-notification', () => ({
+    sendNotification: vi.fn(),
+    isPermissionGranted: vi.fn(() => Promise.resolve(true)),
+    requestPermission: vi.fn(() => Promise.resolve('granted')),
+}));
+
 // Mock window.matchMedia
 Object.defineProperty(window, 'matchMedia', {
     writable: true,

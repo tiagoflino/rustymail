@@ -1,19 +1,82 @@
 use super::accounts::get_active_account;
 use tauri::Manager;
 
+#[derive(serde::Serialize)]
+pub struct SyncResult {
+    pub new_message_ids: Vec<String>,
+}
+
 #[tauri::command]
 pub async fn sync_gmail_data(
     app_handle: tauri::AppHandle,
     label_id: Option<String>,
-) -> Result<(), String> {
+) -> Result<SyncResult, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
 
-    println!("[Sync] Starting fast sync for: {}", account.id);
+    println!("[Sync] Starting sync for: {}", account.id);
 
     crate::gmail_api::fetch_and_store_labels(pool.inner(), &account.id, &account.access_token)
         .await?;
 
+    let mut new_message_ids: Vec<String> = Vec::new();
+
+    let last_history_id =
+        crate::gmail_api::get_last_history_id(pool.inner(), &account.id).await;
+
+    if let Some(ref history_id) = last_history_id {
+        println!("[Sync] Attempting incremental sync from historyId={}", history_id);
+        let result = crate::gmail_api::fetch_history(
+            pool.inner(),
+            &account.id,
+            &account.access_token,
+            history_id,
+        )
+        .await;
+
+        match result {
+            Ok(Some(delta)) => {
+                if !delta.threads_to_hydrate.is_empty() {
+                    crate::gmail_api::batch_hydrate_threads(
+                        pool.inner(),
+                        &account.id,
+                        &account.access_token,
+                        delta.threads_to_hydrate,
+                    )
+                    .await;
+                }
+                crate::gmail_api::set_last_history_id(
+                    pool.inner(),
+                    &account.id,
+                    &delta.new_history_id,
+                )
+                .await;
+                new_message_ids = delta.new_inbox_message_ids;
+            }
+            Ok(None) => {
+                println!("[Sync] History expired (404), falling back to full sync");
+                full_sync(pool.inner(), &account, &label_id).await?;
+            }
+            Err(e) => {
+                println!("[Sync] Incremental sync error: {}, falling back to full sync", e);
+                full_sync(pool.inner(), &account, &label_id).await?;
+            }
+        }
+    } else {
+        println!("[Sync] No historyId stored, running full sync");
+        full_sync(pool.inner(), &account, &label_id).await?;
+    }
+
+    spawn_background_cleanup(pool.inner(), &account, &app_handle);
+
+    Ok(SyncResult { new_message_ids })
+}
+
+async fn full_sync(
+    pool: &sqlx::SqlitePool,
+    account: &super::accounts::ActiveAccountFull,
+    label_id: &Option<String>,
+) -> Result<(), String> {
     let target_labels = if let Some(ref lid) = label_id {
         vec![lid.as_str()]
     } else {
@@ -21,7 +84,7 @@ pub async fn sync_gmail_data(
     };
 
     crate::gmail_api::fetch_and_store_threads(
-        pool.inner(),
+        pool,
         &account.id,
         &account.access_token,
         Some(&target_labels),
@@ -30,20 +93,24 @@ pub async fn sync_gmail_data(
     .await?;
 
     #[derive(sqlx::FromRow)]
-    struct PrefetchSetting { value: String }
-    let prefetch = sqlx::query_as::<_, PrefetchSetting>("SELECT value FROM settings WHERE key = 'prefetch_bodies'")
-        .fetch_optional(pool.inner())
-        .await
-        .unwrap_or(None)
-        .map(|r| r.value == "true")
-        .unwrap_or(false);
+    struct PrefetchSetting {
+        value: String,
+    }
+    let prefetch = sqlx::query_as::<_, PrefetchSetting>(
+        "SELECT value FROM settings WHERE key = 'prefetch_bodies'",
+    )
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None)
+    .map(|r| r.value == "true")
+    .unwrap_or(false);
 
     // Re-hydrate threads with new activity (history_id changed on Gmail)
-    let stale = crate::gmail_api::get_stale_thread_ids(pool.inner(), &account.id).await;
+    let stale = crate::gmail_api::get_stale_thread_ids(pool, &account.id).await;
     if !stale.is_empty() {
         println!("[Sync] Re-hydrating {} stale threads", stale.len());
         crate::gmail_api::batch_hydrate_threads(
-            pool.inner(),
+            pool,
             &account.id,
             &account.access_token,
             stale,
@@ -52,12 +119,12 @@ pub async fn sync_gmail_data(
     }
 
     // Hydrate threads that have never been fetched
-    let unhydrated = crate::gmail_api::get_unhydrated_thread_ids(pool.inner(), &account.id).await;
+    let unhydrated = crate::gmail_api::get_unhydrated_thread_ids(pool, &account.id).await;
     if !unhydrated.is_empty() {
         let limit = if prefetch { unhydrated.len() } else { 100 };
         let batch: Vec<String> = unhydrated.into_iter().take(limit).collect();
         crate::gmail_api::batch_hydrate_threads(
-            pool.inner(),
+            pool,
             &account.id,
             &account.access_token,
             batch,
@@ -65,7 +132,31 @@ pub async fn sync_gmail_data(
         .await;
     }
 
-    let bg_pool = pool.inner().clone();
+    // After full sync, store the latest historyId from the most recent thread
+    #[derive(sqlx::FromRow)]
+    struct HistoryRow {
+        history_id: String,
+    }
+    if let Ok(Some(row)) = sqlx::query_as::<_, HistoryRow>(
+        "SELECT history_id FROM threads WHERE account_id = ? AND history_id IS NOT NULL AND history_id != '' ORDER BY CAST(history_id AS INTEGER) DESC LIMIT 1",
+    )
+    .bind(&account.id)
+    .fetch_optional(pool)
+    .await
+    {
+        crate::gmail_api::set_last_history_id(pool, &account.id, &row.history_id).await;
+        println!("[Sync] Stored historyId={} after full sync", row.history_id);
+    }
+
+    Ok(())
+}
+
+fn spawn_background_cleanup(
+    pool: &sqlx::SqlitePool,
+    account: &super::accounts::ActiveAccountFull,
+    app_handle: &tauri::AppHandle,
+) {
+    let bg_pool = pool.clone();
     let bg_account_id = account.id.clone();
     let bg_token = account.access_token.clone();
     let bg_app = app_handle.clone();
@@ -102,8 +193,6 @@ pub async fn sync_gmail_data(
             crate::gmail_api::evict_old_message_bodies(&bg_pool, &bg_account_id, 200).await;
         }
     });
-
-    Ok(())
 }
 
 #[tauri::command]

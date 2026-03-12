@@ -3,6 +3,7 @@ pub mod calendar_api;
 mod credentials;
 mod db;
 mod gmail_api;
+mod tray;
 
 use tauri::Manager;
 
@@ -21,13 +22,22 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let pool = tauri::async_runtime::block_on(async { db::init_db(&handle).await })
                 .expect("Failed to initialize database");
             handle.manage(pool);
+            tray::setup_tray(app)?;
             println!("Database initialized successfully!");
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Hide window instead of closing — app stays in tray
+                api.prevent_close();
+                let _ = window.hide();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             greet,
@@ -68,6 +78,7 @@ pub fn run() {
             commands::misc::open_external_url,
             commands::misc::get_upcoming_events,
             commands::misc::get_file_size,
+            tray::update_tray_unread,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

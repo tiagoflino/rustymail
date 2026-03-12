@@ -1,6 +1,8 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { listen } from "@tauri-apps/api/event";
+  import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
   import { checkForUpdates, setupPeriodicUpdateCheck } from "$lib/utils/updater";
   import { analyzeLinkSafety, type LinkAnalysis } from "$lib/utils/linkSafety";
   import { onMount, onDestroy } from "svelte";
@@ -252,7 +254,7 @@
       isSyncing.set(true);
       lastSyncError.set(null);
 
-      await invoke("sync_gmail_data", { labelId: syncLabelId });
+      const result = await invoke<{ new_message_ids: string[] }>("sync_gmail_data", { labelId: syncLabelId });
 
       if (get(selectedLabelId) !== syncLabelId) return;
 
@@ -270,6 +272,20 @@
 
       if (isManual) {
         pollBackgroundSync();
+      }
+
+      // Desktop notifications for new messages (background syncs only)
+      if (!isManual && result.new_message_ids.length > 0) {
+        try {
+          const enabled = await invoke<string>("get_setting", { key: "notifications_enabled" });
+          if (enabled === "true") {
+            const count = result.new_message_ids.length;
+            sendNotification({
+              title: "Rustymail",
+              body: count === 1 ? "You have a new message" : `You have ${count} new messages`,
+            });
+          }
+        } catch (_) {}
       }
     } catch (e) {
       lastSyncError.set(String(e));
@@ -483,9 +499,18 @@
     try {
       const fetched: LocalLabel[] = await invoke("get_labels");
       labels.set(fetched);
+      updateTrayUnread(fetched);
     } catch (e) {
       console.error("Failed to load labels", e);
     }
+  }
+
+  function updateTrayUnread(labelList: LocalLabel[]) {
+    const inbox = labelList.find((l) => l.id === "INBOX");
+    const count = inbox?.unread_count ?? 0;
+    invoke("update_tray_unread", { count }).catch(() => {});
+    // Also set badge directly from frontend as backup
+    getCurrentWindow().setBadgeCount(count > 0 ? count : undefined).catch(() => {});
   }
 
   async function selectLabel(labelId: string) {
@@ -918,8 +943,23 @@
 
     setTimeout(() => threadListRef?.initObserver(), 100);
     setTimeout(() => checkForUpdates(true), 5000);
+
+    // Request notification permission
+    isPermissionGranted().then((granted) => {
+      if (!granted) requestPermission();
+    }).catch(() => {});
+
+    // Tray event listeners
+    listen("tray-compose", async () => {
+      await openCompose();
+    }).then((fn) => (unlistenTrayCompose = fn));
+    listen("tray-check-mail", async () => {
+      await performSync(true);
+    }).then((fn) => (unlistenTrayCheckMail = fn));
   });
 
+  let unlistenTrayCompose: (() => void) | null = null;
+  let unlistenTrayCheckMail: (() => void) | null = null;
   let stopUpdateCheck: (() => void) | null = null;
   $effect(() => {
     if ($isAuthenticated && !stopUpdateCheck) {
@@ -940,6 +980,8 @@
     }
     syncLock = false;
     if (stopUpdateCheck) stopUpdateCheck();
+    if (unlistenTrayCompose) unlistenTrayCompose();
+    if (unlistenTrayCheckMail) unlistenTrayCheckMail();
   });
 
   function getActiveLabelName(): string {

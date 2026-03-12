@@ -13,9 +13,12 @@
     "core:window:allow-close",
     "core:window:allow-is-maximized",
     "core:window:allow-set-decorations",
+    "core:window:allow-set-badge-count",
+    "core:window:allow-set-badge-label",
     "opener:default",
     "updater:default",
     "process:default",
-    "dialog:default"
+    "dialog:default",
+    "notification:default"
   ]
 }
