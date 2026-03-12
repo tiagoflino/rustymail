@@ -169,6 +169,21 @@ fn sanitize_email_html(raw: &str) -> String {
     let base_re = regex_lite::Regex::new(r"(?i)<base[^>]*>").unwrap();
     result = base_re.replace_all(&result, "").to_string();
 
+    let doctype_re = regex_lite::Regex::new(r"(?i)<!DOCTYPE[^>]*>").unwrap();
+    result = doctype_re.replace_all(&result, "").to_string();
+
+    let title_re = regex_lite::Regex::new(r"(?is)<title[^>]*>.*?</title>").unwrap();
+    result = title_re.replace_all(&result, "").to_string();
+
+    let wrapper_open_re = regex_lite::Regex::new(r"(?i)<(html|head|body)[^>]*>").unwrap();
+    result = wrapper_open_re.replace_all(&result, "").to_string();
+
+    let wrapper_close_re = regex_lite::Regex::new(r"(?i)</(html|head|body)>").unwrap();
+    result = wrapper_close_re.replace_all(&result, "").to_string();
+
+    let meta_re = regex_lite::Regex::new(r"(?i)<meta[^>]*/?>").unwrap();
+    result = meta_re.replace_all(&result, "").to_string();
+
     let inliner = css_inline::CSSInliner::options()
         .load_remote_stylesheets(false)
         .keep_style_tags(true)
