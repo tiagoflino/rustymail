@@ -24,6 +24,13 @@ pub async fn get_upcoming_events(
     crate::calendar_api::get_upcoming_events(&account.access_token).await
 }
 
+#[tauri::command]
+pub fn get_file_size(path: String) -> Result<u64, String> {
+    std::fs::metadata(&path)
+        .map(|m| m.len())
+        .map_err(|e| format!("Cannot read file: {}", e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

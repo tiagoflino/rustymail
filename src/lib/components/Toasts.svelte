@@ -71,6 +71,12 @@
     pointer-events: auto;
   }
 
+  :global([data-theme="light"]) .toast {
+    background: rgba(255, 255, 255, 0.88);
+    color: #1c1c1e;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.06) inset;
+  }
+
   .toast-icon {
     display: flex;
     margin-right: 10px;
@@ -108,6 +114,13 @@
     background: rgba(255, 255, 255, 0.18);
   }
 
+  :global([data-theme="light"]) .toast-action {
+    background: rgba(0, 0, 0, 0.06);
+  }
+  :global([data-theme="light"]) .toast-action:hover {
+    background: rgba(0, 0, 0, 0.1);
+  }
+
   .toast-close {
     background: transparent;
     border: none;
@@ -124,5 +137,13 @@
   .toast-close:hover {
     background: rgba(255, 255, 255, 0.1);
     color: rgba(255, 255, 255, 0.8);
+  }
+
+  :global([data-theme="light"]) .toast-close {
+    color: rgba(0, 0, 0, 0.35);
+  }
+  :global([data-theme="light"]) .toast-close:hover {
+    background: rgba(0, 0, 0, 0.06);
+    color: rgba(0, 0, 0, 0.7);
   }
 </style>

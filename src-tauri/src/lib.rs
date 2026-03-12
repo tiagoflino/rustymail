@@ -62,10 +62,12 @@ pub fn run() {
             commands::compose::save_draft,
             commands::compose::delete_draft,
             commands::compose::delete_draft_by_thread,
+            commands::compose::upload_to_drive,
             commands::compose::get_draft_id_by_message_id,
             commands::compose::search_contacts,
             commands::misc::open_external_url,
             commands::misc::get_upcoming_events,
+            commands::misc::get_file_size,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

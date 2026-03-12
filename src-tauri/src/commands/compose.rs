@@ -8,6 +8,7 @@ pub struct ContactSuggestion {
     pub raw: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn send_message(
     app_handle: tauri::AppHandle,
@@ -17,6 +18,7 @@ pub async fn send_message(
     thread_id: Option<String>,
     in_reply_to: Option<String>,
     references: Option<String>,
+    attachment_paths: Option<Vec<String>>,
 ) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
@@ -31,6 +33,11 @@ pub async fn send_message(
         .await
         .map_err(|e| e.to_string())?;
 
+    let attachments = match attachment_paths {
+        Some(ref paths) if !paths.is_empty() => crate::gmail_api::read_attachment_files(paths)?,
+        _ => vec![],
+    };
+
     crate::gmail_api::send_message(
         &account.id,
         &row.email,
@@ -41,6 +48,7 @@ pub async fn send_message(
         thread_id.as_deref(),
         in_reply_to.as_deref(),
         references.as_deref(),
+        &attachments,
     )
     .await
 }
@@ -123,6 +131,7 @@ pub async fn save_draft(
     in_reply_to: Option<String>,
     references: Option<String>,
     draft_id: Option<String>,
+    attachment_paths: Option<Vec<String>>,
 ) -> Result<String, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
@@ -137,6 +146,11 @@ pub async fn save_draft(
         .await
         .map_err(|e| e.to_string())?;
 
+    let attachments = match attachment_paths {
+        Some(ref paths) if !paths.is_empty() => crate::gmail_api::read_attachment_files(paths)?,
+        _ => vec![],
+    };
+
     let new_draft_id = crate::gmail_api::save_draft(
         &account.id,
         &row.email,
@@ -148,6 +162,7 @@ pub async fn save_draft(
         in_reply_to.as_deref(),
         references.as_deref(),
         draft_id.as_deref(),
+        &attachments,
     )
     .await?;
 
@@ -209,6 +224,16 @@ pub async fn delete_draft_by_thread(
         &thread_id,
     )
     .await
+}
+
+#[tauri::command]
+pub async fn upload_to_drive(
+    app_handle: tauri::AppHandle,
+    file_path: String,
+) -> Result<String, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+    crate::gmail_api::upload_to_drive(&account.access_token, &file_path).await
 }
 
 #[tauri::command]

@@ -149,6 +149,40 @@ fn sanitize_email_html(raw: &str) -> String {
     inliner.inline(&sanitized).unwrap_or(sanitized)
 }
 
+#[derive(Debug)]
+pub struct AttachmentFile {
+    pub filename: String,
+    pub mime_type: String,
+    pub data: Vec<u8>,
+}
+
+pub fn read_attachment_files(paths: &[String]) -> Result<Vec<AttachmentFile>, String> {
+    const MAX_TOTAL_SIZE: u64 = 25 * 1024 * 1024;
+    let mut files = Vec::new();
+    let mut total_size: u64 = 0;
+
+    for path_str in paths {
+        let path = std::path::Path::new(path_str);
+        let metadata = std::fs::metadata(path)
+            .map_err(|e| format!("Cannot read {}: {}", path.display(), e))?;
+        total_size += metadata.len();
+        if total_size > MAX_TOTAL_SIZE {
+            return Err("Total attachment size exceeds Gmail's 25MB limit.".to_string());
+        }
+        let data = std::fs::read(path)
+            .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+        let filename = path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("attachment")
+            .to_string();
+        let mime_type = mime_guess::from_path(path)
+            .first_or_octet_stream()
+            .to_string();
+        files.push(AttachmentFile { filename, mime_type, data });
+    }
+    Ok(files)
+}
+
 fn extract_body(part: &MessagePart, target_mime_type: &str) -> Option<String> {
     if part.mime_type == target_mime_type {
         if let Some(body) = &part.body {
@@ -742,6 +776,82 @@ pub async fn download_attachment(
         .map_err(|e| format!("Failed to decode attachment: {}", e))
 }
 
+pub async fn upload_to_drive(
+    access_token: &str,
+    file_path: &str,
+) -> Result<String, String> {
+    let path = std::path::Path::new(file_path);
+    let file_data = std::fs::read(path)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let filename = path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("attachment")
+        .to_string();
+    let mime_type = mime_guess::from_path(path)
+        .first_or_octet_stream()
+        .to_string();
+
+    let client = Client::new();
+
+    // Multipart upload to Drive API
+    let boundary = format!("rustymail{}", chrono::Utc::now().timestamp_millis());
+    let metadata = serde_json::json!({
+        "name": filename,
+        "mimeType": mime_type,
+    });
+
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(b"Content-Type: application/json; charset=UTF-8\r\n\r\n");
+    body.extend_from_slice(metadata.to_string().as_bytes());
+    body.extend_from_slice(format!("\r\n--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(format!("Content-Type: {}\r\n\r\n", mime_type).as_bytes());
+    body.extend_from_slice(&file_data);
+    body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
+
+    let upload_res = client
+        .post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("Content-Type", format!("multipart/related; boundary={}", boundary))
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !upload_res.status().is_success() {
+        let status = upload_res.status();
+        let text = upload_res.text().await.unwrap_or_default();
+        return Err(format!("Drive upload failed ({}): {}", status, text));
+    }
+
+    let upload_json: serde_json::Value = upload_res.json().await.map_err(|e| e.to_string())?;
+    let file_id = upload_json["id"]
+        .as_str()
+        .ok_or("No file ID in Drive response")?
+        .to_string();
+
+    // Set sharing permission: anyone with link can view
+    let perm_body = serde_json::json!({
+        "role": "reader",
+        "type": "anyone",
+    });
+
+    let perm_res = client
+        .post(format!("https://www.googleapis.com/drive/v3/files/{}/permissions", file_id))
+        .header("Authorization", format!("Bearer {}", access_token))
+        .json(&perm_body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !perm_res.status().is_success() {
+        // File uploaded but sharing failed — return link anyway
+        eprintln!("Warning: Failed to set sharing permission on Drive file {}", file_id);
+    }
+
+    Ok(format!("https://drive.google.com/file/d/{}/view?usp=sharing", file_id))
+}
+
 /// Parse an RFC 5322-ish address like `Display Name <email@example.com>` or
 /// just `email@example.com` into a lettre `Mailbox`. Display names containing
 /// emoji or other non-ASCII are supported because we handle them ourselves
@@ -770,6 +880,7 @@ fn parse_to_mailbox(raw: &str) -> Result<lettre::message::Mailbox, String> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_mime_message(
     from: &str,
     to: &str,
@@ -778,6 +889,7 @@ fn build_mime_message(
     in_reply_to: Option<&str>,
     references: Option<&str>,
     allow_empty_to: bool,
+    attachments: &[AttachmentFile],
 ) -> Result<String, String> {
     use lettre::message::{header::ContentType, Mailbox, Message};
     use std::str::FromStr;
@@ -828,10 +940,30 @@ fn build_mime_message(
         }
     }
 
-    let email = builder
-        .header(ContentType::TEXT_HTML)
-        .body(body.to_string())
-        .map_err(|e| e.to_string())?;
+    let email = if attachments.is_empty() {
+        builder
+            .header(ContentType::TEXT_HTML)
+            .body(body.to_string())
+            .map_err(|e| e.to_string())?
+    } else {
+        use lettre::message::{MultiPart, SinglePart, Attachment as LettreAttachment};
+
+        let html_part = SinglePart::builder()
+            .header(ContentType::TEXT_HTML)
+            .body(body.to_string());
+
+        let mut multipart = MultiPart::mixed().singlepart(html_part);
+
+        for att in attachments {
+            let content_type = ContentType::parse(&att.mime_type)
+                .unwrap_or(ContentType::parse("application/octet-stream").unwrap());
+            let attachment_part = LettreAttachment::new(att.filename.clone())
+                .body(att.data.clone(), content_type);
+            multipart = multipart.singlepart(attachment_part);
+        }
+
+        builder.multipart(multipart).map_err(|e| e.to_string())?
+    };
 
     let formatted = email.formatted();
     Ok(base64::encode_config(formatted, base64::URL_SAFE_NO_PAD))
@@ -848,6 +980,7 @@ pub async fn send_message(
     thread_id: Option<&str>,
     in_reply_to: Option<&str>,
     references: Option<&str>,
+    attachments: &[AttachmentFile],
 ) -> Result<(), String> {
     let raw = build_mime_message(
         account_email,
@@ -857,6 +990,7 @@ pub async fn send_message(
         in_reply_to,
         references,
         false,
+        attachments,
     )?;
     let client = reqwest::Client::new();
     let mut body_json = serde_json::json!({ "raw": raw });
@@ -893,6 +1027,7 @@ pub async fn save_draft(
     in_reply_to: Option<&str>,
     references: Option<&str>,
     draft_id: Option<&str>,
+    attachments: &[AttachmentFile],
 ) -> Result<String, String> {
     let raw = build_mime_message(
         account_email,
@@ -902,6 +1037,7 @@ pub async fn save_draft(
         in_reply_to,
         references,
         true,
+        attachments,
     )?;
     let client = reqwest::Client::new();
     let mut message_json = serde_json::json!({ "raw": raw });
@@ -1168,6 +1304,7 @@ mod tests {
             None,
             None,
             false,
+            &[],
         );
         assert!(res.is_ok());
         let encoded = res.unwrap();
@@ -1189,6 +1326,7 @@ mod tests {
             None,
             None,
             false,
+            &[],
         );
         let encoded2 = res2.unwrap();
         let decoded2 = base64::decode_config(&encoded2, base64::URL_SAFE_NO_PAD).unwrap();
@@ -1419,6 +1557,7 @@ mod tests {
             Some("<original-msg-id@mail.test.com>"),
             Some("<original-msg-id@mail.test.com> <another@mail.test.com>"),
             false,
+            &[],
         );
         assert!(res.is_ok());
         let encoded = res.unwrap();
@@ -1447,6 +1586,7 @@ mod tests {
             None,
             None,
             true,
+            &[],
         );
         assert!(res.is_ok(), "Draft mode with empty to should succeed");
     }
@@ -1461,6 +1601,7 @@ mod tests {
             None,
             None,
             false,
+            &[],
         );
         assert!(res.is_err());
         assert!(res
@@ -1478,6 +1619,7 @@ mod tests {
             None,
             None,
             false,
+            &[],
         );
         assert!(res.is_ok(), "Unicode subject should be accepted");
         let encoded = res.unwrap();
@@ -2422,7 +2564,7 @@ mod tests {
             let r = send_message(
                 "acc1", "me@test.com", "fake_token",
                 "you@test.com", "Hello", "<p>Hi there</p>",
-                Some("t1"), None, None,
+                Some("t1"), None, None, &[],
             ).await;
             std::env::remove_var("TEST_GMAIL_API_BASE");
             r
@@ -2448,7 +2590,7 @@ mod tests {
             let r = send_message(
                 "acc1", "me@test.com", "fake_token",
                 "you@test.com", "Hello", "body",
-                None, None, None,
+                None, None, None, &[],
             ).await;
             std::env::remove_var("TEST_GMAIL_API_BASE");
             r
@@ -2479,7 +2621,7 @@ mod tests {
             let r = save_draft(
                 "acc1", "me@test.com", "fake_token",
                 "you@test.com", "Draft Subject", "<p>Draft body</p>",
-                Some("t1"), None, None, None,
+                Some("t1"), None, None, None, &[],
             ).await;
             std::env::remove_var("TEST_GMAIL_API_BASE");
             r
@@ -2510,7 +2652,7 @@ mod tests {
             let r = save_draft(
                 "acc1", "me@test.com", "fake_token",
                 "you@test.com", "Updated Subject", "<p>Updated</p>",
-                None, None, None, Some("draft_existing"),
+                None, None, None, Some("draft_existing"), &[],
             ).await;
             std::env::remove_var("TEST_GMAIL_API_BASE");
             r
@@ -2540,7 +2682,7 @@ mod tests {
             let r = save_draft(
                 "acc1", "me@test.com", "fake_token",
                 "", "Empty To Draft", "<p>No recipient yet</p>",
-                None, None, None, None,
+                None, None, None, None, &[],
             ).await;
             std::env::remove_var("TEST_GMAIL_API_BASE");
             r
@@ -2977,5 +3119,125 @@ mod tests {
         assert_eq!(result[0].size, 0);
         assert_eq!(result[0].id, "msg7_3");
         assert_eq!(result[0].filename, "data.bin");
+    }
+
+    #[test]
+    fn test_build_mime_message_with_attachment() {
+        let attachment = AttachmentFile {
+            filename: "test.txt".to_string(),
+            mime_type: "text/plain".to_string(),
+            data: b"Hello attachment".to_vec(),
+        };
+        let res = build_mime_message(
+            "me@test.com",
+            "you@test.com",
+            "With attachment",
+            "<p>See attached</p>",
+            None,
+            None,
+            false,
+            &[attachment],
+        );
+        assert!(res.is_ok());
+        let encoded = res.unwrap();
+        let decoded = base64::decode_config(&encoded, base64::URL_SAFE_NO_PAD)
+            .expect("valid base64");
+        let mime = String::from_utf8(decoded).expect("valid UTF-8");
+        assert!(mime.contains("multipart/mixed"));
+        assert!(mime.contains("test.txt"));
+        assert!(mime.contains("text/html"));
+    }
+
+    #[test]
+    fn test_build_mime_message_with_multiple_attachments() {
+        let att1 = AttachmentFile {
+            filename: "file1.pdf".to_string(),
+            mime_type: "application/pdf".to_string(),
+            data: vec![0x25, 0x50, 0x44, 0x46],
+        };
+        let att2 = AttachmentFile {
+            filename: "image.png".to_string(),
+            mime_type: "image/png".to_string(),
+            data: vec![0x89, 0x50, 0x4E, 0x47],
+        };
+        let res = build_mime_message(
+            "me@test.com",
+            "you@test.com",
+            "Two files",
+            "<p>Two attachments</p>",
+            None,
+            None,
+            false,
+            &[att1, att2],
+        );
+        assert!(res.is_ok());
+        let encoded = res.unwrap();
+        let decoded = base64::decode_config(&encoded, base64::URL_SAFE_NO_PAD).unwrap();
+        let mime = String::from_utf8(decoded).unwrap();
+        assert!(mime.contains("file1.pdf"));
+        assert!(mime.contains("image.png"));
+        assert!(mime.contains("multipart/mixed"));
+    }
+
+    #[test]
+    fn test_build_mime_message_no_attachments_unchanged() {
+        let res = build_mime_message(
+            "me@test.com",
+            "you@test.com",
+            "No attachments",
+            "<p>Plain email</p>",
+            None,
+            None,
+            false,
+            &[],
+        );
+        assert!(res.is_ok());
+        let encoded = res.unwrap();
+        let decoded = base64::decode_config(&encoded, base64::URL_SAFE_NO_PAD).unwrap();
+        let mime = String::from_utf8(decoded).unwrap();
+        // Single-part should NOT contain multipart
+        assert!(!mime.contains("multipart/mixed"));
+        assert!(mime.contains("text/html"));
+    }
+
+    #[test]
+    fn test_read_attachment_files_valid() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        std::fs::write(&file_path, "hello world").unwrap();
+
+        let result = read_attachment_files(&[file_path.to_string_lossy().to_string()]);
+        assert!(result.is_ok());
+        let files = result.unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].filename, "test.txt");
+        assert_eq!(files[0].data, b"hello world");
+        assert_eq!(files[0].mime_type, "text/plain");
+    }
+
+    #[test]
+    fn test_read_attachment_files_size_limit() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("big.bin");
+        // Create a file just over 25MB
+        let data = vec![0u8; 26 * 1024 * 1024];
+        std::fs::write(&file_path, &data).unwrap();
+
+        let result = read_attachment_files(&[file_path.to_string_lossy().to_string()]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("25MB"));
+    }
+
+    #[test]
+    fn test_read_attachment_files_nonexistent() {
+        let result = read_attachment_files(&["/nonexistent/file.txt".to_string()]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_attachment_files_empty() {
+        let result = read_attachment_files(&[]);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
     }
 }

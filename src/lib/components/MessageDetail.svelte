@@ -194,9 +194,32 @@
         attachmentId: att.id,
         filename: att.filename,
       });
-      addToast(`Saved to ${path}`, "success", 3000);
+      addToast(`Saved: ${att.filename}`, "success", 3000);
     } catch (e) {
       addToast(`Download failed: ${e}`, "error", 5000);
+    }
+  }
+
+  async function downloadAllAttachments() {
+    const atts = allThreadAttachments;
+    let saved = 0;
+    let failed = 0;
+    for (const att of atts) {
+      try {
+        await invoke("download_attachment", {
+          messageId: att.message_id,
+          attachmentId: att.id,
+          filename: att.filename,
+        });
+        saved++;
+      } catch {
+        failed++;
+      }
+    }
+    if (failed === 0) {
+      addToast(`Saved ${saved} attachment${saved !== 1 ? 's' : ''} to Downloads`, "success", 3000);
+    } else {
+      addToast(`Saved ${saved}, failed ${failed}`, "error", 5000);
     }
   }
 </script>
@@ -288,6 +311,10 @@
             <div class="thread-attachments-header">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
               <span>{allThreadAttachments.length} attachment{allThreadAttachments.length !== 1 ? 's' : ''}</span>
+              <button class="download-all-btn" onclick={downloadAllAttachments} title="Download all attachments">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Download All
+              </button>
             </div>
             <div class="thread-attachments-chips">
               {#each allThreadAttachments as att}
@@ -556,6 +583,26 @@
     font-weight: 500;
     color: var(--text-secondary);
     margin-bottom: 8px;
+  }
+  .download-all-btn {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: var(--font-family);
+    transition: background 0.1s, color 0.1s;
+  }
+  .download-all-btn:hover {
+    background: var(--sidebar-hover);
+    color: var(--text-primary);
   }
   .thread-attachments-chips {
     display: flex;

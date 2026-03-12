@@ -1,9 +1,11 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { onMount, untrack } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
+  import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
+  import { onMount, onDestroy, untrack } from "svelte";
   import { iconClose, iconTrash, iconSent, iconCheck } from "./icons";
   import { fly } from "svelte/transition";
-  import { addToast } from "$lib/stores/toast";
+  import { addToast, removeToast } from "$lib/stores/toast";
 
   let {
     onClose,
@@ -47,6 +49,86 @@
   let activeField = $state<"to" | "cc" | "bcc" | null>(null);
   let suggestionDebounce: any;
   let currentDraftId = $state<string | null>(untrack(() => initialDraftId));
+
+  interface ComposeAttachment {
+    path: string;
+    name: string;
+    size: number;
+  }
+  let attachments = $state<ComposeAttachment[]>([]);
+  let totalAttachmentSize = $derived(attachments.reduce((sum, a) => sum + a.size, 0));
+  let isDragging = $state(false);
+  const MAX_ATTACHMENT_SIZE = 25 * 1024 * 1024;
+
+  function formatSize(bytes: number): string {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + " KB";
+    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  }
+
+  async function addFiles(paths: string[]) {
+    for (const p of paths) {
+      const name = p.split("/").pop() || p.split("\\").pop() || "file";
+      let size = 0;
+      try {
+        const stat: any = await invoke("get_file_size", { path: p });
+        size = stat;
+      } catch {
+        size = 0;
+      }
+      const newTotal = totalAttachmentSize + size;
+      if (newTotal > MAX_ATTACHMENT_SIZE) {
+        // Offer Drive upload for oversized files
+        const filePath = p;
+        const fileName = name;
+        const fileSize = size;
+        addToast(
+          `"${fileName}" (${formatSize(fileSize)}) exceeds 25MB limit. Upload to Google Drive?`,
+          "info",
+          0,
+          {
+            label: "Upload",
+            onClick: () => handleDriveUpload(filePath, fileName, fileSize),
+          }
+        );
+        continue;
+      }
+      if (!attachments.some((a) => a.path === p)) {
+        attachments = [...attachments, { path: p, name, size }];
+      }
+    }
+  }
+
+  function removeAttachment(index: number) {
+    attachments = attachments.filter((_, i) => i !== index);
+  }
+
+  async function handleDriveUpload(filePath: string, fileName: string, fileSize: number) {
+    const loadingId = addToast(`Uploading "${fileName}" to Google Drive...`, "info", 0);
+    try {
+      const link: string = await invoke("upload_to_drive", { filePath });
+      removeToast(loadingId);
+      if (editorEl) {
+        const linkHtml = `<p><a href="${link}">${fileName} (${formatSize(fileSize)})</a></p>`;
+        editorEl.innerHTML += linkHtml;
+        bodyHTML = editorEl.innerHTML;
+      }
+      addToast(`"${fileName}" uploaded and link inserted.`, "success");
+    } catch (e) {
+      removeToast(loadingId);
+      addToast(`Drive upload failed: ${e}`, "error", 7000);
+    }
+  }
+
+  async function pickFiles() {
+    const selected = await dialogOpen({ multiple: true, title: "Attach files" });
+    if (selected) {
+      const paths = Array.isArray(selected) ? selected : [selected];
+      addFiles(paths);
+    }
+  }
+
+  let unlistenDrop: (() => void) | null = null;
 
   async function handleInput(field: "to" | "cc" | "bcc", val: string) {
     activeField = field;
@@ -165,6 +247,17 @@
         if (editorEl) editorEl.innerHTML = initialBodyHTML;
       }
     }
+
+    unlistenDrop = (await listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
+      if (event.payload.paths?.length) {
+        addFiles(event.payload.paths);
+      }
+      isDragging = false;
+    })) as unknown as () => void;
+  });
+
+  onDestroy(() => {
+    if (unlistenDrop) unlistenDrop();
   });
 
   async function send() {
@@ -181,6 +274,7 @@
         threadId,
         inReplyTo,
         references,
+        attachmentPaths: attachments.length > 0 ? attachments.map((a) => a.path) : null,
       });
       addToast("Message sent successfully.", "success", 5000);
       onClose();
@@ -202,6 +296,7 @@
         inReplyTo,
         references,
         draftId: currentDraftId,
+        attachmentPaths: attachments.length > 0 ? attachments.map((a) => a.path) : null,
       })) as string;
       if (currentDraftId) {
         onDraftSaved(currentDraftId);
@@ -418,7 +513,16 @@
         </div>
       </div>
 
-      <div class="body-editor-container">
+      <div
+        class="body-editor-container"
+        role="region"
+        ondragover={(e) => { e.preventDefault(); isDragging = true; }}
+        ondragleave={() => isDragging = false}
+        ondrop={(e) => e.preventDefault()}
+      >
+        {#if isDragging}
+          <div class="drop-overlay">Drop files to attach</div>
+        {/if}
         <div
           class="rich-text-editor"
           contenteditable="true"
@@ -427,6 +531,22 @@
         ></div>
       </div>
     </div>
+
+    {#if attachments.length > 0}
+      <div class="compose-attachments">
+        {#each attachments as att, i}
+          <div class="compose-attachment-chip">
+            <svg class="att-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+            <span class="att-name">{att.name}</span>
+            <span class="att-size">{formatSize(att.size)}</span>
+            <button class="att-remove" onclick={() => removeAttachment(i)} title="Remove">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+        {/each}
+        <span class="att-total">{formatSize(totalAttachmentSize)} / 25 MB</span>
+      </div>
+    {/if}
 
     <footer class="compose-toolbar">
       <div class="formatting-tools">
@@ -474,6 +594,10 @@
           title="Underline"
           onclick={() => format("underline")}>{@html iconUnderline}</button
         >
+        <div class="divider"></div>
+        <button class="format-btn" title="Attach file" onclick={pickFiles}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+        </button>
       </div>
       <div class="trailing-actions">
         <button class="trash-btn" title="Discard" onclick={discardDraft}
@@ -878,5 +1002,83 @@
     border-top-color: white;
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
+  }
+
+  .body-editor-container {
+    position: relative;
+  }
+  .drop-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(10, 132, 255, 0.08);
+    border: 2px dashed var(--accent-blue, #0a84ff);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--accent-blue, #0a84ff);
+    z-index: 10;
+    pointer-events: none;
+  }
+
+  .compose-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 16px;
+    border-top: 1px solid var(--border-color);
+    align-items: center;
+  }
+  .compose-attachment-chip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: transparent;
+    font-family: var(--font-family);
+    max-width: 220px;
+  }
+  .att-icon {
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+  .att-name {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .att-size {
+    font-size: 10px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .att-remove {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px;
+    display: flex;
+    align-items: center;
+    color: var(--text-secondary);
+    border-radius: 4px;
+    flex-shrink: 0;
+    transition: color 0.1s, background 0.1s;
+  }
+  .att-remove:hover {
+    color: var(--destructive-red, #ff3b30);
+    background: rgba(255, 59, 48, 0.08);
+  }
+  .att-total {
+    font-size: 10px;
+    color: var(--text-secondary);
+    margin-left: auto;
   }
 </style>

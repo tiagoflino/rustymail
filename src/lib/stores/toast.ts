@@ -13,7 +13,7 @@ export interface ToastMessage {
 
 export const toasts = writable<ToastMessage[]>([]);
 
-export function addToast(message: string, type: ToastType = 'info', duration: number = 4000, action?: { label: string; onClick: () => void }) {
+export function addToast(message: string, type: ToastType = 'info', duration: number = 4000, action?: { label: string; onClick: () => void }): string {
     const id = Math.random().toString(36).substring(2, 9);
     toasts.update(all => [...all, { id, type, message, duration, actionLabel: action?.label, onAction: action?.onClick }]);
 
@@ -22,6 +22,8 @@ export function addToast(message: string, type: ToastType = 'info', duration: nu
             removeToast(id);
         }, duration);
     }
+
+    return id;
 }
 
 export function removeToast(id: string) {
