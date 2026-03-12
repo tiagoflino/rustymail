@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
+  import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
   import {
     iconClose,
     iconUser,
@@ -490,6 +491,57 @@
                         >{label}</button>
                       {/each}
                     </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="section">
+              <div class="section-title">Attachments</div>
+              <p class="section-desc">
+                Configure how attachments are handled.
+              </p>
+
+              <div class="setting-card">
+                <div class="card-row">
+                  <div class="setting-row-inline">
+                    <div class="setting-label">
+                      <span class="setting-name">Click Behavior</span>
+                      <span class="setting-hint">What happens when you click an attachment</span>
+                    </div>
+                    <div class="option-group">
+                      {#each [["open", "Open"], ["save", "Save"]] as [val, label]}
+                        <button
+                          class="option-btn {(settings.attachment_action || 'open') === val ? 'selected' : ''}"
+                          onclick={() => saveSetting("attachment_action", val)}
+                        >{label}</button>
+                      {/each}
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card-row last">
+                  <div class="setting-label">
+                    <span class="setting-name">Download Folder</span>
+                    <span class="setting-hint">Where saved attachments go (empty = system Downloads)</span>
+                  </div>
+                  <div class="folder-picker">
+                    <input
+                      type="text"
+                      class="folder-input"
+                      placeholder="System Downloads folder"
+                      value={settings.download_folder || ""}
+                      oninput={(e) => saveSetting("download_folder", e.currentTarget.value)}
+                    />
+                    <button
+                      class="folder-browse-btn"
+                      onclick={async () => {
+                        const selected = await dialogOpen({ directory: true, title: "Choose download folder" });
+                        if (selected) {
+                          saveSetting("download_folder", selected);
+                        }
+                      }}
+                    >Browse</button>
                   </div>
                 </div>
               </div>
@@ -1154,5 +1206,45 @@
   .btn-check-update:hover {
     opacity: 0.7;
     text-decoration: underline;
+  }
+
+  .folder-picker {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .folder-input {
+    flex: 1;
+    padding: 6px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-sidebar, transparent);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .folder-input::placeholder {
+    color: var(--text-secondary);
+  }
+  .folder-input:focus {
+    border-color: var(--accent-blue, #0a84ff);
+  }
+  .folder-browse-btn {
+    padding: 6px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 12px;
+    cursor: pointer;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    transition: background 0.15s;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .folder-browse-btn:hover {
+    background: var(--sidebar-hover);
   }
 </style>

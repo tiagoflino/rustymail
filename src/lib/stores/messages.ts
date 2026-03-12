@@ -11,6 +11,7 @@ export interface LocalMessage {
     body_html: string;
     body_plain: string;
     is_draft?: boolean;
+    has_attachments?: boolean;
 }
 
 export const selectedThreadId = writable<string | null>(null);

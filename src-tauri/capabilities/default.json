@@ -15,6 +15,7 @@
     "core:window:allow-set-decorations",
     "opener:default",
     "updater:default",
-    "process:default"
+    "process:default",
+    "dialog:default"
   ]
 }

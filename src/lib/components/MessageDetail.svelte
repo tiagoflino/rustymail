@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { invoke } from "@tauri-apps/api/core";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { addToast } from "$lib/stores/toast";
   import {
     iconArchive,
     iconTrash,
@@ -115,6 +117,88 @@
     oneditdraft,
     oniframeload,
   }: Props = $props();
+
+  interface Attachment {
+    id: string;
+    message_id: string;
+    filename: string;
+    mime_type: string;
+    size: number;
+  }
+
+  let attachmentsByMessage = $state(new Map<string, Attachment[]>());
+  let attachmentsThreadId: string | null = null;
+
+  $effect(() => {
+    const tid = $selectedThreadId;
+    const msgs = $currentMessages;
+
+    if (tid !== attachmentsThreadId) {
+      attachmentsByMessage = new Map();
+      attachmentsThreadId = tid;
+    }
+
+    for (const msg of msgs) {
+      if (msg.has_attachments && !attachmentsByMessage.has(msg.id)) {
+        invoke("get_attachments", { messageId: msg.id }).then((atts: any) => {
+          if ($selectedThreadId === tid) {
+            attachmentsByMessage = new Map(attachmentsByMessage).set(msg.id, atts as Attachment[]);
+          }
+        }).catch(() => {});
+      }
+    }
+  });
+
+  let allThreadAttachments = $derived(
+    Array.from(attachmentsByMessage.values()).flat()
+  );
+
+  function formatSize(bytes: number): string {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  let attachmentAction = $state("open");
+
+  $effect(() => {
+    invoke("get_setting", { key: "attachment_action" }).then((val: any) => {
+      if (val) attachmentAction = val;
+    }).catch(() => {});
+  });
+
+  async function onAttachmentClick(att: Attachment) {
+    if (attachmentAction === "save") {
+      await saveAttachment(att);
+    } else {
+      await openAttachment(att);
+    }
+  }
+
+  async function openAttachment(att: Attachment) {
+    try {
+      await invoke("open_attachment", {
+        messageId: att.message_id,
+        attachmentId: att.id,
+        filename: att.filename,
+      });
+    } catch (e) {
+      addToast(`Failed to open: ${e}`, "error", 5000);
+    }
+  }
+
+  async function saveAttachment(att: Attachment) {
+    try {
+      const path: string = await invoke("download_attachment", {
+        messageId: att.message_id,
+        attachmentId: att.id,
+        filename: att.filename,
+      });
+      addToast(`Saved to ${path}`, "success", 3000);
+    } catch (e) {
+      addToast(`Download failed: ${e}`, "error", 5000);
+    }
+  }
 </script>
 
 <main class="pane-view">
@@ -199,6 +283,31 @@
             </button>
           </div>
         {/if}
+        {#if allThreadAttachments.length > 0}
+          <div class="thread-attachments-bar">
+            <div class="thread-attachments-header">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+              <span>{allThreadAttachments.length} attachment{allThreadAttachments.length !== 1 ? 's' : ''}</span>
+            </div>
+            <div class="thread-attachments-chips">
+              {#each allThreadAttachments as att}
+                <div class="attachment-chip">
+                  <button class="attachment-open" onclick={() => onAttachmentClick(att)} title={attachmentAction === 'save' ? 'Save to Downloads' : 'Open with default app'}>
+                    <span class="attachment-name">{att.filename}</span>
+                    <span class="attachment-size">{formatSize(att.size)}</span>
+                  </button>
+                  <button class="attachment-save" onclick={() => attachmentAction === 'save' ? openAttachment(att) : saveAttachment(att)} title={attachmentAction === 'save' ? 'Open with default app' : 'Save to Downloads'}>
+                    {#if attachmentAction === 'save'}
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                    {:else}
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    {/if}
+                  </button>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
         {#each $currentMessages as msg, i}
           {#if expandedMessages.has(msg.id)}
             <div class="message-card animate-in">
@@ -255,6 +364,26 @@
                   <p class="no-body">Message body not available. Try refreshing.</p>
                 {/if}
               </div>
+              {#if attachmentsByMessage.get(msg.id)?.length}
+                <div class="attachment-list">
+                  {#each attachmentsByMessage.get(msg.id) as att}
+                    <div class="attachment-chip">
+                      <button class="attachment-open" onclick={() => onAttachmentClick(att)} title={attachmentAction === 'save' ? 'Save to Downloads' : 'Open with default app'}>
+                        <svg class="attachment-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+                        <span class="attachment-name">{att.filename}</span>
+                        <span class="attachment-size">{formatSize(att.size)}</span>
+                      </button>
+                      <button class="attachment-save" onclick={() => attachmentAction === 'save' ? openAttachment(att) : saveAttachment(att)} title={attachmentAction === 'save' ? 'Open with default app' : 'Save to Downloads'}>
+                        {#if attachmentAction === 'save'}
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                        {:else}
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        {/if}
+                      </button>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
             </div>
           {:else}
             <button class="collapsed-message" onclick={() => toggleMessage(msg.id)}>
@@ -410,6 +539,28 @@
     flex: 1;
     overflow-y: auto;
     padding: 20px;
+  }
+  .thread-attachments-bar {
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    background: var(--bg-sidebar, rgba(0, 0, 0, 0.03));
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+  }
+  .thread-attachments-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    line-height: 15px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+  }
+  .thread-attachments-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
   }
   .expand-all-row {
     display: flex;
@@ -711,5 +862,75 @@
     50% {
       opacity: 0.8;
     }
+  }
+  .attachment-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+  }
+  .attachment-chip {
+    display: flex;
+    align-items: center;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: transparent;
+    font-family: var(--font-family);
+    overflow: hidden;
+  }
+  .attachment-open {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-family: var(--font-family);
+    transition: background 0.1s;
+    flex: 1;
+    min-width: 0;
+  }
+  .attachment-open:hover {
+    background: var(--sidebar-hover);
+  }
+  .attachment-save {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 8px;
+    background: none;
+    border: none;
+    border-left: 1px solid var(--border-color);
+    cursor: pointer;
+    color: var(--text-secondary);
+    transition: background 0.1s, color 0.1s;
+    flex-shrink: 0;
+  }
+  .attachment-save:hover {
+    background: var(--sidebar-hover);
+    color: var(--text-primary);
+  }
+  .attachment-icon {
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+  .attachment-name {
+    font-size: 12px;
+    line-height: 15px;
+    color: var(--text-primary);
+    font-weight: 500;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .attachment-size {
+    font-size: 11px;
+    line-height: 14px;
+    color: var(--text-secondary);
+    white-space: nowrap;
   }
 </style>

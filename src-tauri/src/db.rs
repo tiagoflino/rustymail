@@ -127,6 +127,8 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         ("sync_frequency", "30"),
         ("max_threads_sync", "100"),
         ("max_cache_mb", "500"),
+        ("download_folder", ""),
+        ("attachment_action", "open"),
     ];
     for (key, value) in defaults {
         let _ = sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)")

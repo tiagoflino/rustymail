@@ -20,6 +20,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let pool = tauri::async_runtime::block_on(async { db::init_db(&handle).await })
@@ -50,6 +51,9 @@ pub fn run() {
             commands::threads::toggle_thread_star,
             commands::messages::get_messages,
             commands::messages::sync_thread_messages,
+            commands::messages::get_attachments,
+            commands::messages::download_attachment,
+            commands::messages::open_attachment,
             commands::search::search_messages,
             commands::search::get_hydration_progress,
             commands::search::get_search_suggestions,

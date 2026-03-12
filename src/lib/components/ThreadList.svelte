@@ -249,7 +249,7 @@
         {/each}
         {#if !searchInput || (parseSearchContext(searchInput, searchInputEl?.selectionStart ?? searchInput.length).operator === null)}
           {@const usedOperators = searchInput.match(/\b(from|to|subject|has|is|before|after):/g)?.map((o: string) => o) ?? []}
-          {@const allFilters = [["from:", "From sender"], ["to:", "To recipient"], ["subject:", "Subject contains"], ["has:", "Has\u2026"], ["is:", "Is\u2026"], ["before:", "Before date"], ["after:", "After date"]]}
+          {@const allFilters = [["from:", "From sender"], ["to:", "To recipient"], ["subject:", "Subject contains"], ["has:attachment", "Has attachment"], ["is:unread", "Is unread"], ["is:read", "Is read"], ["before:", "Before date"], ["after:", "After date"]]}
           {@const available = allFilters.filter(([val]) => !usedOperators.includes(val))}
           {#if available.length > 0}
             <div class="suggestion-section">Quick Filters</div>
@@ -331,9 +331,12 @@
           <div class="thread-content">
             <div class="thread-content-header">
               <span class="thread-sender">{thread.sender}</span>
-              <span class="thread-time"
-                >{formatTime(thread.internal_date)}</span
-              >
+              <span class="thread-meta">
+                {#if thread.has_attachments}
+                  <span class="thread-clip"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg></span>
+                {/if}
+                <span class="thread-time">{formatTime(thread.internal_date)}</span>
+              </span>
             </div>
             <div class="thread-subject">{thread.subject}</div>
             <div class="thread-snippet">
@@ -674,12 +677,25 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .thread-meta {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    margin-left: 8px;
+  }
+  .thread-clip {
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    opacity: 0.6;
+  }
   .thread-time {
     font-size: 11px;
     line-height: 14px;
     color: var(--text-secondary);
     white-space: nowrap;
-    margin-left: 8px;
     flex-shrink: 0;
     font-weight: 400;
   }

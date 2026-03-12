@@ -28,6 +28,15 @@ vi.mock('@tauri-apps/api/app', () => ({
     getVersion: vi.fn(() => Promise.resolve('0.1.0')),
 }));
 
+// Mock Tauri dialog plugin
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+    open: vi.fn(() => Promise.resolve(null)),
+    save: vi.fn(() => Promise.resolve(null)),
+    message: vi.fn(() => Promise.resolve()),
+    ask: vi.fn(() => Promise.resolve(false)),
+    confirm: vi.fn(() => Promise.resolve(false)),
+}));
+
 // Mock window.matchMedia
 Object.defineProperty(window, 'matchMedia', {
     writable: true,

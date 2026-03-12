@@ -56,6 +56,8 @@ pub struct MessagePartHeader {
 pub struct MessagePartBody {
     pub size: i32,
     pub data: Option<String>,
+    #[serde(rename = "attachmentId")]
+    pub attachment_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -165,6 +167,42 @@ fn extract_body(part: &MessagePart, target_mime_type: &str) -> Option<String> {
         }
     }
     None
+}
+
+struct AttachmentInfo {
+    id: String,
+    message_id: String,
+    filename: String,
+    mime_type: String,
+    size: i32,
+}
+
+fn extract_attachments(part: &MessagePart, message_id: &str) -> Vec<AttachmentInfo> {
+    let mut attachments = Vec::new();
+
+    if let Some(ref filename) = part.filename {
+        if !filename.is_empty() {
+            let size = part.body.as_ref().map(|b| b.size).unwrap_or(0);
+            let attachment_id = part.body.as_ref().and_then(|b| b.attachment_id.clone());
+            attachments.push(AttachmentInfo {
+                id: attachment_id.unwrap_or_else(|| {
+                    format!("{}_{}", message_id, part.part_id.as_deref().unwrap_or("0"))
+                }),
+                message_id: message_id.to_string(),
+                filename: filename.clone(),
+                mime_type: part.mime_type.clone(),
+                size,
+            });
+        }
+    }
+
+    if let Some(ref parts) = part.parts {
+        for p in parts {
+            attachments.extend(extract_attachments(p, message_id));
+        }
+    }
+
+    attachments
 }
 
 fn get_header<'a>(headers: &'a [MessagePartHeader], name: &str) -> Option<&'a str> {
@@ -325,6 +363,8 @@ async fn store_thread_messages(
             let mut body_plain = String::new();
             let mut body_html = String::new();
 
+            let mut msg_attachments: Vec<AttachmentInfo> = Vec::new();
+
             if let Some(payload) = &msg.payload {
                 if let Some(headers) = &payload.headers {
                     sender = get_header(headers, "From").unwrap_or("").to_string();
@@ -335,18 +375,42 @@ async fn store_thread_messages(
                 body_html = sanitize_email_html(
                     &extract_body(payload, "text/html").unwrap_or_default(),
                 );
+                msg_attachments = extract_attachments(payload, &msg.id);
             }
+
+            let has_att = !msg_attachments.is_empty();
 
             sqlx::query(
                 "INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                 ON CONFLICT(id) DO UPDATE SET sender=excluded.sender, recipients=excluded.recipients, subject=excluded.subject, body_plain=excluded.body_plain, body_html=excluded.body_html"
+                 ON CONFLICT(id) DO UPDATE SET sender=excluded.sender, recipients=excluded.recipients, subject=excluded.subject, body_plain=excluded.body_plain, body_html=excluded.body_html, has_attachments=excluded.has_attachments"
             )
             .bind(&msg.id).bind(&msg.thread_id).bind(account_id)
             .bind(&sender).bind(&recipients).bind(&subject)
             .bind(msg.snippet.as_deref().unwrap_or("")).bind(internal_date)
-            .bind(&body_plain).bind(&body_html).bind(0)
+            .bind(&body_plain).bind(&body_html).bind(if has_att { 1 } else { 0 })
             .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+
+            // Store attachment metadata
+            sqlx::query("DELETE FROM attachments WHERE message_id = ?")
+                .bind(&msg.id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            for att in &msg_attachments {
+                sqlx::query(
+                    "INSERT INTO attachments (id, message_id, filename, mime_type, size, downloaded) VALUES (?, ?, ?, ?, ?, 0)"
+                )
+                .bind(&att.id)
+                .bind(&att.message_id)
+                .bind(&att.filename)
+                .bind(&att.mime_type)
+                .bind(att.size)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+            }
 
             if let Some(ref label_ids) = msg.label_ids {
                 for label_id in label_ids {
@@ -646,6 +710,36 @@ pub async fn untrash_thread(
     }
 
     Ok(())
+}
+
+pub async fn download_attachment(
+    access_token: &str,
+    message_id: &str,
+    attachment_id: &str,
+) -> Result<Vec<u8>, String> {
+    let client = Client::new();
+    let url = gmail_api_url(&format!(
+        "/gmail/v1/users/me/messages/{}/attachments/{}",
+        message_id, attachment_id
+    ));
+    let res = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", access_token))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !res.status().is_success() {
+        return Err(format!("Failed to download attachment: {}", res.status()));
+    }
+
+    let body: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+    let data = body["data"]
+        .as_str()
+        .ok_or("No data in attachment response")?;
+
+    base64::decode_config(data, base64::URL_SAFE)
+        .map_err(|e| format!("Failed to decode attachment: {}", e))
 }
 
 /// Parse an RFC 5322-ish address like `Display Name <email@example.com>` or
@@ -1029,6 +1123,7 @@ mod tests {
             body: Some(MessagePartBody {
                 size: 11,
                 data: Some(data),
+                attachment_id: None,
             }),
             parts: None,
         };
@@ -1128,6 +1223,8 @@ mod tests {
             .execute(&pool).await.unwrap();
         sqlx::query("CREATE VIRTUAL TABLE messages_fts USING fts5(sender, subject, body_plain, content=messages, content_rowid=rowid)")
             .execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE attachments (id TEXT PRIMARY KEY, message_id TEXT, filename TEXT, mime_type TEXT, size INTEGER, local_path TEXT, downloaded INTEGER)")
+            .execute(&pool).await.unwrap();
 
         let thread_details = ThreadDetailsResponse {
             id: "t1".to_string(),
@@ -1158,6 +1255,7 @@ mod tests {
                     body: Some(MessagePartBody {
                         size: 5,
                         data: Some("SGVsbG8=".to_string()),
+                        attachment_id: None,
                     }), // "Hello"
                     parts: None,
                 }),
@@ -1404,6 +1502,7 @@ mod tests {
             body: Some(MessagePartBody {
                 size: 11,
                 data: Some("TmVzdGVkIEhUTUw".to_string()),
+                attachment_id: None,
             }),
             parts: None,
         };
@@ -1432,6 +1531,7 @@ mod tests {
             body: Some(MessagePartBody {
                 size: 9,
                 data: Some("RGVlcCBib2R5".to_string()),
+                attachment_id: None,
             }),
             parts: None,
         };
@@ -1467,6 +1567,7 @@ mod tests {
             body: Some(MessagePartBody {
                 size: 5,
                 data: Some("SGVsbG8".to_string()),
+                attachment_id: None,
             }),
             parts: None,
         };
@@ -1684,7 +1785,7 @@ mod tests {
                             MessagePartHeader { name: "To".to_string(), value: "b@test.com".to_string() },
                             MessagePartHeader { name: "Subject".to_string(), value: "Thread subject".to_string() },
                         ]),
-                        body: Some(MessagePartBody { size: 5, data: Some("SGVsbG8".to_string()) }),
+                        body: Some(MessagePartBody { size: 5, data: Some("SGVsbG8".to_string()), attachment_id: None }),
                         parts: None,
                     }),
                 },
@@ -1703,7 +1804,7 @@ mod tests {
                             MessagePartHeader { name: "To".to_string(), value: "a@test.com".to_string() },
                             MessagePartHeader { name: "Subject".to_string(), value: "Re: Thread subject".to_string() },
                         ]),
-                        body: Some(MessagePartBody { size: 5, data: Some("V29ybGQ".to_string()) }),
+                        body: Some(MessagePartBody { size: 5, data: Some("V29ybGQ".to_string()), attachment_id: None }),
                         parts: None,
                     }),
                 },
@@ -1755,7 +1856,7 @@ mod tests {
                         mime_type: "text/html".to_string(),
                         filename: None,
                         headers: None,
-                        body: Some(MessagePartBody { size: html_raw.len() as i32, data: Some(html_b64) }),
+                        body: Some(MessagePartBody { size: html_raw.len() as i32, data: Some(html_b64), attachment_id: None }),
                         parts: None,
                     }]),
                 }),
@@ -1790,7 +1891,7 @@ mod tests {
                     mime_type: "text/plain".to_string(),
                     filename: None,
                     headers: None,
-                    body: Some(MessagePartBody { size: 5, data: Some("SGVsbG8".to_string()) }),
+                    body: Some(MessagePartBody { size: 5, data: Some("SGVsbG8".to_string()), attachment_id: None }),
                     parts: None,
                 }),
             }]),
@@ -1829,7 +1930,7 @@ mod tests {
                     mime_type: "text/plain".to_string(),
                     filename: None,
                     headers: None,
-                    body: Some(MessagePartBody { size: 0, data: None }),
+                    body: Some(MessagePartBody { size: 0, data: None, attachment_id: None }),
                     parts: None,
                 }),
             }]),
@@ -2742,5 +2843,139 @@ mod tests {
         assert_eq!(completed, 1, "Only t1 should succeed");
         mock_t1.assert();
         mock_t_fail.assert();
+    }
+
+    // ── extract_attachments helpers ──────────────────────────────────
+
+    fn make_part(
+        part_id: &str,
+        mime_type: &str,
+        filename: Option<&str>,
+        attachment_id: Option<&str>,
+        size: i32,
+    ) -> MessagePart {
+        MessagePart {
+            part_id: Some(part_id.to_string()),
+            mime_type: mime_type.to_string(),
+            filename: filename.map(|s| s.to_string()),
+            headers: None,
+            body: Some(MessagePartBody {
+                size,
+                data: None,
+                attachment_id: attachment_id.map(|s| s.to_string()),
+            }),
+            parts: None,
+        }
+    }
+
+    fn make_multipart(part_id: &str, children: Vec<MessagePart>) -> MessagePart {
+        MessagePart {
+            part_id: Some(part_id.to_string()),
+            mime_type: "multipart/mixed".to_string(),
+            filename: None,
+            headers: None,
+            body: None,
+            parts: Some(children),
+        }
+    }
+
+    // ── extract_attachments tests ───────────────────────────────────
+
+    #[test]
+    fn test_extract_attachments_empty_for_text_part() {
+        let part = make_part("0", "text/plain", None, None, 100);
+        let result = extract_attachments(&part, "msg1");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_extract_attachments_single_attachment() {
+        let part = make_part("1", "application/pdf", Some("report.pdf"), Some("att123"), 5000);
+        let result = extract_attachments(&part, "msg1");
+        assert_eq!(result.len(), 1);
+        let att = &result[0];
+        assert_eq!(att.id, "att123");
+        assert_eq!(att.message_id, "msg1");
+        assert_eq!(att.filename, "report.pdf");
+        assert_eq!(att.mime_type, "application/pdf");
+        assert_eq!(att.size, 5000);
+    }
+
+    #[test]
+    fn test_extract_attachments_nested_multipart() {
+        let text = make_part("0", "text/plain", None, None, 200);
+        let pdf = make_part("1", "application/pdf", Some("doc.pdf"), Some("att_pdf"), 3000);
+        let root = make_multipart("root", vec![text, pdf]);
+
+        let result = extract_attachments(&root, "msg2");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].filename, "doc.pdf");
+        assert_eq!(result[0].id, "att_pdf");
+    }
+
+    #[test]
+    fn test_extract_attachments_multiple_attachments() {
+        let html = make_part("0", "text/html", None, None, 500);
+        let png = make_part("1", "image/png", Some("photo.png"), Some("att_png"), 12000);
+        let zip = make_part("2", "application/zip", Some("archive.zip"), Some("att_zip"), 80000);
+        let root = make_multipart("root", vec![html, png, zip]);
+
+        let result = extract_attachments(&root, "msg3");
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].filename, "photo.png");
+        assert_eq!(result[1].filename, "archive.zip");
+    }
+
+    #[test]
+    fn test_extract_attachments_deeply_nested() {
+        let text = make_part("0.0", "text/plain", None, None, 100);
+        let html = make_part("0.1", "text/html", None, None, 300);
+        let alternative = MessagePart {
+            part_id: Some("0".to_string()),
+            mime_type: "multipart/alternative".to_string(),
+            filename: None,
+            headers: None,
+            body: None,
+            parts: Some(vec![text, html]),
+        };
+        let pdf = make_part("1", "application/pdf", Some("deep.pdf"), Some("att_deep"), 9000);
+        let root = make_multipart("root", vec![alternative, pdf]);
+
+        let result = extract_attachments(&root, "msg4");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].filename, "deep.pdf");
+        assert_eq!(result[0].id, "att_deep");
+    }
+
+    #[test]
+    fn test_extract_attachments_empty_filename_ignored() {
+        let part = make_part("1", "application/pdf", Some(""), Some("att_empty"), 1000);
+        let result = extract_attachments(&part, "msg5");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_extract_attachments_generated_id_when_no_attachment_id() {
+        let part = make_part("7", "image/jpeg", Some("photo.jpg"), None, 4000);
+        let result = extract_attachments(&part, "msg6");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "msg6_7");
+    }
+
+    #[test]
+    fn test_extract_attachments_no_body() {
+        let part = MessagePart {
+            part_id: Some("3".to_string()),
+            mime_type: "application/octet-stream".to_string(),
+            filename: Some("data.bin".to_string()),
+            headers: None,
+            body: None,
+            parts: None,
+        };
+        let result = extract_attachments(&part, "msg7");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].size, 0);
+        assert_eq!(result[0].id, "msg7_3");
+        assert_eq!(result[0].filename, "data.bin");
     }
 }

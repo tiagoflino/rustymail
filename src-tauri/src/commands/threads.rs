@@ -11,6 +11,7 @@ pub struct LocalThread {
     pub subject: String,
     pub internal_date: i64,
     pub starred: bool,
+    pub has_attachments: bool,
 }
 
 pub(crate) fn clean_sender_name(raw: Option<String>) -> String {
@@ -43,6 +44,7 @@ pub(crate) async fn get_threads_inner(
         subject: Option<String>,
         msg_date: Option<i64>,
         starred: Option<i32>,
+        has_attachments: Option<i32>,
     }
 
     let rows: Vec<TR> = if let Some(lid) = label_id {
@@ -51,7 +53,8 @@ pub(crate) async fn get_threads_inner(
                     (SELECT m2.sender FROM messages m2 WHERE m2.thread_id = t.id ORDER BY m2.internal_date DESC LIMIT 1) as sender,
                     (SELECT m3.subject FROM messages m3 WHERE m3.thread_id = t.id ORDER BY m3.internal_date DESC LIMIT 1) as subject,
                     (SELECT MAX(m4.internal_date) FROM messages m4 WHERE m4.thread_id = t.id) as msg_date,
-                    EXISTS (SELECT 1 FROM thread_labels tl WHERE tl.thread_id = t.id AND tl.label_id = 'STARRED') as starred
+                    EXISTS (SELECT 1 FROM thread_labels tl WHERE tl.thread_id = t.id AND tl.label_id = 'STARRED') as starred,
+                    EXISTS (SELECT 1 FROM messages m6 WHERE m6.thread_id = t.id AND m6.has_attachments = 1) as has_attachments
              FROM threads t
              INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = ?
              WHERE t.account_id = ?
@@ -65,7 +68,8 @@ pub(crate) async fn get_threads_inner(
                     (SELECT m2.sender FROM messages m2 WHERE m2.thread_id = t.id ORDER BY m2.internal_date DESC LIMIT 1) as sender,
                     (SELECT m3.subject FROM messages m3 WHERE m3.thread_id = t.id ORDER BY m3.internal_date DESC LIMIT 1) as subject,
                     (SELECT MAX(m4.internal_date) FROM messages m4 WHERE m4.thread_id = t.id) as msg_date,
-                    EXISTS (SELECT 1 FROM thread_labels tl WHERE tl.thread_id = t.id AND tl.label_id = 'STARRED') as starred
+                    EXISTS (SELECT 1 FROM thread_labels tl WHERE tl.thread_id = t.id AND tl.label_id = 'STARRED') as starred,
+                    EXISTS (SELECT 1 FROM messages m6 WHERE m6.thread_id = t.id AND m6.has_attachments = 1) as has_attachments
              FROM threads t
              WHERE t.account_id = ?
              ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
@@ -85,6 +89,7 @@ pub(crate) async fn get_threads_inner(
             subject: r.subject.unwrap_or_else(|| "No Subject".to_string()),
             internal_date: r.msg_date.unwrap_or(0),
             starred: r.starred.unwrap_or(0) == 1,
+            has_attachments: r.has_attachments.unwrap_or(0) == 1,
         })
         .collect())
 }
@@ -158,7 +163,8 @@ pub(crate) async fn fetch_threads_by_ids(
                 (SELECT m2.sender FROM messages m2 WHERE m2.thread_id = t.id ORDER BY m2.internal_date DESC LIMIT 1) as sender,
                 (SELECT m3.subject FROM messages m3 WHERE m3.thread_id = t.id ORDER BY m3.internal_date DESC LIMIT 1) as subject,
                 (SELECT MAX(m4.internal_date) FROM messages m4 WHERE m4.thread_id = t.id) as msg_date,
-                EXISTS (SELECT 1 FROM thread_labels tl WHERE tl.thread_id = t.id AND tl.label_id = 'STARRED') as starred
+                EXISTS (SELECT 1 FROM thread_labels tl WHERE tl.thread_id = t.id AND tl.label_id = 'STARRED') as starred,
+                EXISTS (SELECT 1 FROM messages m6 WHERE m6.thread_id = t.id AND m6.has_attachments = 1) as has_attachments
          FROM threads t
          WHERE t.id IN ({}) AND t.account_id = ?
          ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC",
@@ -175,6 +181,7 @@ pub(crate) async fn fetch_threads_by_ids(
         subject: Option<String>,
         msg_date: Option<i64>,
         starred: Option<i32>,
+        has_attachments: Option<i32>,
     }
 
     let mut q = sqlx::query_as::<_, TR>(&sql);
@@ -195,6 +202,7 @@ pub(crate) async fn fetch_threads_by_ids(
             subject: r.subject.unwrap_or_else(|| "No Subject".to_string()),
             internal_date: r.msg_date.unwrap_or(0),
             starred: r.starred.unwrap_or(0) == 1,
+            has_attachments: r.has_attachments.unwrap_or(0) == 1,
         })
         .collect())
 }
@@ -680,5 +688,62 @@ mod tests {
         let pool = setup_test_db().await;
         let result = mark_read_status_local(&pool, "nonexistent", true).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_threads_inner_has_attachments_flag() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_thread(&pool, "t2", "acc1").await;
+        // t1 has a message WITH attachments
+        sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments) VALUES (?, ?, ?, ?, ?, ?, '', ?, '', '', 1)")
+            .bind("m1").bind("t1").bind("acc1").bind("sender@test.com").bind("").bind("Subject").bind(1000i64)
+            .execute(&pool).await.unwrap();
+        // t2 has a message WITHOUT attachments
+        insert_message(&pool, "m2", "t2", "acc1", "sender@test.com", "", "Subject2", 2000).await;
+
+        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        assert_eq!(threads.len(), 2);
+        let t1 = threads.iter().find(|t| t.id == "t1").unwrap();
+        let t2 = threads.iter().find(|t| t.id == "t2").unwrap();
+        assert!(t1.has_attachments);
+        assert!(!t2.has_attachments);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_threads_by_ids_has_attachments() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_thread(&pool, "t2", "acc1").await;
+        // t1 has a message WITH attachments
+        sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments) VALUES (?, ?, ?, ?, ?, ?, '', ?, '', '', 1)")
+            .bind("m1").bind("t1").bind("acc1").bind("sender@test.com").bind("").bind("Subject").bind(1000i64)
+            .execute(&pool).await.unwrap();
+        // t2 has a message WITHOUT attachments
+        insert_message(&pool, "m2", "t2", "acc1", "sender@test.com", "", "Subject2", 2000).await;
+
+        let ids = vec!["t1".to_string(), "t2".to_string()];
+        let threads = fetch_threads_by_ids(&pool, &ids, "acc1").await.unwrap();
+        assert_eq!(threads.len(), 2);
+        let t1 = threads.iter().find(|t| t.id == "t1").unwrap();
+        let t2 = threads.iter().find(|t| t.id == "t2").unwrap();
+        assert!(t1.has_attachments);
+        assert!(!t2.has_attachments);
+    }
+
+    #[tokio::test]
+    async fn test_get_threads_inner_has_attachments_multiple_messages() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        // First message without attachments
+        insert_message(&pool, "m1", "t1", "acc1", "sender@test.com", "", "Subject", 1000).await;
+        // Second message WITH attachments
+        sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments) VALUES (?, ?, ?, ?, ?, ?, '', ?, '', '', 1)")
+            .bind("m2").bind("t1").bind("acc1").bind("sender@test.com").bind("").bind("Subject").bind(2000i64)
+            .execute(&pool).await.unwrap();
+
+        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        assert_eq!(threads.len(), 1);
+        assert!(threads[0].has_attachments);
     }
 }

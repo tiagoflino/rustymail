@@ -31,6 +31,7 @@ thiserror = "1"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 base64 = { version = "0.13", features = ["alloc"] }
+dirs = "6"
 dotenvy = "0.15"
 futures = "0.3"
 lettre = "0.11.19"
@@ -39,6 +40,7 @@ ammonia = "4.1"
 css-inline = "0.20"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+tauri-plugin-dialog = "2"
 
 [dev-dependencies]
 mockall = "0.13"
