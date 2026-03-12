@@ -76,7 +76,18 @@ pub async fn get_messages(
     thread_id: String,
 ) -> Result<Vec<LocalMessage>, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
-    get_messages_inner(pool.inner(), &thread_id).await
+    let msgs = get_messages_inner(pool.inner(), &thread_id).await?;
+    for m in &msgs {
+        println!(
+            "[Messages] id={} subject='{}' body_html_len={} body_plain_len={} has_att={}",
+            m.id,
+            &m.subject[..m.subject.len().min(40)],
+            m.body_html.len(),
+            m.body_plain.len(),
+            m.has_attachments
+        );
+    }
+    Ok(msgs)
 }
 
 #[tauri::command]
