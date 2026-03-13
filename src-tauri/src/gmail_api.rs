@@ -149,8 +149,9 @@ fn sanitize_email_html(raw: &str) -> String {
         return String::new();
     }
 
-    // Step 1: Strip document-level wrappers (emails are fragments, not full pages)
     let mut result = raw.to_string();
+
+    // Step 1: Strip document-level wrappers (emails are fragments, not full pages)
     let strip_patterns: &[&str] = &[
         r"(?i)<!DOCTYPE[^>]*>",
         r"(?is)<title[^>]*>.*?</title>",
@@ -164,61 +165,52 @@ fn sanitize_email_html(raw: &str) -> String {
         result = re.replace_all(&result, "").to_string();
     }
 
-    // Step 2: DOM-based sanitization with ammonia (very permissive for emails)
-    let mut builder = ammonia::Builder::default();
-    builder.add_tags(&[
-        "div", "span", "p", "br", "hr", "wbr",
-        "h1", "h2", "h3", "h4", "h5", "h6",
-        "table", "thead", "tbody", "tfoot", "tr", "td", "th",
-        "caption", "colgroup", "col",
-        "ul", "ol", "li", "dl", "dt", "dd",
-        "a", "img", "b", "i", "u", "em", "strong", "small", "s", "strike", "del", "ins",
-        "blockquote", "pre", "code", "center",
-        "font", "sup", "sub", "abbr", "mark", "q", "cite", "dfn", "var", "samp", "kbd",
-        "style",
-        "section", "article", "header", "footer", "nav", "main", "aside", "details", "summary",
-        "figure", "figcaption", "picture", "source",
-        "map", "area",
-        "ruby", "rt", "rp", "bdi", "bdo",
-        "svg", "g", "path", "circle", "rect", "line", "polyline", "polygon", "ellipse",
-        "text", "tspan", "defs", "use", "symbol", "clippath", "mask",
-        "lineargradient", "radialgradient", "stop",
-    ]);
-    builder.add_tag_attributes("a", &["href", "target", "title", "name", "rel"]);
-    builder.add_tag_attributes("img", &["src", "alt", "width", "height", "border", "hspace", "vspace", "loading"]);
-    builder.add_tag_attributes("table", &["width", "height", "cellpadding", "cellspacing", "border", "role", "summary"]);
-    builder.add_tag_attributes("td", &["colspan", "rowspan", "nowrap", "background"]);
-    builder.add_tag_attributes("th", &["colspan", "rowspan", "nowrap", "scope"]);
-    builder.add_tag_attributes("col", &["span"]);
-    builder.add_tag_attributes("colgroup", &["span"]);
-    builder.add_tag_attributes("font", &["face", "size", "color"]);
-    builder.add_tag_attributes("source", &["srcset", "media", "type", "sizes"]);
-    builder.add_tag_attributes("area", &["shape", "coords", "href", "alt"]);
-    builder.add_tag_attributes("map", &["name"]);
-    builder.add_tag_attributes("details", &["open"]);
-    builder.add_tag_attributes("ol", &["start", "type", "reversed"]);
-    builder.add_tag_attributes("li", &["value"]);
-    builder.add_tag_attributes("svg", &["viewBox", "xmlns", "fill", "width", "height"]);
-    builder.add_tag_attributes("path", &["d", "fill", "stroke", "stroke-width"]);
-    builder.add_tag_attributes("circle", &["cx", "cy", "r", "fill", "stroke"]);
-    builder.add_tag_attributes("rect", &["x", "y", "width", "height", "rx", "ry", "fill", "stroke"]);
-    builder.add_tag_attributes("line", &["x1", "y1", "x2", "y2", "stroke"]);
-    builder.add_tag_attributes("text", &["x", "y", "font-size", "fill"]);
-    builder.add_tag_attributes("stop", &["offset", "stop-color", "stop-opacity"]);
-    builder.add_tag_attributes("use", &["href"]);
-    builder.add_generic_attributes(&[
-        "style", "class", "id", "dir", "lang", "title",
-        "align", "valign", "width", "height",
-        "bgcolor", "color", "background",
-        "border", "cellpadding", "cellspacing",
-        "role", "aria-label", "aria-hidden", "aria-describedby", "aria-live",
-        "data-gmail-cl", "data-smartmail",
-    ]);
-    builder.add_url_schemes(&["https", "http", "mailto", "cid", "data"]);
-    builder.rm_clean_content_tags(&["style"]);
-    builder.link_rel(None);
-    builder.strip_comments(true);
-    builder.clean(&result).to_string()
+    // Step 2: Strip script tags and their content (loop to catch nested/obfuscated attempts)
+    let script_re = regex_lite::Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap();
+    loop {
+        let cleaned = script_re.replace_all(&result, "").to_string();
+        if cleaned == result {
+            break;
+        }
+        result = cleaned;
+    }
+    // Also strip any orphan <script> opening/closing tags left from obfuscation
+    let orphan_script_re = regex_lite::Regex::new(r"(?i)</?script[^>]*>").unwrap();
+    result = orphan_script_re.replace_all(&result, "").to_string();
+
+    // Step 3: Strip event handler attributes (on*)
+    let event_re = regex_lite::Regex::new(r#"(?i)\s+on\w+\s*=\s*"[^"]*""#).unwrap();
+    result = event_re.replace_all(&result, "").to_string();
+    let event_re2 = regex_lite::Regex::new(r"(?i)\s+on\w+\s*=\s*'[^']*'").unwrap();
+    result = event_re2.replace_all(&result, "").to_string();
+
+    // Step 4: Strip javascript: URLs
+    let js_url_re = regex_lite::Regex::new(r#"(?i)href\s*=\s*"javascript:[^"]*""#).unwrap();
+    result = js_url_re.replace_all(&result, r#"href="""#).to_string();
+    let js_url_re2 = regex_lite::Regex::new(r"(?i)href\s*=\s*'javascript:[^']*'").unwrap();
+    result = js_url_re2.replace_all(&result, "href=''").to_string();
+
+    // Step 5: Strip iframe/object/embed/applet/form tags and their content
+    let dangerous_tags: &[&str] = &[
+        r"(?is)<iframe[^>]*>.*?</iframe>",
+        r"(?i)<iframe[^>]*/?>",
+        r"(?is)<object[^>]*>.*?</object>",
+        r"(?i)<object[^>]*/?>",
+        r"(?is)<embed[^>]*>.*?</embed>",
+        r"(?i)<embed[^>]*/?>",
+        r"(?is)<applet[^>]*>.*?</applet>",
+        r"(?i)<applet[^>]*/?>",
+        r"(?is)<form[^>]*>.*?</form>",
+        r"(?i)<form[^>]*/?>",
+        r"(?i)<input[^>]*/?>",
+        r"(?i)<button[^>]*>.*?</button>",
+    ];
+    for pat in dangerous_tags {
+        let re = regex_lite::Regex::new(pat).unwrap();
+        result = re.replace_all(&result, "").to_string();
+    }
+
+    result
 }
 
 #[derive(Debug)]
@@ -1804,12 +1796,12 @@ mod tests {
     }
 
     #[test]
-    fn test_sanitize_strips_css_url_properties() {
-        // ammonia strips CSS properties containing URLs (background-image) for security.
-        // This matches Gmail's behavior — background-image is not supported in Gmail either.
+    fn test_sanitize_preserves_css_url_properties() {
+        // The regex sanitizer does not strip CSS url() properties — it only targets
+        // script injection vectors. CSS background-image passes through unchanged.
         let input = r#"<td style="background-image:url(https://example.com/bg.png)">content</td>"#;
         let result = sanitize_email_html(input);
-        assert!(!result.contains("background-image"), "background-image should be stripped: {}", result);
+        assert!(result.contains("background-image"), "background-image should be preserved: {}", result);
         assert!(result.contains("content"));
     }
 
