@@ -77,15 +77,10 @@
   let threadListRef = $state<ThreadList>();
 
   function handleIframeMessage(event: MessageEvent) {
-    const iframe = iframeWindows.get(event.source as Window);
-    if (!iframe) return;
     const data = event.data;
     if (!data || typeof data !== 'object') return;
 
-    if (data.type === 'rustymail-resize' && typeof data.height === 'number') {
-      iframe.style.height = data.height + 'px';
-      iframe.style.opacity = '1';
-    } else if (data.type === 'rustymail-link' && typeof data.url === 'string') {
+    if (data.type === 'rustymail-link' && typeof data.url === 'string') {
       const url: string = data.url;
       if (url.startsWith('mailto:')) return;
       if (linkBehavior === 'disable') return;

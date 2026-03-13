@@ -100,6 +100,23 @@
     return { main: text, quoted: null };
   }
 
+  const resizeState = new WeakMap<HTMLIFrameElement, { lastH: number; count: number }>();
+  function sendResize(iframe: HTMLIFrameElement) {
+    try {
+      const doc = iframe.contentDocument;
+      if (!doc) return;
+      const h = doc.body.scrollHeight;
+      let state = resizeState.get(iframe);
+      if (!state) { state = { lastH: 0, count: 0 }; resizeState.set(iframe, state); }
+      if (h !== state.lastH && state.count < 20) {
+        state.lastH = h;
+        state.count++;
+        iframe.style.height = h + 'px';
+        iframe.style.opacity = '1';
+      }
+    } catch {}
+  }
+
   function expandAll() {
     expandedMessages = new Set($currentMessages.map(m => m.id));
   }
@@ -372,23 +389,52 @@
               {/if}
               <div class="message-body">
                 {#if msg.body_html}
-                  {@const iframeHtml = `<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light only"><style>body{margin:0;padding:0;background:#f5f5f5;overflow:hidden}.quote-toggle{display:inline-block;cursor:pointer;padding:2px 8px;margin:4px 0;border-radius:4px;background:rgba(0,0,0,0.06);color:#666;font-size:12px;border:none;line-height:1;font-family:-apple-system,sans-serif}.quote-toggle:hover{background:rgba(0,0,0,0.1)}.quote-hidden{display:none}</style></head><body><div style="max-width:680px;margin:0 auto;padding:12px;">${msg.body_html}</div><script>(function(){var b=document.body;function post(type,data){parent.postMessage(Object.assign({type:type},data),'*');}function resize(){post('rustymail-resize',{height:b.scrollHeight});}function collapseQuotes(){var quotes=b.querySelectorAll('.gmail_quote,blockquote');quotes.forEach(function(q){if(q.closest('.quote-hidden'))return;q.classList.add('quote-hidden');var btn=document.createElement('button');btn.className='quote-toggle';btn.textContent='\\u2026';btn.title='Show trimmed content';btn.addEventListener('click',function(){q.classList.toggle('quote-hidden');btn.textContent=q.classList.contains('quote-hidden')?'\\u2026':'Hide quoted text';resize();});q.parentNode.insertBefore(btn,q);});var walker=document.createTreeWalker(b,NodeFilter.SHOW_TEXT);while(walker.nextNode()){var n=walker.currentNode;if(n.textContent.indexOf('---------- Forwarded message')!==-1){var el=n.parentElement;if(!el||el.closest('.quote-hidden'))continue;var container=document.createElement('div');var rest=[];var sib=el.nextSibling;while(sib){rest.push(sib);sib=sib.nextSibling;}if(rest.length<1)continue;var wrap=document.createElement('div');wrap.className='quote-hidden';wrap.appendChild(el.cloneNode(true));rest.forEach(function(s){wrap.appendChild(s);});el.parentNode.insertBefore(wrap,el);el.remove();var btn2=document.createElement('button');btn2.className='quote-toggle';btn2.textContent='\\u2026';btn2.title='Show forwarded message';btn2.addEventListener('click',function(){wrap.classList.toggle('quote-hidden');btn2.textContent=wrap.classList.contains('quote-hidden')?'\\u2026':'Hide forwarded message';resize();});wrap.parentNode.insertBefore(btn2,wrap);break;}}}if(!${msg.is_draft})collapseQuotes();resize();new ResizeObserver(resize).observe(b);b.querySelectorAll('img').forEach(function(img){if(!img.complete)img.addEventListener('load',resize,{once:true});});document.addEventListener('click',function(e){var t=e.target;while(t&&t.tagName!=='A')t=t.parentElement;if(!t||!t.href)return;e.preventDefault();post('rustymail-link',{url:t.href});},true);})();<\/script></body></html>`}
                   <iframe
                     title="Email Body"
                     style="width:100%;height:0;border:none;overflow:hidden;background:#f5f5f5;border-radius:6px;opacity:0;transition:opacity .15s;"
+                    src="/email-shell.html"
                     onload={(e) => {
                       const iframe = e.currentTarget as HTMLIFrameElement;
+                      oniframeload(iframe);
                       try {
                         const doc = iframe.contentDocument;
-                        if (doc) {
-                          doc.open();
-                          doc.write(iframeHtml);
-                          doc.close();
-                        }
+                        if (!doc) return;
+                        const el = doc.getElementById('content');
+                        if (el) el.innerHTML = msg.body_html;
+                        // Quote collapsing
+                        doc.querySelectorAll('.gmail_quote,blockquote').forEach((q: Element) => {
+                          if (q.closest('.quote-hidden')) return;
+                          q.classList.add('quote-hidden');
+                          const btn = doc.createElement('button');
+                          btn.className = 'quote-toggle';
+                          btn.textContent = '\u2026';
+                          btn.title = 'Show trimmed content';
+                          btn.addEventListener('click', () => {
+                            q.classList.toggle('quote-hidden');
+                            btn.textContent = q.classList.contains('quote-hidden') ? '\u2026' : 'Hide quoted text';
+                            sendResize(iframe);
+                          });
+                          q.parentNode?.insertBefore(btn, q);
+                        });
+                        // Link interception
+                        doc.addEventListener('click', (ev: Event) => {
+                          let t = ev.target as HTMLElement | null;
+                          while (t && t.tagName !== 'A') t = t.parentElement;
+                          if (!t || !(t as HTMLAnchorElement).href) return;
+                          ev.preventDefault();
+                          window.postMessage({ type: 'rustymail-link', url: (t as HTMLAnchorElement).href }, '*');
+                        }, true);
+                        // Resize
+                        sendResize(iframe);
+                        new ResizeObserver(() => sendResize(iframe)).observe(doc.body);
+                        doc.querySelectorAll('img').forEach((img: Element) => {
+                          if (!(img as HTMLImageElement).complete) {
+                            img.addEventListener('load', () => sendResize(iframe), { once: true });
+                          }
+                        });
                       } catch (err) {
-                        console.error('[MsgDetail] document.write failed:', err);
+                        console.error('[EmailBody] injection failed:', err);
                       }
-                      oniframeload(iframe);
                     }}
                   ></iframe>
                 {:else if msg.body_plain}
