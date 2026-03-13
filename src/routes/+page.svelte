@@ -80,27 +80,6 @@
     const data = event.data;
     if (!data || typeof data !== 'object') return;
 
-    if (data.type === 'rustymail-ready') {
-      const source = event.source as Window;
-      for (const [win, iframe] of iframeWindows) {
-        if (win === source) {
-          const body = iframe.getAttribute('data-body') || '';
-          source.postMessage({ type: 'rustymail-setbody', html: body }, '*');
-          break;
-        }
-      }
-      return;
-    }
-
-    const iframe = iframeWindows.get(event.source as Window);
-    if (!iframe) return;
-
-    if (data.type === 'rustymail-resize' && typeof data.height === 'number') {
-      iframe.style.height = data.height + 'px';
-      iframe.style.opacity = '1';
-      return;
-    }
-
     if (data.type === 'rustymail-link' && typeof data.url === 'string') {
       const url: string = data.url;
       if (url.startsWith('mailto:')) return;

@@ -100,19 +100,20 @@
     return { main: text, quoted: null };
   }
 
-  const EMAIL_SHELL = [
-    '<html><head>',
-    '<meta name="viewport" content="width=device-width,initial-scale=1">',
-    '<meta name="color-scheme" content="light only">',
-    '<style>body{margin:0;padding:0;background:#f5f5f5;overflow:hidden}html,body{height:auto!important;min-height:0!important}.quote-toggle{display:inline-block;cursor:pointer;padding:2px 8px;margin:4px 0;border-radius:4px;background:rgba(0,0,0,0.06);color:#666;font-size:12px;border:none;line-height:1;font-family:-apple-system,sans-serif}.quote-toggle:hover{background:rgba(0,0,0,0.1)}.quote-hidden{display:none}</style>',
-    '</head><body>',
-    '<div id="c" style="max-width:680px;margin:0 auto;padding:12px;"></div>',
-    '<scr' + 'ipt>(function(){var b=document.body,c=document.getElementById("c"),lastH=0,n=0;function post(t,d){parent.postMessage(Object.assign({type:t},d),"*");}function resize(){var h=b.scrollHeight;if(h!==lastH&&n<20){lastH=h;n++;post("rustymail-resize",{height:h});}}window.addEventListener("message",function(e){if(e.data&&e.data.type==="rustymail-setbody"){c.innerHTML=e.data.html;b.querySelectorAll(".gmail_quote,blockquote").forEach(function(q){if(q.closest(".quote-hidden"))return;q.classList.add("quote-hidden");var btn=document.createElement("button");btn.className="quote-toggle";btn.textContent="\\u2026";btn.title="Show trimmed content";btn.addEventListener("click",function(){q.classList.toggle("quote-hidden");btn.textContent=q.classList.contains("quote-hidden")?"\\u2026":"Hide quoted text";resize();});q.parentNode.insertBefore(btn,q);});resize();new ResizeObserver(resize).observe(b);b.querySelectorAll("img").forEach(function(img){if(!img.complete)img.addEventListener("load",resize,{once:true});});document.addEventListener("click",function(ev){var t=ev.target;while(t&&t.tagName!=="A")t=t.parentElement;if(!t||!t.href)return;ev.preventDefault();post("rustymail-link",{url:t.href});},true);}});post("rustymail-ready",{});})()</scr' + 'ipt>',
-    '</body></html>',
-  ].join('');
 
-  function emailShellUrl(): string {
-    return URL.createObjectURL(new Blob([EMAIL_SHELL], { type: 'text/html' }));
+  const resizeState = new WeakMap<HTMLIFrameElement, { lastH: number; count: number }>();
+  function resizeIframe(iframe: HTMLIFrameElement) {
+    try {
+      const h = iframe.contentDocument?.body?.scrollHeight ?? 0;
+      let s = resizeState.get(iframe);
+      if (!s) { s = { lastH: 0, count: 0 }; resizeState.set(iframe, s); }
+      if (h > 0 && h !== s.lastH && s.count < 20) {
+        s.lastH = h;
+        s.count++;
+        iframe.style.height = h + 'px';
+        iframe.style.opacity = '1';
+      }
+    } catch {}
   }
 
   function expandAll() {
@@ -387,17 +388,48 @@
               {/if}
               <div class="message-body">
                 {#if msg.body_html}
-                  {@const shellUrl = emailShellUrl()}
                   <iframe
                     title="Email Body"
-                    sandbox="allow-scripts"
                     style="width:100%;height:0;border:none;overflow:hidden;background:#f5f5f5;border-radius:6px;opacity:0;transition:opacity .15s;"
-                    src={shellUrl}
-                    data-body={msg.body_html}
+                    src="/email-shell.html"
                     onload={(e) => {
                       const iframe = e.currentTarget as HTMLIFrameElement;
                       oniframeload(iframe);
-                      URL.revokeObjectURL(shellUrl);
+                      try {
+                        const doc = iframe.contentDocument;
+                        if (!doc) return;
+                        const el = doc.getElementById('content');
+                        if (el) el.innerHTML = msg.body_html;
+                        doc.querySelectorAll('.gmail_quote,blockquote').forEach((q: Element) => {
+                          if (q.closest('.quote-hidden')) return;
+                          q.classList.add('quote-hidden');
+                          const btn = doc.createElement('button');
+                          btn.className = 'quote-toggle';
+                          btn.textContent = '\u2026';
+                          btn.title = 'Show trimmed content';
+                          btn.addEventListener('click', () => {
+                            q.classList.toggle('quote-hidden');
+                            btn.textContent = q.classList.contains('quote-hidden') ? '\u2026' : 'Hide quoted text';
+                            resizeIframe(iframe);
+                          });
+                          q.parentNode?.insertBefore(btn, q);
+                        });
+                        doc.addEventListener('click', (ev: Event) => {
+                          let t = ev.target as HTMLElement | null;
+                          while (t && t.tagName !== 'A') t = t.parentElement;
+                          if (!t || !(t as HTMLAnchorElement).href) return;
+                          ev.preventDefault();
+                          window.postMessage({ type: 'rustymail-link', url: (t as HTMLAnchorElement).href }, '*');
+                        }, true);
+                        resizeIframe(iframe);
+                        new ResizeObserver(() => resizeIframe(iframe)).observe(doc.body);
+                        doc.querySelectorAll('img').forEach((img: Element) => {
+                          if (!(img as HTMLImageElement).complete)
+                            img.addEventListener('load', () => resizeIframe(iframe), { once: true });
+                        });
+                      } catch (err) {
+                        console.error('[EmailBody]', err);
+                      }
                     }}
                   ></iframe>
                 {:else if msg.body_plain}
