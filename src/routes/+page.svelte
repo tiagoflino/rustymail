@@ -944,6 +944,7 @@
       if (!granted) requestPermission();
     }).catch(() => {});
 
+
     // Tray event listeners
     listen("tray-compose", async () => {
       await openCompose();

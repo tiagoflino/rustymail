@@ -575,6 +575,23 @@
                   </div>
                 </div>
 
+                <div class="card-row">
+                  <div class="setting-row-inline">
+                    <div class="setting-label">
+                      <span class="setting-name">Undo Send Delay</span>
+                      <span class="setting-hint">Time to cancel a sent message</span>
+                    </div>
+                    <div class="option-group">
+                      {#each [["0", "Off"], ["5", "5 sec"], ["10", "10 sec"], ["30", "30 sec"]] as [val, label]}
+                        <button
+                          class="option-btn {(settings.undo_send_delay || '5') === val ? 'selected' : ''}"
+                          onclick={() => saveSetting("undo_send_delay", val)}
+                        >{label}</button>
+                      {/each}
+                    </div>
+                  </div>
+                </div>
+
                 <div class="card-row last">
                   <div class="setting-label">
                     <span class="setting-name">Email Signature</span>

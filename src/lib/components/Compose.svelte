@@ -5,7 +5,7 @@
   import { onMount, onDestroy, untrack } from "svelte";
   import { iconClose, iconTrash, iconSent, iconCheck } from "./icons";
   import { fly } from "svelte/transition";
-  import { addToast, removeToast } from "$lib/stores/toast";
+  import { toasts, addToast, removeToast } from "$lib/stores/toast";
 
   let {
     onClose,
@@ -33,7 +33,6 @@
 
   let isMinimized = $state(false);
   let isExpanded = $state(false);
-  let isSending = $state(false);
 
   let to = $state(untrack(() => "" + initialTo));
   let cc = $state(untrack(() => "" + initialCc));
@@ -265,23 +264,121 @@
       addToast("Please specify at least one recipient.", "info");
       return;
     }
-    isSending = true;
+
+    // Capture compose data before closing
+    const sendPayload = {
+      to: `${to}${cc ? "," + cc : ""}${bcc ? "," + bcc : ""}`,
+      subject,
+      body: editorEl?.innerHTML || "",
+      threadId,
+      inReplyTo: inReplyTo,
+      references: references,
+      draftId: currentDraftId,
+      attachmentPaths: attachments.length > 0 ? attachments.map((a) => a.path) : null,
+    };
+
+    // Read the undo send delay setting
+    let delaySec = 5;
     try {
-      await invoke("send_message", {
-        to: `${to}${cc ? "," + cc : ""}${bcc ? "," + bcc : ""}`,
-        subject,
-        body: editorEl?.innerHTML || "",
-        threadId,
-        inReplyTo,
-        references,
-        attachmentPaths: attachments.length > 0 ? attachments.map((a) => a.path) : null,
-      });
+      const val = (await invoke("get_setting", { key: "undo_send_delay" })) as string;
+      delaySec = parseInt(val) || 0;
+    } catch {
+      delaySec = 5;
+    }
+
+    // Close compose immediately
+    onClose();
+
+    // If delay is 0 (Off), send immediately
+    if (delaySec <= 0) {
+      try {
+        await invoke("send_message", sendPayload);
+        addToast("Message sent successfully.", "success", 5000);
+      } catch (e) {
+        addToast(`Failed to send: ${e}`, "error", 7000);
+      }
+      return;
+    }
+
+    // Delayed send with undo
+    let cancelled = false;
+    const delayMs = delaySec * 1000;
+
+    const toastId = addToast(
+      `Sending in ${delaySec}s…`,
+      "info",
+      0, // persistent — we manage removal ourselves
+      {
+        label: "Undo",
+        onClick: () => {
+          cancelled = true;
+          addToast("Send cancelled.", "info", 3000);
+        },
+      }
+    );
+
+    // Also cancel if user dismisses the toast via the X button
+    const unsub = toasts.subscribe((all) => {
+      if (!cancelled && !all.some((t) => t.id === toastId)) {
+        cancelled = true;
+      }
+    });
+
+    // Countdown update
+    let remaining = delaySec;
+    const countdownInterval = setInterval(() => {
+      remaining--;
+      if (remaining > 0 && !cancelled) {
+        toasts.update((all) =>
+          all.map((t) =>
+            t.id === toastId ? { ...t, message: `Sending in ${remaining}s…` } : t
+          )
+        );
+      } else {
+        clearInterval(countdownInterval);
+      }
+    }, 1000);
+
+    // Wait for the delay
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    clearInterval(countdownInterval);
+    unsub();
+
+    if (cancelled) {
+      removeToast(toastId);
+      // Save as draft so the message isn't lost
+      try {
+        await invoke("save_draft", {
+          to: sendPayload.to,
+          subject: sendPayload.subject,
+          body: sendPayload.body,
+          threadId: sendPayload.threadId,
+          inReplyTo: sendPayload.inReplyTo,
+          references: sendPayload.references,
+          draftId: sendPayload.draftId,
+          attachmentPaths: sendPayload.attachmentPaths,
+        });
+        
+        // Ensure UI updates
+        if (sendPayload.threadId) {
+          await invoke("sync_thread_messages", { threadId: sendPayload.threadId }).catch(() => {});
+        }
+        await invoke("fetch_label_threads", { labelId: "DRAFT" }).catch(() => {});
+        
+        addToast("Send cancelled — message saved as draft.", "info", 4000);
+      } catch (e) {
+        addToast(`Failed to save draft: ${e}`, "error", 5000);
+      }
+      return;
+    }
+
+    // Actually send
+    removeToast(toastId);
+    try {
+      await invoke("send_message", sendPayload);
       addToast("Message sent successfully.", "success", 5000);
-      onClose();
     } catch (e) {
       addToast(`Failed to send: ${e}`, "error", 7000);
-    } finally {
-      isSending = false;
     }
   }
 
@@ -550,12 +647,8 @@
 
     <footer class="compose-toolbar">
       <div class="formatting-tools">
-        <button class="send-btn" onclick={send} disabled={isSending}>
-          {#if isSending}
-            <div class="spinner"></div>
-          {:else}
+        <button class="send-btn" onclick={send}>
             Send
-          {/if}
         </button>
         <div class="divider"></div>
         <div class="font-picker" bind:this={fontPickerEl}>
@@ -993,15 +1086,6 @@
   .trash-btn:hover {
     background: var(--sidebar-hover);
     color: var(--destructive-red, #ff3b30);
-  }
-
-  .spinner {
-    width: 14px;
-    height: 14px;
-    border: 2px solid rgba(255, 255, 255, 0.4);
-    border-top-color: white;
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
   }
 
   .body-editor-container {
