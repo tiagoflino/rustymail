@@ -10,6 +10,7 @@ export interface LocalThread {
     internal_date: number;
     starred: boolean;
     has_attachments?: boolean;
+    important?: boolean;
 }
 
 export const threads = writable<LocalThread[]>([]);

@@ -12,6 +12,27 @@ pub struct LocalThread {
     pub internal_date: i64,
     pub starred: bool,
     pub has_attachments: bool,
+    pub important: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ThreadCategory {
+    Primary,
+    Social,
+    Promotions,
+    Important,
+}
+
+impl ThreadCategory {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "primary" => Some(ThreadCategory::Primary),
+            "social" => Some(ThreadCategory::Social),
+            "promotions" => Some(ThreadCategory::Promotions),
+            "important" => Some(ThreadCategory::Important),
+            _ => None,
+        }
+    }
 }
 
 pub(crate) fn clean_sender_name(raw: Option<String>) -> String {
@@ -31,6 +52,7 @@ pub(crate) async fn get_threads_inner(
     pool: &sqlx::SqlitePool,
     account_id: &str,
     label_id: Option<&str>,
+    category: Option<ThreadCategory>,
     offset: i32,
     limit: i32,
 ) -> Result<Vec<LocalThread>, String> {
@@ -45,38 +67,127 @@ pub(crate) async fn get_threads_inner(
         msg_date: Option<i64>,
         starred: Option<i32>,
         has_attachments: Option<i32>,
+        important: Option<i32>,
     }
 
-    let rows: Vec<TR> = if let Some(lid) = label_id {
-        sqlx::query_as(
-            "SELECT t.id, t.snippet, t.history_id, t.unread,
-                    (SELECT m2.sender FROM messages m2 WHERE m2.thread_id = t.id ORDER BY m2.internal_date DESC LIMIT 1) as sender,
-                    (SELECT m3.subject FROM messages m3 WHERE m3.thread_id = t.id ORDER BY m3.internal_date DESC LIMIT 1) as subject,
-                    (SELECT MAX(m4.internal_date) FROM messages m4 WHERE m4.thread_id = t.id) as msg_date,
-                    EXISTS (SELECT 1 FROM thread_labels tl WHERE tl.thread_id = t.id AND tl.label_id = 'STARRED') as starred,
-                    EXISTS (SELECT 1 FROM messages m6 WHERE m6.thread_id = t.id AND m6.has_attachments = 1) as has_attachments
-             FROM threads t
-             INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = ?
-             WHERE t.account_id = ?
-             ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
-             LIMIT ? OFFSET ?"
-        ).bind(lid).bind(account_id).bind(limit).bind(offset)
-        .fetch_all(pool).await.map_err(|e| e.to_string())?
-    } else {
-        sqlx::query_as(
-            "SELECT t.id, t.snippet, t.history_id, t.unread,
-                    (SELECT m2.sender FROM messages m2 WHERE m2.thread_id = t.id ORDER BY m2.internal_date DESC LIMIT 1) as sender,
-                    (SELECT m3.subject FROM messages m3 WHERE m3.thread_id = t.id ORDER BY m3.internal_date DESC LIMIT 1) as subject,
-                    (SELECT MAX(m4.internal_date) FROM messages m4 WHERE m4.thread_id = t.id) as msg_date,
-                    EXISTS (SELECT 1 FROM thread_labels tl WHERE tl.thread_id = t.id AND tl.label_id = 'STARRED') as starred,
-                    EXISTS (SELECT 1 FROM messages m6 WHERE m6.thread_id = t.id AND m6.has_attachments = 1) as has_attachments
-             FROM threads t
-             WHERE t.account_id = ?
-             ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
-             LIMIT ? OFFSET ?"
-        ).bind(account_id).bind(limit).bind(offset)
-        .fetch_all(pool).await.map_err(|e| e.to_string())?
+    let base_select = r#"
+        SELECT t.id, t.snippet, t.history_id, t.unread,
+                (SELECT m2.sender FROM messages m2 WHERE m2.thread_id = t.id ORDER BY m2.internal_date DESC LIMIT 1) as sender,
+                (SELECT m3.subject FROM messages m3 WHERE m3.thread_id = t.id ORDER BY m3.internal_date DESC LIMIT 1) as subject,
+                (SELECT MAX(m4.internal_date) FROM messages m4 WHERE m4.thread_id = t.id) as msg_date,
+                EXISTS (SELECT 1 FROM thread_labels tl WHERE tl.thread_id = t.id AND tl.label_id = 'STARRED') as starred,
+                EXISTS (SELECT 1 FROM messages m6 WHERE m6.thread_id = t.id AND m6.has_attachments = 1) as has_attachments,
+                EXISTS (SELECT 1 FROM thread_labels tl2 WHERE tl2.thread_id = t.id AND tl2.label_id = 'IMPORTANT') as important
+         FROM threads t
+    "#;
+
+    let (sql, binds): (String, Vec<String>) = match (label_id, category) {
+        (Some(_lid), Some(cat)) => {
+            match cat {
+                ThreadCategory::Primary => {
+                    let sql = format!(r#"
+                        {} INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
+                        LEFT JOIN thread_labels tl_social ON t.id = tl_social.thread_id AND tl_social.label_id = 'CATEGORY_SOCIAL'
+                        LEFT JOIN thread_labels tl_promo ON t.id = tl_promo.thread_id AND tl_promo.label_id = 'CATEGORY_PROMOTIONS'
+                        WHERE t.account_id = ? AND tl_inbox.thread_id IS NOT NULL
+                          AND tl_social.thread_id IS NULL AND tl_promo.thread_id IS NULL
+                        ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
+                        LIMIT ? OFFSET ?"#, base_select);
+                    (sql, vec![account_id.to_string()])
+                },
+                ThreadCategory::Social => {
+                    let sql = format!(r#"
+                        {} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_SOCIAL'
+                        INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
+                        WHERE t.account_id = ?
+                        ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
+                        LIMIT ? OFFSET ?"#, base_select);
+                    (sql, vec![account_id.to_string()])
+                },
+                ThreadCategory::Promotions => {
+                    let sql = format!(r#"
+                        {} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_PROMOTIONS'
+                        INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
+                        WHERE t.account_id = ?
+                        ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
+                        LIMIT ? OFFSET ?"#, base_select);
+                    (sql, vec![account_id.to_string()])
+                },
+                ThreadCategory::Important => {
+                    let sql = format!(r#"
+                        {} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'IMPORTANT'
+                        WHERE t.account_id = ?
+                        ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
+                        LIMIT ? OFFSET ?"#, base_select);
+                    (sql, vec![account_id.to_string()])
+                },
+            }
+        },
+        (Some(lid), None) => {
+            let sql = format!(r#"
+                {} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = ?
+                WHERE t.account_id = ?
+                ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
+                LIMIT ? OFFSET ?"#, base_select);
+            (sql, vec![lid.to_string(), account_id.to_string()])
+        },
+        (None, Some(cat)) => {
+            match cat {
+                ThreadCategory::Primary => {
+                    let sql = format!(r#"
+                        {} INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
+                        LEFT JOIN thread_labels tl_social ON t.id = tl_social.thread_id AND tl_social.label_id = 'CATEGORY_SOCIAL'
+                        LEFT JOIN thread_labels tl_promo ON t.id = tl_promo.thread_id AND tl_promo.label_id = 'CATEGORY_PROMOTIONS'
+                        WHERE t.account_id = ?
+                          AND tl_social.thread_id IS NULL AND tl_promo.thread_id IS NULL
+                        ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
+                        LIMIT ? OFFSET ?"#, base_select);
+                    (sql, vec![account_id.to_string()])
+                },
+                ThreadCategory::Social => {
+                    let sql = format!(r#"
+                        {} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_SOCIAL'
+                        INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
+                        WHERE t.account_id = ?
+                        ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
+                        LIMIT ? OFFSET ?"#, base_select);
+                    (sql, vec![account_id.to_string()])
+                },
+                ThreadCategory::Promotions => {
+                    let sql = format!(r#"
+                        {} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_PROMOTIONS'
+                        INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
+                        WHERE t.account_id = ?
+                        ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
+                        LIMIT ? OFFSET ?"#, base_select);
+                    (sql, vec![account_id.to_string()])
+                },
+                ThreadCategory::Important => {
+                    let sql = format!(r#"
+                        {} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'IMPORTANT'
+                        WHERE t.account_id = ?
+                        ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
+                        LIMIT ? OFFSET ?"#, base_select);
+                    (sql, vec![account_id.to_string()])
+                },
+            }
+        },
+        (None, None) => {
+            let sql = format!(r#"
+                {} WHERE t.account_id = ?
+                ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
+                LIMIT ? OFFSET ?"#, base_select);
+            (sql, vec![account_id.to_string()])
+        },
     };
+
+    let mut query = sqlx::query_as::<_, TR>(&sql);
+    for bind in &binds {
+        query = query.bind(bind);
+    }
+    query = query.bind(limit).bind(offset);
+
+    let rows: Vec<TR> = query.fetch_all(pool).await.map_err(|e| e.to_string())?;
 
     Ok(rows
         .into_iter()
@@ -90,6 +201,7 @@ pub(crate) async fn get_threads_inner(
             internal_date: r.msg_date.unwrap_or(0),
             starred: r.starred.unwrap_or(0) == 1,
             has_attachments: r.has_attachments.unwrap_or(0) == 1,
+            important: r.important.unwrap_or(0) == 1,
         })
         .collect())
 }
@@ -98,6 +210,7 @@ pub(crate) async fn get_threads_inner(
 pub async fn get_threads(
     app_handle: tauri::AppHandle,
     label_id: Option<String>,
+    category: Option<String>,
     offset: Option<i32>,
     limit: Option<i32>,
 ) -> Result<Vec<LocalThread>, String> {
@@ -105,7 +218,8 @@ pub async fn get_threads(
     let account = get_active_account(pool.inner()).await?;
     let lim = limit.unwrap_or(50);
     let off = offset.unwrap_or(0);
-    get_threads_inner(pool.inner(), &account.id, label_id.as_deref(), off, lim).await
+    let cat = category.and_then(|c| ThreadCategory::from_str(&c));
+    get_threads_inner(pool.inner(), &account.id, label_id.as_deref(), cat, off, lim).await
 }
 
 #[tauri::command]
@@ -149,6 +263,54 @@ pub async fn fetch_label_threads(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn fetch_category_threads(
+    app_handle: tauri::AppHandle,
+    category: String,
+) -> Result<(), String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+
+    let label_id = match category.to_lowercase().as_str() {
+        "primary" | "social" | "promotions" => "INBOX".to_string(),
+        "important" => "IMPORTANT".to_string(),
+        _ => return Err(format!("Unknown category: {}", category)),
+    };
+
+    println!("[OnDemand] Fetching threads for category {} via label: {}", category, label_id);
+    crate::gmail_api::fetch_and_store_threads(
+        pool.inner(),
+        &account.id,
+        &account.access_token,
+        Some(&[label_id.as_str()]),
+        100,
+    )
+    .await?;
+
+    #[derive(sqlx::FromRow)]
+    struct PrefetchVal { value: String }
+    let prefetch = sqlx::query_as::<_, PrefetchVal>("SELECT value FROM settings WHERE key = 'prefetch_bodies'")
+        .fetch_optional(pool.inner())
+        .await
+        .unwrap_or(None)
+        .map(|r| r.value == "true")
+        .unwrap_or(false);
+
+    let unhydrated = crate::gmail_api::get_unhydrated_thread_ids(pool.inner(), &account.id).await;
+    if !unhydrated.is_empty() {
+        let limit = if prefetch { unhydrated.len() } else { 100 };
+        let batch: Vec<String> = unhydrated.into_iter().take(limit).collect();
+        crate::gmail_api::batch_hydrate_threads(
+            pool.inner(),
+            &account.id,
+            &account.access_token,
+            batch,
+        )
+        .await;
+    }
+    Ok(())
+}
+
 pub(crate) async fn fetch_threads_by_ids(
     pool: &sqlx::SqlitePool,
     ids: &[String],
@@ -164,7 +326,8 @@ pub(crate) async fn fetch_threads_by_ids(
                 (SELECT m3.subject FROM messages m3 WHERE m3.thread_id = t.id ORDER BY m3.internal_date DESC LIMIT 1) as subject,
                 (SELECT MAX(m4.internal_date) FROM messages m4 WHERE m4.thread_id = t.id) as msg_date,
                 EXISTS (SELECT 1 FROM thread_labels tl WHERE tl.thread_id = t.id AND tl.label_id = 'STARRED') as starred,
-                EXISTS (SELECT 1 FROM messages m6 WHERE m6.thread_id = t.id AND m6.has_attachments = 1) as has_attachments
+                EXISTS (SELECT 1 FROM messages m6 WHERE m6.thread_id = t.id AND m6.has_attachments = 1) as has_attachments,
+                EXISTS (SELECT 1 FROM thread_labels tl2 WHERE tl2.thread_id = t.id AND tl2.label_id = 'IMPORTANT') as important
          FROM threads t
          WHERE t.id IN ({}) AND t.account_id = ?
          ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC",
@@ -182,6 +345,7 @@ pub(crate) async fn fetch_threads_by_ids(
         msg_date: Option<i64>,
         starred: Option<i32>,
         has_attachments: Option<i32>,
+        important: Option<i32>,
     }
 
     let mut q = sqlx::query_as::<_, TR>(&sql);
@@ -203,6 +367,7 @@ pub(crate) async fn fetch_threads_by_ids(
             internal_date: r.msg_date.unwrap_or(0),
             starred: r.starred.unwrap_or(0) == 1,
             has_attachments: r.has_attachments.unwrap_or(0) == 1,
+            important: r.important.unwrap_or(0) == 1,
         })
         .collect())
 }
@@ -312,6 +477,34 @@ pub async fn toggle_thread_star(
     .await
 }
 
+#[tauri::command]
+pub async fn toggle_thread_important(
+    app_handle: tauri::AppHandle,
+    thread_id: String,
+    important: bool,
+) -> Result<(), String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+    let (add, remove) = if important {
+        (vec!["IMPORTANT".to_string()], vec![])
+    } else {
+        (vec![], vec!["IMPORTANT".to_string()])
+    };
+    crate::gmail_api::modify_thread(
+        pool.inner(),
+        &account.id,
+        &account.access_token,
+        &thread_id,
+        add,
+        remove,
+    )
+    .await?;
+
+    toggle_important_local(pool.inner(), &thread_id, important).await?;
+
+    Ok(())
+}
+
 /// Toggle the STARRED label on a thread locally (insert or delete from thread_labels).
 #[allow(dead_code)] // used in tests
 pub(crate) async fn toggle_star_local(pool: &sqlx::SqlitePool, thread_id: &str, starred: bool) -> Result<(), String> {
@@ -323,6 +516,25 @@ pub(crate) async fn toggle_star_local(pool: &sqlx::SqlitePool, thread_id: &str, 
             .map_err(|e| e.to_string())?;
     } else {
         sqlx::query("DELETE FROM thread_labels WHERE thread_id = ? AND label_id = 'STARRED'")
+            .bind(thread_id)
+            .execute(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Toggle the IMPORTANT label on a thread locally (insert or delete from thread_labels).
+#[allow(dead_code)] // used in tests
+pub(crate) async fn toggle_important_local(pool: &sqlx::SqlitePool, thread_id: &str, important: bool) -> Result<(), String> {
+    if important {
+        sqlx::query("INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?, 'IMPORTANT')")
+            .bind(thread_id)
+            .execute(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+    } else {
+        sqlx::query("DELETE FROM thread_labels WHERE thread_id = ? AND label_id = 'IMPORTANT'")
             .bind(thread_id)
             .execute(pool)
             .await
@@ -395,7 +607,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_threads_inner_empty() {
         let pool = setup_test_db().await;
-        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        let threads = get_threads_inner(&pool, "acc1", None, None, 0, 50).await.unwrap();
         assert!(threads.is_empty());
     }
 
@@ -407,7 +619,7 @@ mod tests {
         insert_message(&pool, "m1", "t1", "acc1", "Alice <alice@test.com>", "bob@test.com", "Hello", 1000).await;
         insert_message(&pool, "m2", "t2", "acc1", "Bob <bob@test.com>", "alice@test.com", "World", 2000).await;
 
-        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        let threads = get_threads_inner(&pool, "acc1", None, None, 0, 50).await.unwrap();
         assert_eq!(threads.len(), 2);
         assert_eq!(threads[0].id, "t2");
         assert_eq!(threads[0].sender, "Bob");
@@ -426,11 +638,11 @@ mod tests {
         sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('t1', 'INBOX')")
             .execute(&pool).await.unwrap();
 
-        let inbox_threads = get_threads_inner(&pool, "acc1", Some("INBOX"), 0, 50).await.unwrap();
+        let inbox_threads = get_threads_inner(&pool, "acc1", Some("INBOX"), None, 0, 50).await.unwrap();
         assert_eq!(inbox_threads.len(), 1);
         assert_eq!(inbox_threads[0].id, "t1");
 
-        let all_threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        let all_threads = get_threads_inner(&pool, "acc1", None, None, 0, 50).await.unwrap();
         assert_eq!(all_threads.len(), 2);
     }
 
@@ -442,7 +654,7 @@ mod tests {
         sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('t1', 'STARRED')")
             .execute(&pool).await.unwrap();
 
-        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        let threads = get_threads_inner(&pool, "acc1", None, None, 0, 50).await.unwrap();
         assert_eq!(threads.len(), 1);
         assert!(threads[0].starred);
     }
@@ -457,9 +669,9 @@ mod tests {
             insert_message(&pool, &mid, &tid, "acc1", "s@t.com", "", "Sub", (i * 1000) as i64).await;
         }
 
-        let page1 = get_threads_inner(&pool, "acc1", None, 0, 2).await.unwrap();
+        let page1 = get_threads_inner(&pool, "acc1", None, None, 0, 2).await.unwrap();
         assert_eq!(page1.len(), 2);
-        let page2 = get_threads_inner(&pool, "acc1", None, 2, 2).await.unwrap();
+        let page2 = get_threads_inner(&pool, "acc1", None, None, 2, 2).await.unwrap();
         assert_eq!(page2.len(), 2);
         assert_ne!(page1[0].id, page2[0].id);
     }
@@ -468,7 +680,7 @@ mod tests {
     async fn test_get_threads_inner_no_subject_fallback() {
         let pool = setup_test_db().await;
         insert_thread(&pool, "t1", "acc1").await;
-        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        let threads = get_threads_inner(&pool, "acc1", None, None, 0, 50).await.unwrap();
         assert_eq!(threads[0].subject, "No Subject");
     }
 
@@ -479,7 +691,7 @@ mod tests {
         insert_thread(&pool, "t1", "acc1").await;
         insert_message(&pool, "m1", "t1", "acc1", "\"John Doe\" <john@example.com>", "", "Test Subject", 1000).await;
 
-        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        let threads = get_threads_inner(&pool, "acc1", None, None, 0, 50).await.unwrap();
         assert_eq!(threads.len(), 1);
         assert_eq!(threads[0].sender, "John Doe");
     }
@@ -620,17 +832,17 @@ mod tests {
         insert_thread(&pool, "t1", "acc1").await;
         insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "", "Sub", 1000).await;
 
-        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        let threads = get_threads_inner(&pool, "acc1", None, None, 0, 50).await.unwrap();
         assert!(!threads[0].starred);
 
         toggle_star_local(&pool, "t1", true).await.unwrap();
 
-        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        let threads = get_threads_inner(&pool, "acc1", None, None, 0, 50).await.unwrap();
         assert!(threads[0].starred);
 
         toggle_star_local(&pool, "t1", false).await.unwrap();
 
-        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        let threads = get_threads_inner(&pool, "acc1", None, None, 0, 50).await.unwrap();
         assert!(!threads[0].starred);
     }
 
@@ -669,17 +881,17 @@ mod tests {
         insert_thread(&pool, "t1", "acc1").await;
         insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "", "Sub", 1000).await;
 
-        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        let threads = get_threads_inner(&pool, "acc1", None, None, 0, 50).await.unwrap();
         assert_eq!(threads[0].unread, 0);
 
         mark_read_status_local(&pool, "t1", true).await.unwrap();
 
-        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        let threads = get_threads_inner(&pool, "acc1", None, None, 0, 50).await.unwrap();
         assert_eq!(threads[0].unread, 1);
 
         mark_read_status_local(&pool, "t1", false).await.unwrap();
 
-        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        let threads = get_threads_inner(&pool, "acc1", None, None, 0, 50).await.unwrap();
         assert_eq!(threads[0].unread, 0);
     }
 
@@ -702,7 +914,7 @@ mod tests {
         // t2 has a message WITHOUT attachments
         insert_message(&pool, "m2", "t2", "acc1", "sender@test.com", "", "Subject2", 2000).await;
 
-        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        let threads = get_threads_inner(&pool, "acc1", None, None, 0, 50).await.unwrap();
         assert_eq!(threads.len(), 2);
         let t1 = threads.iter().find(|t| t.id == "t1").unwrap();
         let t2 = threads.iter().find(|t| t.id == "t2").unwrap();
@@ -742,8 +954,72 @@ mod tests {
             .bind("m2").bind("t1").bind("acc1").bind("sender@test.com").bind("").bind("Subject").bind(2000i64)
             .execute(&pool).await.unwrap();
 
-        let threads = get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        let threads = get_threads_inner(&pool, "acc1", None, None, 0, 50).await.unwrap();
         assert_eq!(threads.len(), 1);
         assert!(threads[0].has_attachments);
+    }
+
+    #[tokio::test]
+    async fn test_get_threads_inner_category_filtering() {
+        let pool = setup_test_db().await;
+        insert_account(&pool, "acc1", "test@test.com", "Test", 1, 1000).await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_thread(&pool, "t2", "acc1").await;
+        insert_thread(&pool, "t3", "acc1").await;
+        insert_thread(&pool, "t4", "acc1").await;
+        insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "", "Sub1", 1000).await;
+        insert_message(&pool, "m2", "t2", "acc1", "s@t.com", "", "Sub2", 2000).await;
+        insert_message(&pool, "m3", "t3", "acc1", "s@t.com", "", "Sub3", 3000).await;
+        insert_message(&pool, "m4", "t4", "acc1", "s@t.com", "", "Sub4", 4000).await;
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('t1', 'INBOX')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('t2', 'INBOX')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('t2', 'CATEGORY_SOCIAL')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('t3', 'INBOX')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('t3', 'CATEGORY_PROMOTIONS')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('t4', 'IMPORTANT')")
+            .execute(&pool).await.unwrap();
+
+        let primary = get_threads_inner(&pool, "acc1", Some("INBOX"), Some(ThreadCategory::Primary), 0, 50).await.unwrap();
+        assert_eq!(primary.len(), 1);
+        assert_eq!(primary[0].id, "t1");
+
+        let social = get_threads_inner(&pool, "acc1", Some("INBOX"), Some(ThreadCategory::Social), 0, 50).await.unwrap();
+        assert_eq!(social.len(), 1);
+        assert_eq!(social[0].id, "t2");
+
+        let promotions = get_threads_inner(&pool, "acc1", Some("INBOX"), Some(ThreadCategory::Promotions), 0, 50).await.unwrap();
+        assert_eq!(promotions.len(), 1);
+        assert_eq!(promotions[0].id, "t3");
+
+        let important = get_threads_inner(&pool, "acc1", None, Some(ThreadCategory::Important), 0, 50).await.unwrap();
+        assert_eq!(important.len(), 1);
+        assert_eq!(important[0].id, "t4");
+    }
+
+    #[tokio::test]
+    async fn test_get_threads_inner_important_flag() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_thread(&pool, "t2", "acc1").await;
+        insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "", "Sub", 1000).await;
+        insert_message(&pool, "m2", "t2", "acc1", "s@t.com", "", "Sub", 2000).await;
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('t1', 'INBOX')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('t1', 'IMPORTANT')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('t2', 'INBOX')")
+            .execute(&pool).await.unwrap();
+
+        let threads = get_threads_inner(&pool, "acc1", Some("INBOX"), None, 0, 50).await.unwrap();
+        assert_eq!(threads.len(), 2);
+        let important_thread = threads.iter().find(|t| t.id == "t1").unwrap();
+        let normal_thread = threads.iter().find(|t| t.id == "t2").unwrap();
+        assert!(important_thread.important);
+        assert!(!normal_thread.important);
     }
 }

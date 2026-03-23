@@ -683,7 +683,7 @@ mod tests {
         let accounts = get_accounts_inner(&pool).await.unwrap();
         assert!(accounts.is_empty());
 
-        let threads = super::super::threads::get_threads_inner(&pool, "acc1", None, 0, 50).await.unwrap();
+        let threads = super::super::threads::get_threads_inner(&pool, "acc1", None, None, 0, 50).await.unwrap();
         assert!(threads.is_empty());
 
         let messages = super::super::messages::get_messages_inner(&pool, "t1").await.unwrap();
@@ -719,7 +719,7 @@ mod tests {
 
         remove_account_inner(&pool, "acc1").await.unwrap();
 
-        let threads = super::super::threads::get_threads_inner(&pool, "acc2", None, 0, 50).await.unwrap();
+        let threads = super::super::threads::get_threads_inner(&pool, "acc2", None, None, 0, 50).await.unwrap();
         assert_eq!(threads.len(), 1);
         assert_eq!(threads[0].id, "t2");
 

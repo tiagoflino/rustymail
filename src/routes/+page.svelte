@@ -56,6 +56,7 @@
   const selectedLabelId = writable<string>("INBOX");
   const searchQuery = writable<string>("");
   const isSearching = writable<boolean>(false);
+  const selectedCategory = writable<string>("primary");
 
   let activeAccount = $state<AccountInfo | null>(null);
   let allAccounts = $state<AccountInfo[]>([]);
@@ -122,6 +123,9 @@
   let globalSyncInterval: ReturnType<typeof setInterval> | null = null;
   let currentBgInterval: ReturnType<typeof setInterval> | null = null;
   const labelLastSyncMap: Record<string, number> = {};
+  const categoryLastSyncMap: Record<string, number> = {};
+  const CATEGORY_MIN_THREADS = 30;
+  const CATEGORY_SYNC_INTERVAL = 300000;
   let syncLock = false;
 
   let composeKey = $state(0);
@@ -363,8 +367,10 @@
     }
 
     try {
+      const category = $selectedLabelId === "INBOX" ? get(selectedCategory) : null;
       const fetched = (await invoke("get_threads", {
         labelId: invocationLabelId,
+        category: category,
         offset: reset ? 0 : threadOffset,
         limit: THREAD_PAGE_SIZE,
       })) as LocalThread[];
@@ -382,6 +388,7 @@
             labelLastSyncMap[invocationLabelId] = Date.now();
           const retried = (await invoke("get_threads", {
             labelId: invocationLabelId,
+            category: category,
             offset: 0,
             limit: THREAD_PAGE_SIZE,
           })) as LocalThread[];
@@ -445,10 +452,12 @@
     isLoadingMore = true;
 
     const invocationLabelId = get(selectedLabelId) || null;
+    const category = $selectedLabelId === "INBOX" ? get(selectedCategory) : null;
 
     try {
       const fetched = (await invoke("get_threads", {
         labelId: invocationLabelId,
+        category: category,
         offset: threadOffset,
         limit: THREAD_PAGE_SIZE,
       }).catch(() => [])) as LocalThread[];
@@ -467,6 +476,7 @@
 
           const retried = (await invoke("get_threads", {
             labelId: invocationLabelId,
+            category: category,
             offset: threadOffset,
             limit: THREAD_PAGE_SIZE,
           }).catch(() => [])) as LocalThread[];
@@ -519,6 +529,12 @@
     threadOffset = 0;
     hasMore = true;
 
+    if (labelId === "INBOX") {
+      selectedCategory.set("primary");
+    } else {
+      selectedCategory.set("primary");
+    }
+
     if (!isReselect) {
       threads.set([]);
     }
@@ -537,6 +553,41 @@
     }
 
     await loadThreads(true);
+  }
+
+  async function selectCategory(category: string) {
+    if ($selectedCategory === category) return;
+    selectedCategory.set(category);
+    threadOffset = 0;
+    hasMore = true;
+    threads.set([]);
+
+    const needsSync = !categoryLastSyncMap[category] || 
+                       Date.now() - categoryLastSyncMap[category] > CATEGORY_SYNC_INTERVAL;
+
+    if (needsSync) {
+      isSyncing.set(true);
+      try {
+        await invoke("fetch_category_threads", { category });
+        categoryLastSyncMap[category] = Date.now();
+      } catch (e) {
+        console.error("Failed to fetch category threads", e);
+      } finally {
+        isSyncing.set(false);
+      }
+    }
+
+    await loadThreads(true);
+
+    if ($threads.length < CATEGORY_MIN_THREADS && hasMore) {
+      await fillCategoryThreads();
+    }
+  }
+
+  async function fillCategoryThreads() {
+    while ($threads.length < CATEGORY_MIN_THREADS && hasMore && !isLoadingMore) {
+      await loadMoreThreads();
+    }
   }
 
   async function handleSearch(query: string) {
@@ -649,6 +700,26 @@
       threads.update((list) =>
         list.map((t) =>
           t.id === threadId ? { ...t, starred: currentStarred } : t,
+        ),
+      );
+    }
+  }
+
+  async function toggleImportant(threadId: string, currentImportant: boolean) {
+    const newState = !currentImportant;
+    threads.update((list) =>
+      list.map((t) => (t.id === threadId ? { ...t, important: newState } : t)),
+    );
+    try {
+      await invoke("toggle_thread_important", {
+        threadId: threadId,
+        important: newState,
+      });
+    } catch (e) {
+      console.error("Failed to toggle important:", e);
+      threads.update((list) =>
+        list.map((t) =>
+          t.id === threadId ? { ...t, important: currentImportant } : t,
         ),
       );
     }
@@ -1040,11 +1111,15 @@
       activeLabelName={getActiveLabelName()}
       {searchQuery}
       {isSearching}
+      showCategoryTabs={$selectedLabelId === "INBOX"}
+      {selectedCategory}
       onselectthread={selectThread}
       ontogglestar={toggleStar}
+      ontoggleimportant={toggleImportant}
       onloadmore={loadMoreThreads}
       onsearch={handleSearch}
       onclearsearch={clearSearch}
+      onselectcategory={selectCategory}
     />
 
     <MessageDetail

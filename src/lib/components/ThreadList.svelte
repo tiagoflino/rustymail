@@ -9,10 +9,13 @@
     iconTag,
     iconStar,
     iconStarFilled,
+    iconImportantArrow,
+    iconImportantArrowFilled,
   } from "$lib/components/icons";
   import { threads, isSyncing } from "$lib/stores/threads";
   import { selectedThreadId } from "$lib/stores/messages";
   import { formatTime, decodeEntities } from "$lib/utils/formatters.js";
+  import CategoryTabs from "./CategoryTabs.svelte";
 
   interface SearchSuggestion {
     kind: string;
@@ -29,11 +32,15 @@
     activeLabelName: string;
     searchQuery: Writable<string>;
     isSearching: Writable<boolean>;
+    showCategoryTabs: boolean;
+    selectedCategory: Writable<string>;
     onselectthread: (threadId: string) => void;
     ontogglestar: (threadId: string, starred: boolean) => void;
+    ontoggleimportant: (threadId: string, important: boolean) => void;
     onloadmore: () => void;
     onsearch: (query: string) => void;
     onclearsearch: () => void;
+    onselectcategory: (category: string) => void;
   }
 
   let {
@@ -45,11 +52,15 @@
     activeLabelName,
     searchQuery,
     isSearching,
+    showCategoryTabs,
+    selectedCategory,
     onselectthread,
     ontogglestar,
+    ontoggleimportant,
     onloadmore,
     onsearch,
     onclearsearch,
+    onselectcategory,
   }: Props = $props();
 
   let searchInput = $state("");
@@ -281,6 +292,13 @@
     {/if}
   </div>
 
+  {#if showCategoryTabs && !$searchQuery}
+    <CategoryTabs
+      {selectedCategory}
+      {onselectcategory}
+    />
+  {/if}
+
   <div class="list-header">
     <h3>{$searchQuery ? "Search Results" : activeLabelName}</h3>
     <span class="thread-count">{$threads.length}{hasMore ? "+" : ""}</span>
@@ -325,6 +343,16 @@
               }}
             >
               {@html thread.starred ? iconStarFilled : iconStar}
+            </button>
+            <button
+              class="thread-important {thread.important ? 'active' : ''}"
+              onclick={(e) => {
+                e.stopPropagation();
+                ontoggleimportant(thread.id, thread.important ?? false);
+              }}
+              title={thread.important ? "Remove importance" : "Mark as important"}
+            >
+              <span class="important-icon">{@html thread.important ? iconImportantArrowFilled : iconImportantArrow}</span>
             </button>
             <div class="thread-unread-dot"></div>
           </div>
@@ -609,6 +637,9 @@
     color: var(--text-primary);
     outline: none;
   }
+  .thread-item:not(.unread) {
+    background-color: var(--sidebar-hover);
+  }
   .thread-item:hover {
     background-color: var(--sidebar-hover);
     border-radius: 6px;
@@ -623,12 +654,12 @@
     gap: 4px;
     margin-right: 10px;
     flex-shrink: 0;
-    width: 24px;
+    width: 40px;
   }
   .thread-star {
     background: none;
     border: none;
-    padding: 4px;
+    padding: 0;
     cursor: pointer;
     color: var(--text-secondary);
     opacity: 0.4;
@@ -637,6 +668,9 @@
     align-items: center;
     justify-content: center;
     border-radius: 4px;
+    width: 24px;
+    height: 24px;
+    overflow: hidden;
   }
   .thread-star:hover {
     opacity: 1;
@@ -646,15 +680,44 @@
     color: #f2a600;
     opacity: 1;
   }
+  .thread-important {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    color: var(--text-secondary);
+    opacity: 0.4;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    width: 24px;
+    height: 24px;
+    overflow: hidden;
+  }
+  .thread-important:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.05);
+  }
+  .thread-important.active {
+    color: #f5a623;
+    opacity: 1;
+  }
+  .important-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: -2px;
+    margin-top: 5px;
+    pointer-events: none;
+  }
   .thread-unread-dot {
     width: 8px;
     height: 8px;
     border-radius: 50%;
     background-color: transparent;
-    transition: background 0.2s;
-  }
-  .thread-item.unread .thread-unread-dot {
-    background-color: var(--accent-blue);
+    display: none;
   }
   .thread-content {
     flex: 1;
