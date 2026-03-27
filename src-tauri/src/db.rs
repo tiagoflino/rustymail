@@ -22,7 +22,9 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         account_id TEXT,
         name TEXT,
         type TEXT,
-        unread_count INTEGER
+        unread_count INTEGER,
+        threads_total INTEGER DEFAULT 0,
+        threads_unread INTEGER DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS threads (
@@ -32,7 +34,11 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         history_id TEXT,
         synced_history_id TEXT,
         last_message_internal_date INTEGER,
-        unread INTEGER
+        unread INTEGER,
+        sender TEXT,
+        subject TEXT,
+        latest_date INTEGER,
+        metadata_synced INTEGER DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS messages (
@@ -91,6 +97,11 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         value TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+        version INTEGER PRIMARY KEY,
+        applied_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_thread_labels_thread ON thread_labels(thread_id);
     CREATE INDEX IF NOT EXISTS idx_thread_labels_label ON thread_labels(label_id);
     CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
@@ -130,6 +141,7 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         ("download_folder", ""),
         ("attachment_action", "open"),
         ("undo_send_delay", "5"),
+        ("threads_per_page", "100"),
     ];
     for (key, value) in defaults {
         let _ = sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)")
@@ -150,7 +162,8 @@ pub async fn init_db(app_handle: &tauri::AppHandle) -> Result<SqlitePool> {
 
     let options = SqliteConnectOptions::from_str(
         &format!("sqlite://{}", db_path.to_string_lossy())
-    )?.create_if_missing(true);
+    )?.create_if_missing(true)
+      .busy_timeout(std::time::Duration::from_secs(10));
 
     let pool = SqlitePool::connect_with(options).await?;
     apply_schema(&pool).await?;
@@ -159,19 +172,116 @@ pub async fn init_db(app_handle: &tauri::AppHandle) -> Result<SqlitePool> {
     Ok(pool)
 }
 
-async fn run_migrations(pool: &SqlitePool) -> Result<()> {
-    // Migration: add synced_history_id column to threads (v3)
-    let has_col: bool = sqlx::query_scalar::<_, i32>(
-        "SELECT COUNT(*) FROM pragma_table_info('threads') WHERE name = 'synced_history_id'"
+async fn has_column(pool: &SqlitePool, table: &str, column: &str) -> bool {
+    sqlx::query_scalar::<_, i32>(
+        &format!("SELECT COUNT(*) FROM pragma_table_info('{}') WHERE name = '{}'", table, column)
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0) > 0
+}
+
+async fn m001_add_synced_history_id(pool: &SqlitePool) -> Result<()> {
+    if !has_column(pool, "threads", "synced_history_id").await {
+        sqlx::query("ALTER TABLE threads ADD COLUMN synced_history_id TEXT")
+            .execute(pool).await?;
+    }
+    Ok(())
+}
+
+async fn m002_add_thread_metadata_columns(pool: &SqlitePool) -> Result<()> {
+    for (col, typ) in [("sender", "TEXT"), ("subject", "TEXT"), ("latest_date", "INTEGER"), ("metadata_synced", "INTEGER DEFAULT 0")] {
+        if !has_column(pool, "threads", col).await {
+            sqlx::query(&format!("ALTER TABLE threads ADD COLUMN {} {}", col, typ))
+                .execute(pool).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn m003_add_label_stats_columns(pool: &SqlitePool) -> Result<()> {
+    for (col, typ) in [("threads_total", "INTEGER DEFAULT 0"), ("threads_unread", "INTEGER DEFAULT 0")] {
+        if !has_column(pool, "labels", col).await {
+            sqlx::query(&format!("ALTER TABLE labels ADD COLUMN {} {}", col, typ))
+                .execute(pool).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn m004_backfill_thread_metadata(pool: &SqlitePool) -> Result<()> {
+    let needs_backfill: bool = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM threads WHERE (metadata_synced IS NULL OR metadata_synced = 0) AND EXISTS (SELECT 1 FROM messages WHERE messages.thread_id = threads.id)"
     )
     .fetch_one(pool)
     .await
     .unwrap_or(0) > 0;
 
-    if !has_col {
-        sqlx::query("ALTER TABLE threads ADD COLUMN synced_history_id TEXT")
-            .execute(pool)
-            .await?;
+    if needs_backfill {
+        println!("[Migration] Backfilling thread metadata from existing messages...");
+        sqlx::query(
+            "UPDATE threads SET
+                sender = (SELECT m.sender FROM messages m WHERE m.thread_id = threads.id ORDER BY m.internal_date DESC LIMIT 1),
+                subject = (SELECT m.subject FROM messages m WHERE m.thread_id = threads.id ORDER BY m.internal_date DESC LIMIT 1),
+                latest_date = (SELECT MAX(m.internal_date) FROM messages m WHERE m.thread_id = threads.id),
+                metadata_synced = 1
+            WHERE (metadata_synced IS NULL OR metadata_synced = 0) AND EXISTS (SELECT 1 FROM messages WHERE messages.thread_id = threads.id)"
+        )
+        .execute(pool)
+        .await
+        .ok();
+        println!("[Migration] Backfill complete");
+    }
+    Ok(())
+}
+
+async fn run_migrations(pool: &SqlitePool) -> Result<()> {
+    let applied: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+    if applied.is_empty() {
+        let bootstrap_checks: Vec<(i64, &str, &str)> = vec![
+            (1, "threads", "synced_history_id"),
+            (2, "threads", "metadata_synced"),
+            (3, "labels", "threads_total"),
+        ];
+        for (version, table, column) in &bootstrap_checks {
+            if has_column(pool, table, column).await {
+                let _ = sqlx::query("INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)")
+                    .bind(version)
+                    .execute(pool)
+                    .await;
+            }
+        }
+        let applied_after: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
+        return run_pending_migrations(pool, &applied_after).await;
+    }
+
+    run_pending_migrations(pool, &applied).await
+}
+
+async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()> {
+    for version in 1..=4i64 {
+        if !applied.contains(&version) {
+            println!("[Migration] Running v{}...", version);
+            match version {
+                1 => m001_add_synced_history_id(pool).await?,
+                2 => m002_add_thread_metadata_columns(pool).await?,
+                3 => m003_add_label_stats_columns(pool).await?,
+                4 => m004_backfill_thread_metadata(pool).await?,
+                _ => {}
+            }
+            sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
+                .bind(version)
+                .execute(pool)
+                .await?;
+            println!("[Migration] v{} complete", version);
+        }
     }
 
     Ok(())
@@ -200,8 +310,8 @@ mod tests {
         let names: Vec<&str> = tables.iter().map(|r| r.0.as_str()).collect();
         for expected in &[
             "accounts", "attachments", "drafts", "history_state", "labels",
-            "message_labels", "messages", "messages_fts", "settings",
-            "thread_labels", "threads",
+            "message_labels", "messages", "messages_fts", "schema_migrations",
+            "settings", "thread_labels", "threads",
         ] {
             assert!(names.contains(expected), "Missing table: {expected}");
         }
@@ -233,7 +343,7 @@ mod tests {
 
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM settings")
             .fetch_one(&pool).await.unwrap();
-        assert!(count.0 >= 12, "Expected at least 12 default settings, got {}", count.0);
+        assert!(count.0 >= 14, "Expected at least 14 default settings, got {}", count.0);
 
         let theme: (String,) = sqlx::query_as("SELECT value FROM settings WHERE key = 'theme'")
             .fetch_one(&pool).await.unwrap();
@@ -300,5 +410,58 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, "t1");
+    }
+
+    #[tokio::test]
+    async fn test_threads_has_metadata_columns() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+        #[derive(sqlx::FromRow)]
+        struct ColInfo { name: String }
+        let cols: Vec<ColInfo> = sqlx::query_as("SELECT name FROM pragma_table_info('threads')")
+            .fetch_all(&pool).await.unwrap();
+        let names: Vec<&str> = cols.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"sender"), "threads missing sender column");
+        assert!(names.contains(&"subject"), "threads missing subject column");
+        assert!(names.contains(&"latest_date"), "threads missing latest_date column");
+        assert!(names.contains(&"metadata_synced"), "threads missing metadata_synced column");
+    }
+
+    #[tokio::test]
+    async fn test_labels_has_thread_count_columns() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+        #[derive(sqlx::FromRow)]
+        struct ColInfo { name: String }
+        let cols: Vec<ColInfo> = sqlx::query_as("SELECT name FROM pragma_table_info('labels')")
+            .fetch_all(&pool).await.unwrap();
+        let names: Vec<&str> = cols.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"threads_total"), "labels missing threads_total column");
+        assert!(names.contains(&"threads_unread"), "labels missing threads_unread column");
+    }
+
+    #[tokio::test]
+    async fn test_migrations_are_tracked() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let versions: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations ORDER BY version")
+            .fetch_all(&pool).await.unwrap();
+        assert!(versions.contains(&1));
+        assert!(versions.contains(&2));
+        assert!(versions.contains(&3));
+        assert!(versions.contains(&4));
+    }
+
+    #[tokio::test]
+    async fn test_migrations_idempotent() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 4);
     }
 }
