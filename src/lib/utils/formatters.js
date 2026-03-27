@@ -7,6 +7,7 @@ export function formatTime(ts) {
     const now = new Date();
     if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     if (now.getTime() - d.getTime() < 7 * 86400000) return d.toLocaleDateString([], { weekday: 'short' });
+    if (d.getFullYear() !== now.getFullYear()) return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
     return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
