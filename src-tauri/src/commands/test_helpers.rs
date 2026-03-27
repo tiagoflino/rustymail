@@ -19,6 +19,9 @@ pub async fn insert_message(pool: &SqlitePool, id: &str, thread_id: &str, accoun
     sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments) VALUES (?, ?, ?, ?, ?, ?, '', ?, '', '', 0)")
         .bind(id).bind(thread_id).bind(account_id).bind(sender).bind(recipients).bind(subject).bind(internal_date)
         .execute(pool).await.unwrap();
+    sqlx::query("UPDATE threads SET sender = ?, subject = ?, latest_date = ?, metadata_synced = 1 WHERE id = ?")
+        .bind(sender).bind(subject).bind(internal_date).bind(thread_id)
+        .execute(pool).await.unwrap();
 }
 
 pub async fn insert_thread(pool: &SqlitePool, id: &str, account_id: &str) {

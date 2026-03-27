@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { writable, get, type Writable } from "svelte/store";
+  import { type Writable } from "svelte/store";
   import {
     iconSearch,
     iconClose,
@@ -27,8 +27,12 @@
     isLoadingThreads: boolean;
     isLabelFetching: boolean;
     isMacOS: boolean;
-    hasMore: boolean;
-    isLoadingMore: boolean;
+    currentPage: number;
+    threadsPerPage: number;
+    totalCount: number;
+    hasMoreRemote: boolean;
+    gmailTotal: number | null;
+    isBackgroundFilling: boolean;
     activeLabelName: string;
     searchQuery: Writable<string>;
     isSearching: Writable<boolean>;
@@ -37,7 +41,9 @@
     onselectthread: (threadId: string) => void;
     ontogglestar: (threadId: string, starred: boolean) => void;
     ontoggleimportant: (threadId: string, important: boolean) => void;
-    onloadmore: () => void;
+    onfirstpage: () => void;
+    onprevpage: () => void;
+    onnextpage: () => void;
     onsearch: (query: string) => void;
     onclearsearch: () => void;
     onselectcategory: (category: string) => void;
@@ -47,8 +53,12 @@
     isLoadingThreads,
     isLabelFetching,
     isMacOS,
-    hasMore,
-    isLoadingMore,
+    currentPage,
+    threadsPerPage,
+    totalCount,
+    hasMoreRemote,
+    gmailTotal,
+    isBackgroundFilling,
     activeLabelName,
     searchQuery,
     isSearching,
@@ -57,7 +67,9 @@
     onselectthread,
     ontogglestar,
     ontoggleimportant,
-    onloadmore,
+    onfirstpage,
+    onprevpage,
+    onnextpage,
     onsearch,
     onclearsearch,
     onselectcategory,
@@ -69,8 +81,6 @@
   let searchSuggestions = $state<SearchSuggestion[]>([]);
   let searchTimeout: ReturnType<typeof setTimeout> | null = null;
   let threadScrollArea = $state<HTMLDivElement>();
-  let loadingSentinel = $state<HTMLDivElement>();
-  let scrollObserver: IntersectionObserver | null = null;
 
   export function focusSearch() {
     searchInputEl?.focus();
@@ -86,8 +96,8 @@
     return threadScrollArea;
   }
 
-  export function getLoadingSentinel() {
-    return loadingSentinel;
+  export function resetScroll() {
+    if (threadScrollArea) threadScrollArea.scrollTop = 0;
   }
 
   function parseSearchContext(input: string, cursorPos: number): { operator: string | null; value: string } {
@@ -177,36 +187,6 @@
     showSearchSuggestions = false;
     searchSuggestions = [];
     onclearsearch();
-  }
-
-  function setupIntersectionObserver() {
-    if (scrollObserver) scrollObserver.disconnect();
-    scrollObserver = new IntersectionObserver(
-      (entries) => {
-        if (
-          entries &&
-          entries[0]?.isIntersecting &&
-          hasMore &&
-          !isLoadingMore
-        ) {
-          onloadmore();
-        }
-      },
-      { root: threadScrollArea, rootMargin: "300px", threshold: 0.01 },
-    );
-    observeSentinel();
-  }
-
-  export function observeSentinel() {
-    setTimeout(() => {
-      if (loadingSentinel && scrollObserver) {
-        scrollObserver.observe(loadingSentinel);
-      }
-    }, 50);
-  }
-
-  export function initObserver() {
-    setupIntersectionObserver();
   }
 </script>
 
@@ -301,11 +281,52 @@
 
   <div class="list-header">
     <h3>{$searchQuery ? "Search Results" : activeLabelName}</h3>
-    <span class="thread-count">{$threads.length}{hasMore ? "+" : ""}</span>
+    {#if !$searchQuery && ($threads.length > 0 || isLoadingThreads || isBackgroundFilling)}
+      <div class="pagination-controls">
+        <span class="pagination-range">
+          {#if isBackgroundFilling && $threads.length === 0}
+            Loading...
+          {:else}
+            {currentPage * threadsPerPage + 1}–{currentPage * threadsPerPage + $threads.length}
+            {#if gmailTotal !== null}
+              of {gmailTotal.toLocaleString()}
+            {:else if hasMoreRemote}
+              of many
+            {:else if totalCount > 0}
+              of {totalCount.toLocaleString()}
+            {/if}
+          {/if}
+        </span>
+        <button
+          class="pagination-btn"
+          disabled={currentPage === 0 || isLoadingThreads}
+          onclick={onfirstpage}
+          title="Newest"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 18 11 12 17 6"/><line x1="7" y1="6" x2="7" y2="18"/></svg>
+        </button>
+        <button
+          class="pagination-btn"
+          disabled={currentPage === 0 || isLoadingThreads}
+          onclick={onprevpage}
+          title="Newer"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <button
+          class="pagination-btn"
+          disabled={isLoadingThreads || (!hasMoreRemote && (gmailTotal === null || (currentPage + 1) * threadsPerPage >= gmailTotal) && (currentPage + 1) * threadsPerPage >= totalCount)}
+          onclick={onnextpage}
+          title="Older"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      </div>
+    {/if}
   </div>
 
   <div class="thread-scroll-area" bind:this={threadScrollArea}>
-    {#if $threads.length === 0 && ($isSyncing || isLabelFetching || isLoadingThreads)}
+    {#if $threads.length === 0 && ($isSyncing || isLabelFetching || isLoadingThreads || isBackgroundFilling)}
       {#each Array(8) as _}
         <div class="skeleton-thread">
           <div class="skeleton-dot"></div>
@@ -374,13 +395,9 @@
         </div>
       {/each}
 
-      {#if hasMore}
-        <div class="load-more-sentinel" bind:this={loadingSentinel}>
-          {#if isLoadingMore}
-            <div class="loading-more">
-              <div class="loading-spinner"></div>
-            </div>
-          {/if}
+      {#if isBackgroundFilling}
+        <div class="loading-more">
+          <div class="loading-spinner"></div>
         </div>
       {/if}
     {/if}
@@ -566,7 +583,8 @@
     }
   }
   .list-header {
-    padding: 8px 16px;
+    padding: 8px 16px 8px 16px;
+    padding-right: 8px;
     border-bottom: 1px solid var(--border-color);
     display: flex;
     align-items: center;
@@ -579,12 +597,6 @@
     line-height: 16px;
     letter-spacing: -0.08px;
     color: var(--text-primary);
-  }
-  .thread-count {
-    font-size: 11px;
-    line-height: 14px;
-    color: var(--text-secondary);
-    font-weight: 500;
   }
   .thread-scroll-area {
     flex: 1;
@@ -621,8 +633,44 @@
     justify-content: center;
     padding: 12px;
   }
-  .load-more-sentinel {
-    min-height: 1px;
+  .pagination-controls {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .pagination-range {
+    font-size: 11px;
+    line-height: 14px;
+    color: var(--text-secondary);
+    font-weight: 400;
+    margin-right: 4px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .pagination-btn {
+    background: none;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    transition: background 0.15s, color 0.15s;
+  }
+  .pagination-btn:hover:not(:disabled) {
+    background: var(--sidebar-hover);
+    color: var(--text-primary);
+  }
+  .pagination-btn:active:not(:disabled) {
+    background: var(--border-color);
+  }
+  .pagination-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
   .thread-item {
     display: flex;

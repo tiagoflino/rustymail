@@ -7,6 +7,8 @@ pub struct LocalLabel {
     pub name: String,
     pub r#type: String,
     pub unread_count: i32,
+    pub threads_total: i32,
+    pub threads_unread: i32,
 }
 
 pub(crate) async fn get_labels_inner(pool: &sqlx::SqlitePool, account_id: &str) -> Result<Vec<LocalLabel>, String> {
@@ -16,10 +18,12 @@ pub(crate) async fn get_labels_inner(pool: &sqlx::SqlitePool, account_id: &str) 
         name: Option<String>,
         r#type: Option<String>,
         unread_count: Option<i32>,
+        threads_total: Option<i32>,
+        threads_unread: Option<i32>,
     }
 
     let rows: Vec<LabelRow> = sqlx::query_as(
-        "SELECT id, name, type, unread_count FROM labels
+        "SELECT id, name, type, unread_count, COALESCE(threads_total, 0) as threads_total, COALESCE(threads_unread, 0) as threads_unread FROM labels
          WHERE account_id = ?
          AND UPPER(id) NOT IN ('YELLOW_STAR', 'CHAT', 'VOICEMAIL')
          AND UPPER(name) NOT IN ('YELLOW_STAR', 'YELLOW STAR', 'CHAT', 'VOICEMAIL')
@@ -37,6 +41,8 @@ pub(crate) async fn get_labels_inner(pool: &sqlx::SqlitePool, account_id: &str) 
             name: r.name.unwrap_or_default(),
             r#type: r.r#type.unwrap_or_default(),
             unread_count: r.unread_count.unwrap_or(0),
+            threads_total: r.threads_total.unwrap_or(0),
+            threads_unread: r.threads_unread.unwrap_or(0),
         })
         .collect())
 }
@@ -113,5 +119,17 @@ mod tests {
         let labels = get_labels_inner(&pool, "acc1").await.unwrap();
         assert_eq!(labels.len(), 1);
         assert_eq!(labels[0].unread_count, 3);
+    }
+
+    #[tokio::test]
+    async fn test_get_labels_inner_includes_thread_counts() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO labels (id, account_id, name, type, unread_count, threads_total, threads_unread) VALUES ('INBOX', 'acc1', 'INBOX', 'system', 5, 1000, 50)")
+            .execute(&pool).await.unwrap();
+
+        let labels = get_labels_inner(&pool, "acc1").await.unwrap();
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].threads_total, 1000);
+        assert_eq!(labels[0].threads_unread, 50);
     }
 }

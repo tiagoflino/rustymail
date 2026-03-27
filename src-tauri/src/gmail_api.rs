@@ -24,6 +24,10 @@ pub struct GmailLabel {
     pub r#type: String,
     #[serde(rename = "messagesUnread")]
     pub messages_unread: Option<i32>,
+    #[serde(rename = "threadsTotal")]
+    pub threads_total: Option<i32>,
+    #[serde(rename = "threadsUnread")]
+    pub threads_unread: Option<i32>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -330,26 +334,19 @@ pub async fn fetch_and_store_labels(
     let labels_res: LabelsResponse = res.json().await.map_err(|e| e.to_string())?;
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
 
-    let inbox_has_gmail_count = labels_res.labels.iter()
-        .any(|l| l.id == "INBOX" && l.messages_unread.is_some());
-
-    for label in &labels_res.labels {
-        if label.id == "INBOX" {
-            println!("[Labels] INBOX messagesUnread={:?}", label.messages_unread);
-        }
-    }
-
     for label in labels_res.labels {
         sqlx::query(
-            "INSERT INTO labels (id, account_id, name, type, unread_count)
-             VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET name=excluded.name, unread_count=excluded.unread_count",
+            "INSERT INTO labels (id, account_id, name, type, unread_count, threads_total, threads_unread)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET name=excluded.name, unread_count=excluded.unread_count, threads_total=excluded.threads_total, threads_unread=excluded.threads_unread",
         )
         .bind(&label.id)
         .bind(account_id)
         .bind(&label.name)
         .bind(&label.r#type)
         .bind(label.messages_unread.unwrap_or(0))
+        .bind(label.threads_total.unwrap_or(0))
+        .bind(label.threads_unread.unwrap_or(0))
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
@@ -357,29 +354,39 @@ pub async fn fetch_and_store_labels(
 
     tx.commit().await.map_err(|e| e.to_string())?;
 
-    // If Gmail didn't return messagesUnread for INBOX (it's optional),
-    // compute from local thread data instead
-    if !inbox_has_gmail_count {
-        let local_unread: (i32,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM threads t
-             INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'INBOX'
-             WHERE t.account_id = ? AND t.unread = 1"
-        )
-        .bind(account_id)
-        .fetch_one(pool)
-        .await
-        .unwrap_or((0,));
-
-        let _ = sqlx::query("UPDATE labels SET unread_count = ? WHERE id = 'INBOX' AND account_id = ?")
-            .bind(local_unread.0)
-            .bind(account_id)
-            .execute(pool)
+    let key_labels = ["INBOX", "SENT", "DRAFT", "TRASH", "SPAM", "STARRED", "IMPORTANT"];
+    for label_id in &key_labels {
+        let detail_res = client
+            .get(gmail_api_url(&format!("/gmail/v1/users/me/labels/{}", label_id)))
+            .header("Authorization", format!("Bearer {}", access_token))
+            .send()
             .await;
 
-        println!("[Labels] INBOX unread from local data: {}", local_unread.0);
+        if let Ok(res) = detail_res {
+            if res.status().is_success() {
+                if let Ok(detail) = res.json::<GmailLabel>().await {
+                    let _ = sqlx::query(
+                        "UPDATE labels SET threads_total = ?, threads_unread = ?, unread_count = ? WHERE id = ? AND account_id = ?"
+                    )
+                    .bind(detail.threads_total.unwrap_or(0))
+                    .bind(detail.threads_unread.unwrap_or(0))
+                    .bind(detail.messages_unread.unwrap_or(0))
+                    .bind(label_id)
+                    .bind(account_id)
+                    .execute(pool)
+                    .await;
+                }
+            }
+        }
     }
 
     Ok(())
+}
+
+#[derive(Debug)]
+pub struct FetchThreadsResult {
+    pub next_page_token: Option<String>,
+    pub thread_ids: Vec<String>,
 }
 
 pub async fn fetch_and_store_threads(
@@ -388,7 +395,9 @@ pub async fn fetch_and_store_threads(
     access_token: &str,
     label_ids: Option<&[&str]>,
     max_results: i32,
-) -> Result<(), String> {
+    page_token: Option<&str>,
+    query: Option<&str>,
+) -> Result<FetchThreadsResult, String> {
     let client = Client::new();
 
     let mut params: Vec<(&str, String)> = vec![
@@ -402,6 +411,12 @@ pub async fn fetch_and_store_threads(
         for lid in labels.iter() {
             params.push(("labelIds", lid.to_string()));
         }
+    }
+    if let Some(token) = page_token {
+        params.push(("pageToken", token.to_string()));
+    }
+    if let Some(q) = query {
+        params.push(("q", q.to_string()));
     }
 
     let res = client
@@ -417,10 +432,13 @@ pub async fn fetch_and_store_threads(
     }
 
     let threads_res: ThreadsResponse = res.json().await.map_err(|e| e.to_string())?;
+    let next_page_token = threads_res.next_page_token.clone();
+    let mut fetched_ids: Vec<String> = Vec::new();
 
     if let Some(threads) = threads_res.threads {
         let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
         for thread in &threads {
+            fetched_ids.push(thread.id.clone());
             sqlx::query(
                 "INSERT INTO threads (id, account_id, snippet, history_id, unread)
                  VALUES (?, ?, ?, ?, ?)
@@ -450,7 +468,10 @@ pub async fn fetch_and_store_threads(
         }
     }
 
-    Ok(())
+    Ok(FetchThreadsResult {
+        next_page_token,
+        thread_ids: fetched_ids,
+    })
 }
 
 pub async fn fetch_messages_for_thread(
@@ -604,64 +625,274 @@ pub async fn batch_hydrate_threads(
     let total = thread_ids.len();
     let mut completed = 0usize;
 
-    let results: Vec<Result<(), String>> = stream::iter(thread_ids)
-        .map(|tid| {
-            let client = Arc::clone(&client);
-            let token = access_token.to_string();
-            let pool = pool.clone();
-            let aid = account_id.to_string();
-            async move {
-                let res = client
-                    .get(gmail_api_url(&format!(
-                        "/gmail/v1/users/me/threads/{}",
-                        tid
-                    )))
-                    .header("Authorization", format!("Bearer {}", token))
-                    .send()
-                    .await
-                    .map_err(|e| e.to_string())?;
-                if !res.status().is_success() {
-                    return Err(format!("HTTP {}", res.status()));
+    let api_results: Vec<(String, Result<ThreadDetailsResponse, (u16, String)>)> =
+        stream::iter(thread_ids)
+            .map(|tid| {
+                let client = Arc::clone(&client);
+                let token = access_token.to_string();
+                let tid_clone = tid.clone();
+                async move {
+                    let result = async {
+                        let res = client
+                            .get(gmail_api_url(&format!(
+                                "/gmail/v1/users/me/threads/{}",
+                                tid
+                            )))
+                            .header("Authorization", format!("Bearer {}", token))
+                            .send()
+                            .await
+                            .map_err(|e| (0u16, e.to_string()))?;
+                        let status = res.status().as_u16();
+                        if !res.status().is_success() {
+                            return Err((status, format!("HTTP {}", res.status())));
+                        }
+                        res.json::<ThreadDetailsResponse>()
+                            .await
+                            .map_err(|e| (0u16, e.to_string()))
+                    }
+                    .await;
+                    (tid_clone, result)
                 }
-                let details: ThreadDetailsResponse = res.json().await.map_err(|e| e.to_string())?;
-                store_thread_messages(&pool, &aid, &details).await
-            }
-        })
-        .buffer_unordered(5)
-        .collect()
-        .await;
+            })
+            .buffer_unordered(10)
+            .collect()
+            .await;
 
-    for r in &results {
-        if r.is_ok() {
-            completed += 1;
+    let mut gone_ids: Vec<&str> = Vec::new();
+
+    for (tid, result) in &api_results {
+        match result {
+            Ok(details) => {
+                match store_thread_messages(pool, account_id, details).await {
+                    Ok(()) => completed += 1,
+                    Err(e) => eprintln!("[Hydrate] DB write failed for thread {}: {}", tid, e),
+                }
+            }
+            Err((status, e)) => {
+                if *status == 404 {
+                    gone_ids.push(tid);
+                } else {
+                    eprintln!("[Hydrate] API fetch failed for {}: {}", tid, e);
+                }
+            }
         }
     }
 
-    println!("[Hydrate] Completed {}/{} threads", completed, total);
+    if !gone_ids.is_empty() {
+        println!("[Hydrate] Removing {} gone threads (404)", gone_ids.len());
+        for chunk in gone_ids.chunks(50) {
+            let placeholders: Vec<&str> = chunk.iter().map(|_| "?").collect();
+            let sql = format!(
+                "DELETE FROM threads WHERE id IN ({}) AND account_id = ?",
+                placeholders.join(",")
+            );
+            let mut q = sqlx::query(&sql);
+            for id in chunk {
+                q = q.bind(id);
+            }
+            q = q.bind(account_id);
+            let _ = q.execute(pool).await;
+
+            let sql2 = format!(
+                "DELETE FROM thread_labels WHERE thread_id IN ({})",
+                chunk.iter().map(|_| "?").collect::<Vec<&str>>().join(",")
+            );
+            let mut q2 = sqlx::query(&sql2);
+            for id in chunk {
+                q2 = q2.bind(id);
+            }
+            let _ = q2.execute(pool).await;
+        }
+    }
+
+    println!("[Hydrate] Completed {}/{} threads ({} gone)", completed, total, gone_ids.len());
     (total, completed)
 }
 
-pub async fn get_unhydrated_thread_ids(pool: &SqlitePool, account_id: &str) -> Vec<String> {
-    #[derive(sqlx::FromRow)]
-    struct TId {
-        id: String,
+pub async fn batch_metadata_hydrate(
+    pool: &SqlitePool,
+    account_id: &str,
+    access_token: &str,
+    thread_ids: Vec<String>,
+) {
+    let client = Arc::new(Client::new());
+    let total = thread_ids.len();
+    let mut completed = 0usize;
+
+    let api_results: Vec<(String, Result<ThreadDetailsResponse, (u16, String)>)> =
+        stream::iter(thread_ids)
+            .map(|tid| {
+                let client = Arc::clone(&client);
+                let token = access_token.to_string();
+                let tid_clone = tid.clone();
+                async move {
+                    let result = async {
+                        let res = client
+                            .get(gmail_api_url(&format!(
+                                "/gmail/v1/users/me/threads/{}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date",
+                                tid
+                            )))
+                            .header("Authorization", format!("Bearer {}", token))
+                            .send()
+                            .await
+                            .map_err(|e| (0u16, e.to_string()))?;
+                        let status = res.status().as_u16();
+                        if !res.status().is_success() {
+                            return Err((status, format!("HTTP {}", res.status())));
+                        }
+                        res.json::<ThreadDetailsResponse>()
+                            .await
+                            .map_err(|e| (0u16, e.to_string()))
+                    }
+                    .await;
+                    (tid_clone, result)
+                }
+            })
+            .buffer_unordered(10)
+            .collect()
+            .await;
+
+    let mut gone_ids: Vec<&str> = Vec::new();
+
+    for (tid, result) in &api_results {
+        match result {
+            Ok(details) => {
+                let messages = match &details.messages {
+                    Some(msgs) if !msgs.is_empty() => msgs,
+                    _ => continue,
+                };
+
+                let latest_msg = messages
+                    .iter()
+                    .max_by_key(|m| m.internal_date.parse::<i64>().unwrap_or(0))
+                    .unwrap();
+
+                let headers = latest_msg
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.headers.as_ref());
+
+                let sender = headers
+                    .and_then(|h| get_header(h, "From"))
+                    .unwrap_or("")
+                    .to_string();
+
+                let subject = headers
+                    .and_then(|h| get_header(h, "Subject"))
+                    .unwrap_or("")
+                    .to_string();
+
+                let latest_date = latest_msg.internal_date.parse::<i64>().unwrap_or(0);
+
+                let unread = messages.iter().any(|m| {
+                    m.label_ids
+                        .as_ref()
+                        .map(|ids| ids.iter().any(|id| id == "UNREAD"))
+                        .unwrap_or(false)
+                });
+
+                let snippet = latest_msg.snippet.as_deref().unwrap_or("");
+                let update_result = sqlx::query(
+                    "INSERT INTO threads (id, account_id, snippet, history_id, unread, sender, subject, latest_date, metadata_synced)
+                     VALUES (?, ?, ?, '', ?, ?, ?, ?, 1)
+                     ON CONFLICT(id) DO UPDATE SET sender = excluded.sender, subject = excluded.subject, latest_date = excluded.latest_date, metadata_synced = 1, unread = excluded.unread, snippet = excluded.snippet",
+                )
+                .bind(tid)
+                .bind(account_id)
+                .bind(snippet)
+                .bind(if unread { 1 } else { 0 })
+                .bind(&sender)
+                .bind(&subject)
+                .bind(latest_date)
+                .execute(pool)
+                .await;
+
+                if let Err(e) = update_result {
+                    eprintln!("[MetadataHydrate] DB update failed for thread {}: {}", tid, e);
+                    continue;
+                }
+
+                for msg in messages {
+                    if let Some(label_ids) = &msg.label_ids {
+                        for label_id in label_ids {
+                            let _ = sqlx::query(
+                                "INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?, ?)",
+                            )
+                            .bind(tid)
+                            .bind(label_id)
+                            .execute(pool)
+                            .await;
+                        }
+                    }
+                }
+
+                completed += 1;
+            }
+            Err((status, e)) => {
+                if *status == 404 {
+                    gone_ids.push(tid);
+                } else {
+                    eprintln!("[MetadataHydrate] API fetch failed for {}: {}", tid, e);
+                }
+            }
+        }
     }
-    sqlx::query_as::<_, TId>(
-        "SELECT t.id FROM threads t
-         LEFT JOIN messages m ON t.id = m.thread_id
-         WHERE t.account_id = ? AND m.id IS NULL",
-    )
-    .bind(account_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default()
-    .into_iter()
-    .map(|r| r.id)
-    .collect()
+
+    if !gone_ids.is_empty() {
+        println!("[MetadataHydrate] Removing {} gone threads (404)", gone_ids.len());
+        for chunk in gone_ids.chunks(50) {
+            let placeholders: Vec<&str> = chunk.iter().map(|_| "?").collect();
+            let sql = format!(
+                "DELETE FROM threads WHERE id IN ({}) AND account_id = ?",
+                placeholders.join(",")
+            );
+            let mut q = sqlx::query(&sql);
+            for id in chunk {
+                q = q.bind(id);
+            }
+            q = q.bind(account_id);
+            let _ = q.execute(pool).await;
+
+            let sql2 = format!(
+                "DELETE FROM thread_labels WHERE thread_id IN ({})",
+                chunk.iter().map(|_| "?").collect::<Vec<&str>>().join(",")
+            );
+            let mut q2 = sqlx::query(&sql2);
+            for id in chunk {
+                q2 = q2.bind(id);
+            }
+            let _ = q2.execute(pool).await;
+        }
+    }
+
+    println!(
+        "[MetadataHydrate] Completed {}/{} threads ({} gone)",
+        completed, total, gone_ids.len()
+    );
 }
 
-/// Returns thread IDs that have been updated on Gmail (history_id changed)
-/// but haven't been re-synced locally yet.
+pub async fn get_profile_history_id(access_token: &str) -> Result<String, String> {
+    let client = Client::new();
+    let res = client
+        .get(gmail_api_url("/gmail/v1/users/me/profile"))
+        .header("Authorization", format!("Bearer {}", access_token))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !res.status().is_success() {
+        return Err(format!("Profile API error: {}", res.status()));
+    }
+
+    #[derive(Deserialize)]
+    struct Profile {
+        #[serde(rename = "historyId")]
+        history_id: String,
+    }
+    let profile: Profile = res.json().await.map_err(|e| e.to_string())?;
+    Ok(profile.history_id)
+}
+
 pub async fn get_stale_thread_ids(pool: &SqlitePool, account_id: &str) -> Vec<String> {
     #[derive(sqlx::FromRow)]
     struct TId {
@@ -672,6 +903,21 @@ pub async fn get_stale_thread_ids(pool: &SqlitePool, account_id: &str) -> Vec<St
          WHERE t.account_id = ?
          AND t.synced_history_id IS NOT NULL
          AND t.history_id != t.synced_history_id",
+    )
+    .bind(account_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .map(|r| r.id)
+    .collect()
+}
+
+pub async fn get_no_metadata_thread_ids(pool: &SqlitePool, account_id: &str) -> Vec<String> {
+    #[derive(sqlx::FromRow)]
+    struct TId { id: String }
+    sqlx::query_as::<_, TId>(
+        "SELECT id FROM threads WHERE account_id = ? AND (metadata_synced IS NULL OR metadata_synced = 0)"
     )
     .bind(account_id)
     .fetch_all(pool)
@@ -780,6 +1026,10 @@ pub async fn fetch_history(
                 if !rec.labels_removed.is_empty() { println!("[History] labelsRemoved: {} (labels: {:?})", rec.labels_removed.len(), rec.labels_removed.iter().map(|l| &l.label_ids).collect::<Vec<_>>()); }
             }
             all_records.extend(records);
+            if all_records.len() > 200 {
+                println!("[History] Too many records ({}), aborting incremental sync", all_records.len());
+                return Ok(None);
+            }
         }
 
         match history_res.next_page_token {
@@ -2058,45 +2308,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_unhydrated_thread_ids_returns_threads_without_messages() {
-        let pool = test_pool().await;
-
-        // Insert two threads
-        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t1', 'acc1', 's1', 'h1', 0)")
-            .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t2', 'acc1', 's2', 'h2', 0)")
-            .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t3', 'acc2', 's3', 'h3', 0)")
-            .execute(&pool).await.unwrap();
-
-        // Add a message only for t1
-        sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, subject, internal_date) VALUES ('m1', 't1', 'acc1', 'a@b.com', 'subj', 100)")
-            .execute(&pool).await.unwrap();
-
-        let unhydrated = get_unhydrated_thread_ids(&pool, "acc1").await;
-        assert_eq!(unhydrated.len(), 1);
-        assert_eq!(unhydrated[0], "t2");
-
-        // t3 belongs to acc2 so should not appear for acc1
-        let unhydrated2 = get_unhydrated_thread_ids(&pool, "acc2").await;
-        assert_eq!(unhydrated2.len(), 1);
-        assert_eq!(unhydrated2[0], "t3");
-    }
-
-    #[tokio::test]
-    async fn test_get_unhydrated_thread_ids_all_hydrated() {
-        let pool = test_pool().await;
-
-        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t1', 'acc1', 's1', 'h1', 0)")
-            .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, subject, internal_date) VALUES ('m1', 't1', 'acc1', 'a@b.com', 'subj', 100)")
-            .execute(&pool).await.unwrap();
-
-        let unhydrated = get_unhydrated_thread_ids(&pool, "acc1").await;
-        assert!(unhydrated.is_empty());
-    }
-
-    #[tokio::test]
     async fn test_evict_old_message_bodies() {
         let pool = test_pool().await;
 
@@ -2480,12 +2691,17 @@ mod tests {
         let result = {
             let _guard = MOCK_ENV_LOCK.lock().unwrap();
             std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
-            let r = fetch_and_store_threads(&pool, "acc1", "fake_token", Some(&["INBOX"]), 10).await;
+            let r = fetch_and_store_threads(&pool, "acc1", "fake_token", Some(&["INBOX"]), 10, None, None).await;
             std::env::remove_var("TEST_GMAIL_API_BASE");
             r
         };
 
         assert!(result.is_ok(), "fetch_and_store_threads failed: {:?}", result);
+        let fetch_result = result.unwrap();
+        assert_eq!(fetch_result.thread_ids.len(), 2);
+        assert!(fetch_result.thread_ids.contains(&"t1".to_string()));
+        assert!(fetch_result.thread_ids.contains(&"t2".to_string()));
+        assert!(fetch_result.next_page_token.is_none());
         mock.assert();
 
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM threads WHERE account_id = 'acc1'")
@@ -2520,7 +2736,7 @@ mod tests {
         let result = {
             let _guard = MOCK_ENV_LOCK.lock().unwrap();
             std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
-            let r = fetch_and_store_threads(&pool, "acc1", "fake_token", None, 10).await;
+            let r = fetch_and_store_threads(&pool, "acc1", "fake_token", None, 10, None, None).await;
             std::env::remove_var("TEST_GMAIL_API_BASE");
             r
         };
@@ -3673,5 +3889,160 @@ mod tests {
             .fetch_one(&pool).await.unwrap();
         assert_eq!(thread_label_count.0, 1);
         mock.assert();
+    }
+
+    #[tokio::test]
+    async fn test_batch_metadata_hydrate_via_mock() {
+        let server = httpmock::MockServer::start();
+        let pool = test_pool().await;
+
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread, metadata_synced) VALUES ('t1', 'acc1', 'snippet', '100', 0, 0)")
+            .execute(&pool).await.unwrap();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/threads/t1");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(r#"{
+                    "id": "t1",
+                    "messages": [{
+                        "id": "m1",
+                        "threadId": "t1",
+                        "labelIds": ["INBOX", "UNREAD"],
+                        "snippet": "Hello",
+                        "internalDate": "1709251200000",
+                        "payload": {
+                            "mimeType": "text/plain",
+                            "headers": [
+                                {"name": "From", "value": "Alice <alice@test.com>"},
+                                {"name": "Subject", "value": "Test Subject"},
+                                {"name": "Date", "value": "Fri, 1 Mar 2024 00:00:00 +0000"}
+                            ]
+                        }
+                    }]
+                }"#);
+        });
+
+        {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            batch_metadata_hydrate(&pool, "acc1", "fake-token", vec!["t1".to_string()]).await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+        }
+
+        mock.assert();
+
+        #[derive(sqlx::FromRow)]
+        struct ThreadRow {
+            sender: Option<String>,
+            subject: Option<String>,
+            latest_date: Option<i64>,
+            metadata_synced: Option<i32>,
+            unread: Option<i32>,
+        }
+        let row: ThreadRow = sqlx::query_as("SELECT sender, subject, latest_date, metadata_synced, unread FROM threads WHERE id = 't1'")
+            .fetch_one(&pool).await.unwrap();
+
+        assert_eq!(row.sender.as_deref(), Some("Alice <alice@test.com>"));
+        assert_eq!(row.subject.as_deref(), Some("Test Subject"));
+        assert_eq!(row.latest_date, Some(1709251200000));
+        assert_eq!(row.metadata_synced, Some(1));
+        assert_eq!(row.unread, Some(1));
+
+        let label_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM thread_labels WHERE thread_id = 't1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(label_count.0, 2);
+    }
+
+    #[tokio::test]
+    async fn test_batch_metadata_hydrate_404_removes_thread() {
+        let server = httpmock::MockServer::start();
+        let pool = test_pool().await;
+
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES ('t_gone', 'acc1', '', '', 0)")
+            .execute(&pool).await.unwrap();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/threads/t_gone");
+            then.status(404);
+        });
+
+        {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            batch_metadata_hydrate(&pool, "acc1", "fake-token", vec!["t_gone".to_string()]).await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+        }
+
+        mock.assert();
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM threads WHERE id = 't_gone'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count.0, 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_profile_history_id_success() {
+        let server = httpmock::MockServer::start();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/profile")
+                .header("Authorization", "Bearer fake_token");
+            then.status(200).json_body(serde_json::json!({
+                "historyId": "12345",
+                "emailAddress": "test@test.com"
+            }));
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = get_profile_history_id("fake_token").await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok(), "get_profile_history_id failed: {:?}", result);
+        assert_eq!(result.unwrap(), "12345");
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn test_get_profile_history_id_error() {
+        let server = httpmock::MockServer::start();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/gmail/v1/users/me/profile");
+            then.status(401).body("Unauthorized");
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = get_profile_history_id("bad_token").await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("401"));
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn test_get_no_metadata_thread_ids() {
+        let pool = test_pool().await;
+
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread, metadata_synced) VALUES ('t1', 'acc1', '', '', 0, 0)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id, unread, metadata_synced) VALUES ('t2', 'acc1', '', '', 0, 1)")
+            .execute(&pool).await.unwrap();
+
+        let ids = get_no_metadata_thread_ids(&pool, "acc1").await;
+        assert_eq!(ids, vec!["t1".to_string()]);
     }
 }

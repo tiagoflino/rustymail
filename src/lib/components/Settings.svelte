@@ -26,6 +26,7 @@
     onThemeChange?: (mode: string) => void;
     onDensityChange?: (density: string) => void;
     onReadingPaneChange?: (pane: string) => void;
+    onThreadsPerPageChange?: (n: number) => void;
   }
 
   let {
@@ -38,6 +39,7 @@
     onThemeChange = () => {},
     onDensityChange = () => {},
     onReadingPaneChange = () => {},
+    onThreadsPerPageChange = () => {},
   }: SettingsProps = $props();
 
   let activeTab = $state("accounts");
@@ -386,6 +388,26 @@
                             onDensityChange?.(val);
                           }}
                         >{label}</button>
+                      {/each}
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card-row">
+                  <div class="setting-row-inline">
+                    <div class="setting-label">
+                      <span class="setting-name">Threads Per Page</span>
+                      <span class="setting-hint">Conversations shown per page</span>
+                    </div>
+                    <div class="option-group">
+                      {#each [25, 50, 100, 150, 200] as val}
+                        <button
+                          class="option-btn {(parseInt(settings.threads_per_page) || 100) === val ? 'selected' : ''}"
+                          onclick={() => {
+                            saveSetting("threads_per_page", String(val));
+                            onThreadsPerPageChange?.(val);
+                          }}
+                        >{val}</button>
                       {/each}
                     </div>
                   </div>

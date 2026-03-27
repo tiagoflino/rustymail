@@ -3,6 +3,7 @@ pub mod calendar_api;
 mod credentials;
 mod db;
 mod gmail_api;
+mod page_token_store;
 mod tray;
 
 use tauri::Manager;
@@ -28,6 +29,7 @@ pub fn run() {
             let pool = tauri::async_runtime::block_on(async { db::init_db(&handle).await })
                 .expect("Failed to initialize database");
             handle.manage(pool);
+            handle.manage(page_token_store::PageTokenStore::new());
             tray::setup_tray(app)?;
             println!("Database initialized successfully!");
             Ok(())
@@ -53,6 +55,7 @@ pub fn run() {
             commands::sync::ensure_threads_hydrated,
             commands::labels::get_labels,
             commands::threads::get_threads,
+            commands::threads::get_thread_count,
             commands::threads::fetch_label_threads,
             commands::threads::fetch_category_threads,
             commands::threads::archive_thread,

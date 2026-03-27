@@ -70,113 +70,116 @@ pub(crate) async fn get_threads_inner(
         important: Option<i32>,
     }
 
+    // Only return threads that have been hydrated (have at least one message)
     let base_select = r#"
         SELECT t.id, t.snippet, t.history_id, t.unread,
-                (SELECT m2.sender FROM messages m2 WHERE m2.thread_id = t.id ORDER BY m2.internal_date DESC LIMIT 1) as sender,
-                (SELECT m3.subject FROM messages m3 WHERE m3.thread_id = t.id ORDER BY m3.internal_date DESC LIMIT 1) as subject,
-                (SELECT MAX(m4.internal_date) FROM messages m4 WHERE m4.thread_id = t.id) as msg_date,
+                t.sender as sender,
+                t.subject as subject,
+                t.latest_date as msg_date,
                 EXISTS (SELECT 1 FROM thread_labels tl WHERE tl.thread_id = t.id AND tl.label_id = 'STARRED') as starred,
                 EXISTS (SELECT 1 FROM messages m6 WHERE m6.thread_id = t.id AND m6.has_attachments = 1) as has_attachments,
                 EXISTS (SELECT 1 FROM thread_labels tl2 WHERE tl2.thread_id = t.id AND tl2.label_id = 'IMPORTANT') as important
          FROM threads t
     "#;
+    let hydrated_filter = "t.metadata_synced = 1";
 
+    let hf = hydrated_filter;
     let (sql, binds): (String, Vec<String>) = match (label_id, category) {
         (Some(_lid), Some(cat)) => {
             match cat {
                 ThreadCategory::Primary => {
-                    let sql = format!(r#"
-                        {} INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
+                    let sql = format!(
+                        "{} INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
                         LEFT JOIN thread_labels tl_social ON t.id = tl_social.thread_id AND tl_social.label_id = 'CATEGORY_SOCIAL'
                         LEFT JOIN thread_labels tl_promo ON t.id = tl_promo.thread_id AND tl_promo.label_id = 'CATEGORY_PROMOTIONS'
-                        WHERE t.account_id = ? AND tl_inbox.thread_id IS NOT NULL
+                        WHERE t.account_id = ? AND {hf}
                           AND tl_social.thread_id IS NULL AND tl_promo.thread_id IS NULL
-                        ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
-                        LIMIT ? OFFSET ?"#, base_select);
+                        ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
+                        LIMIT ? OFFSET ?", base_select);
                     (sql, vec![account_id.to_string()])
                 },
                 ThreadCategory::Social => {
-                    let sql = format!(r#"
-                        {} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_SOCIAL'
+                    let sql = format!(
+                        "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_SOCIAL'
                         INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
-                        WHERE t.account_id = ?
-                        ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
-                        LIMIT ? OFFSET ?"#, base_select);
+                        WHERE t.account_id = ? AND {hf}
+                        ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
+                        LIMIT ? OFFSET ?", base_select);
                     (sql, vec![account_id.to_string()])
                 },
                 ThreadCategory::Promotions => {
-                    let sql = format!(r#"
-                        {} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_PROMOTIONS'
+                    let sql = format!(
+                        "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_PROMOTIONS'
                         INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
-                        WHERE t.account_id = ?
-                        ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
-                        LIMIT ? OFFSET ?"#, base_select);
+                        WHERE t.account_id = ? AND {hf}
+                        ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
+                        LIMIT ? OFFSET ?", base_select);
                     (sql, vec![account_id.to_string()])
                 },
                 ThreadCategory::Important => {
-                    let sql = format!(r#"
-                        {} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'IMPORTANT'
-                        WHERE t.account_id = ?
-                        ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
-                        LIMIT ? OFFSET ?"#, base_select);
+                    let sql = format!(
+                        "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'IMPORTANT'
+                        WHERE t.account_id = ? AND {hf}
+                        ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
+                        LIMIT ? OFFSET ?", base_select);
                     (sql, vec![account_id.to_string()])
                 },
             }
         },
         (Some(lid), None) => {
-            let sql = format!(r#"
-                {} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = ?
-                WHERE t.account_id = ?
-                ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
-                LIMIT ? OFFSET ?"#, base_select);
+            let sql = format!(
+                "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = ?
+                WHERE t.account_id = ? AND {hf}
+                ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
+                LIMIT ? OFFSET ?", base_select);
             (sql, vec![lid.to_string(), account_id.to_string()])
         },
         (None, Some(cat)) => {
             match cat {
                 ThreadCategory::Primary => {
-                    let sql = format!(r#"
-                        {} INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
+                    let sql = format!(
+                        "{} INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
                         LEFT JOIN thread_labels tl_social ON t.id = tl_social.thread_id AND tl_social.label_id = 'CATEGORY_SOCIAL'
                         LEFT JOIN thread_labels tl_promo ON t.id = tl_promo.thread_id AND tl_promo.label_id = 'CATEGORY_PROMOTIONS'
-                        WHERE t.account_id = ?
+                        WHERE t.account_id = ? AND {hf}
                           AND tl_social.thread_id IS NULL AND tl_promo.thread_id IS NULL
-                        ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
-                        LIMIT ? OFFSET ?"#, base_select);
+                        ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
+                        LIMIT ? OFFSET ?", base_select);
                     (sql, vec![account_id.to_string()])
                 },
                 ThreadCategory::Social => {
-                    let sql = format!(r#"
-                        {} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_SOCIAL'
+                    let sql = format!(
+                        "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_SOCIAL'
                         INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
-                        WHERE t.account_id = ?
-                        ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
-                        LIMIT ? OFFSET ?"#, base_select);
+                        WHERE t.account_id = ? AND {hf}
+                        ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
+                        LIMIT ? OFFSET ?", base_select);
                     (sql, vec![account_id.to_string()])
                 },
                 ThreadCategory::Promotions => {
-                    let sql = format!(r#"
-                        {} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_PROMOTIONS'
+                    let sql = format!(
+                        "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_PROMOTIONS'
                         INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
-                        WHERE t.account_id = ?
-                        ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
-                        LIMIT ? OFFSET ?"#, base_select);
+                        WHERE t.account_id = ? AND {hf}
+                        ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
+                        LIMIT ? OFFSET ?", base_select);
                     (sql, vec![account_id.to_string()])
                 },
                 ThreadCategory::Important => {
-                    let sql = format!(r#"
-                        {} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'IMPORTANT'
-                        WHERE t.account_id = ?
-                        ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
-                        LIMIT ? OFFSET ?"#, base_select);
+                    let sql = format!(
+                        "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'IMPORTANT'
+                        WHERE t.account_id = ? AND {hf}
+                        ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
+                        LIMIT ? OFFSET ?", base_select);
                     (sql, vec![account_id.to_string()])
                 },
             }
         },
         (None, None) => {
-            let sql = format!(r#"
-                {} WHERE t.account_id = ?
-                ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC, t.rowid DESC
-                LIMIT ? OFFSET ?"#, base_select);
+            let sql = format!(
+                "{} WHERE t.account_id = ? AND {hf}
+                ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
+                LIMIT ? OFFSET ?", base_select);
             (sql, vec![account_id.to_string()])
         },
     };
@@ -206,6 +209,143 @@ pub(crate) async fn get_threads_inner(
         .collect())
 }
 
+#[derive(serde::Serialize)]
+pub struct ThreadCountResult {
+    pub count: i64,
+    pub has_more_remote: bool,
+}
+
+pub(crate) async fn get_thread_count_inner(
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
+    label_id: Option<&str>,
+    category: Option<ThreadCategory>,
+    token_store: &crate::page_token_store::PageTokenStore,
+) -> Result<ThreadCountResult, String> {
+    let base_select = "SELECT COUNT(DISTINCT t.id) FROM threads t";
+    let hydrated_filter = "t.metadata_synced = 1";
+
+    let hf = hydrated_filter;
+    let (sql, binds): (String, Vec<String>) = match (label_id, category) {
+        (Some(_lid), Some(cat)) => {
+            match cat {
+                ThreadCategory::Primary => {
+                    let sql = format!(
+                        "{} INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
+                        LEFT JOIN thread_labels tl_social ON t.id = tl_social.thread_id AND tl_social.label_id = 'CATEGORY_SOCIAL'
+                        LEFT JOIN thread_labels tl_promo ON t.id = tl_promo.thread_id AND tl_promo.label_id = 'CATEGORY_PROMOTIONS'
+                        WHERE t.account_id = ? AND {hf}
+                          AND tl_social.thread_id IS NULL AND tl_promo.thread_id IS NULL", base_select);
+                    (sql, vec![account_id.to_string()])
+                },
+                ThreadCategory::Social => {
+                    let sql = format!(
+                        "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_SOCIAL'
+                        INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
+                        WHERE t.account_id = ? AND {hf}", base_select);
+                    (sql, vec![account_id.to_string()])
+                },
+                ThreadCategory::Promotions => {
+                    let sql = format!(
+                        "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_PROMOTIONS'
+                        INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
+                        WHERE t.account_id = ? AND {hf}", base_select);
+                    (sql, vec![account_id.to_string()])
+                },
+                ThreadCategory::Important => {
+                    let sql = format!(
+                        "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'IMPORTANT'
+                        WHERE t.account_id = ? AND {hf}", base_select);
+                    (sql, vec![account_id.to_string()])
+                },
+            }
+        },
+        (Some(lid), None) => {
+            let sql = format!(
+                "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = ?
+                WHERE t.account_id = ? AND {hf}", base_select);
+            (sql, vec![lid.to_string(), account_id.to_string()])
+        },
+        (None, Some(cat)) => {
+            match cat {
+                ThreadCategory::Primary => {
+                    let sql = format!(
+                        "{} INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
+                        LEFT JOIN thread_labels tl_social ON t.id = tl_social.thread_id AND tl_social.label_id = 'CATEGORY_SOCIAL'
+                        LEFT JOIN thread_labels tl_promo ON t.id = tl_promo.thread_id AND tl_promo.label_id = 'CATEGORY_PROMOTIONS'
+                        WHERE t.account_id = ? AND {hf}
+                          AND tl_social.thread_id IS NULL AND tl_promo.thread_id IS NULL", base_select);
+                    (sql, vec![account_id.to_string()])
+                },
+                ThreadCategory::Social => {
+                    let sql = format!(
+                        "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_SOCIAL'
+                        INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
+                        WHERE t.account_id = ? AND {hf}", base_select);
+                    (sql, vec![account_id.to_string()])
+                },
+                ThreadCategory::Promotions => {
+                    let sql = format!(
+                        "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_PROMOTIONS'
+                        INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
+                        WHERE t.account_id = ? AND {hf}", base_select);
+                    (sql, vec![account_id.to_string()])
+                },
+                ThreadCategory::Important => {
+                    let sql = format!(
+                        "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'IMPORTANT'
+                        WHERE t.account_id = ? AND {hf}", base_select);
+                    (sql, vec![account_id.to_string()])
+                },
+            }
+        },
+        (None, None) => {
+            let sql = format!(
+                "{} WHERE t.account_id = ? AND {hf}", base_select);
+            (sql, vec![account_id.to_string()])
+        },
+    };
+
+    let mut query = sqlx::query_scalar::<_, i64>(&sql);
+    for bind in &binds {
+        query = query.bind(bind);
+    }
+
+    let count = query.fetch_one(pool).await.map_err(|e| e.to_string())?;
+
+    let token_key = match category {
+        Some(cat) => {
+            let cat_name = match cat {
+                ThreadCategory::Primary => "primary",
+                ThreadCategory::Social => "social",
+                ThreadCategory::Promotions => "promotions",
+                ThreadCategory::Important => "important",
+            };
+            format!("{}:category:{}", account_id, cat_name)
+        },
+        None => match label_id {
+            Some(lid) => format!("{}:{}", account_id, lid),
+            None => format!("{}:INBOX", account_id),
+        },
+    };
+    let has_more_remote = token_store.get(&token_key).is_some();
+
+    Ok(ThreadCountResult { count, has_more_remote })
+}
+
+#[tauri::command]
+pub async fn get_thread_count(
+    app_handle: tauri::AppHandle,
+    label_id: Option<String>,
+    category: Option<String>,
+) -> Result<ThreadCountResult, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+    let cat = category.and_then(|c| ThreadCategory::from_str(&c));
+    let token_store = app_handle.state::<crate::page_token_store::PageTokenStore>();
+    get_thread_count_inner(pool.inner(), &account.id, label_id.as_deref(), cat, token_store.inner()).await
+}
+
 #[tauri::command]
 pub async fn get_threads(
     app_handle: tauri::AppHandle,
@@ -222,93 +362,120 @@ pub async fn get_threads(
     get_threads_inner(pool.inner(), &account.id, label_id.as_deref(), cat, off, lim).await
 }
 
+const ON_DEMAND_BATCH_SIZE: i32 = 100;
+
 #[tauri::command]
 pub async fn fetch_label_threads(
     app_handle: tauri::AppHandle,
     label_id: String,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
-    println!("[OnDemand] Fetching threads for label: {}", label_id);
-    crate::gmail_api::fetch_and_store_threads(
+    let token_store = app_handle.state::<crate::page_token_store::PageTokenStore>();
+    let store_key = format!("{}:{}", account.id, label_id);
+    let current_token = token_store.get(&store_key);
+
+    println!("[OnDemand] Fetching threads for label: {} (has_token: {})", label_id, current_token.is_some());
+    let result = crate::gmail_api::fetch_and_store_threads(
         pool.inner(),
         &account.id,
         &account.access_token,
         Some(&[label_id.as_str()]),
-        50,
+        ON_DEMAND_BATCH_SIZE,
+        current_token.as_deref(),
+        None,
     )
     .await?;
 
-    #[derive(sqlx::FromRow)]
-    struct PrefetchVal { value: String }
-    let prefetch = sqlx::query_as::<_, PrefetchVal>("SELECT value FROM settings WHERE key = 'prefetch_bodies'")
-        .fetch_optional(pool.inner())
-        .await
-        .unwrap_or(None)
-        .map(|r| r.value == "true")
-        .unwrap_or(false);
-
-    let unhydrated = crate::gmail_api::get_unhydrated_thread_ids(pool.inner(), &account.id).await;
-    if !unhydrated.is_empty() {
-        let limit = if prefetch { unhydrated.len() } else { 50 };
-        let batch: Vec<String> = unhydrated.into_iter().take(limit).collect();
-        crate::gmail_api::batch_hydrate_threads(
-            pool.inner(),
-            &account.id,
-            &account.access_token,
-            batch,
-        )
-        .await;
+    let has_more = result.next_page_token.is_some();
+    match result.next_page_token {
+        Some(token) => token_store.set(&store_key, token),
+        None => token_store.remove(&store_key),
     }
-    Ok(())
+
+    if !result.thread_ids.is_empty() {
+        let to_hydrate = filter_no_metadata(pool.inner(), &result.thread_ids).await;
+        if !to_hydrate.is_empty() {
+            crate::gmail_api::batch_metadata_hydrate(
+                pool.inner(),
+                &account.id,
+                &account.access_token,
+                to_hydrate,
+            )
+            .await;
+        }
+    }
+    Ok(has_more)
+}
+
+async fn filter_no_metadata(pool: &sqlx::SqlitePool, thread_ids: &[String]) -> Vec<String> {
+    if thread_ids.is_empty() {
+        return vec![];
+    }
+    let placeholders: Vec<&str> = thread_ids.iter().map(|_| "?").collect();
+    let sql = format!(
+        "SELECT id FROM threads WHERE id IN ({}) AND (metadata_synced IS NULL OR metadata_synced = 0)",
+        placeholders.join(",")
+    );
+    #[derive(sqlx::FromRow)]
+    struct IdRow { id: String }
+    let mut query = sqlx::query_as::<_, IdRow>(&sql);
+    for tid in thread_ids {
+        query = query.bind(tid);
+    }
+    query.fetch_all(pool).await.unwrap_or_default().into_iter().map(|r| r.id).collect()
 }
 
 #[tauri::command]
 pub async fn fetch_category_threads(
     app_handle: tauri::AppHandle,
     category: String,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
+    let token_store = app_handle.state::<crate::page_token_store::PageTokenStore>();
+    let store_key = format!("{}:category:{}", account.id, category.to_lowercase());
+    let current_token = token_store.get(&store_key);
 
-    let label_id = match category.to_lowercase().as_str() {
-        "primary" | "social" | "promotions" => "INBOX".to_string(),
-        "important" => "IMPORTANT".to_string(),
+    let (label_id, query) = match category.to_lowercase().as_str() {
+        "primary" => ("INBOX".to_string(), Some("category:primary".to_string())),
+        "social" => ("INBOX".to_string(), Some("category:social".to_string())),
+        "promotions" => ("INBOX".to_string(), Some("category:promotions".to_string())),
+        "important" => ("IMPORTANT".to_string(), None),
         _ => return Err(format!("Unknown category: {}", category)),
     };
 
-    println!("[OnDemand] Fetching threads for category {} via label: {}", category, label_id);
-    crate::gmail_api::fetch_and_store_threads(
+    println!("[OnDemand] Fetching threads for category {} (has_token: {}, query: {:?})", category, current_token.is_some(), query);
+    let result = crate::gmail_api::fetch_and_store_threads(
         pool.inner(),
         &account.id,
         &account.access_token,
         Some(&[label_id.as_str()]),
-        100,
+        ON_DEMAND_BATCH_SIZE,
+        current_token.as_deref(),
+        query.as_deref(),
     )
     .await?;
 
-    #[derive(sqlx::FromRow)]
-    struct PrefetchVal { value: String }
-    let prefetch = sqlx::query_as::<_, PrefetchVal>("SELECT value FROM settings WHERE key = 'prefetch_bodies'")
-        .fetch_optional(pool.inner())
-        .await
-        .unwrap_or(None)
-        .map(|r| r.value == "true")
-        .unwrap_or(false);
-
-    let unhydrated = crate::gmail_api::get_unhydrated_thread_ids(pool.inner(), &account.id).await;
-    if !unhydrated.is_empty() {
-        let limit = if prefetch { unhydrated.len() } else { 100 };
-        let batch: Vec<String> = unhydrated.into_iter().take(limit).collect();
-        crate::gmail_api::batch_hydrate_threads(
-            pool.inner(),
-            &account.id,
-            &account.access_token,
-            batch,
-        )
-        .await;
+    let has_more = result.next_page_token.is_some();
+    match result.next_page_token {
+        Some(token) => token_store.set(&store_key, token),
+        None => token_store.remove(&store_key),
     }
-    Ok(())
+
+    if !result.thread_ids.is_empty() {
+        let to_hydrate = filter_no_metadata(pool.inner(), &result.thread_ids).await;
+        if !to_hydrate.is_empty() {
+            crate::gmail_api::batch_metadata_hydrate(
+                pool.inner(),
+                &account.id,
+                &account.access_token,
+                to_hydrate,
+            )
+            .await;
+        }
+    }
+    Ok(has_more)
 }
 
 pub(crate) async fn fetch_threads_by_ids(
@@ -322,15 +489,15 @@ pub(crate) async fn fetch_threads_by_ids(
     let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
     let sql = format!(
         "SELECT t.id, t.snippet, t.history_id, t.unread,
-                (SELECT m2.sender FROM messages m2 WHERE m2.thread_id = t.id ORDER BY m2.internal_date DESC LIMIT 1) as sender,
-                (SELECT m3.subject FROM messages m3 WHERE m3.thread_id = t.id ORDER BY m3.internal_date DESC LIMIT 1) as subject,
-                (SELECT MAX(m4.internal_date) FROM messages m4 WHERE m4.thread_id = t.id) as msg_date,
+                t.sender as sender,
+                t.subject as subject,
+                t.latest_date as msg_date,
                 EXISTS (SELECT 1 FROM thread_labels tl WHERE tl.thread_id = t.id AND tl.label_id = 'STARRED') as starred,
                 EXISTS (SELECT 1 FROM messages m6 WHERE m6.thread_id = t.id AND m6.has_attachments = 1) as has_attachments,
                 EXISTS (SELECT 1 FROM thread_labels tl2 WHERE tl2.thread_id = t.id AND tl2.label_id = 'IMPORTANT') as important
          FROM threads t
          WHERE t.id IN ({}) AND t.account_id = ?
-         ORDER BY COALESCE((SELECT MAX(m5.internal_date) FROM messages m5 WHERE m5.thread_id = t.id), 0) DESC",
+         ORDER BY COALESCE(t.latest_date, 0) DESC",
         placeholders.join(",")
     );
 
@@ -677,11 +844,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_threads_inner_no_subject_fallback() {
+    async fn test_get_threads_inner_filters_unhydrated() {
         let pool = setup_test_db().await;
+        // Thread with no messages (unhydrated stub) should not appear
         insert_thread(&pool, "t1", "acc1").await;
         let threads = get_threads_inner(&pool, "acc1", None, None, 0, 50).await.unwrap();
-        assert_eq!(threads[0].subject, "No Subject");
+        assert!(threads.is_empty(), "unhydrated threads should be filtered out");
+
+        // Once a message is added (hydrated), it should appear
+        insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "", "", 1000).await;
+        let threads = get_threads_inner(&pool, "acc1", None, None, 0, 50).await.unwrap();
+        assert_eq!(threads.len(), 1);
     }
 
     #[tokio::test]
@@ -907,11 +1080,11 @@ mod tests {
         let pool = setup_test_db().await;
         insert_thread(&pool, "t1", "acc1").await;
         insert_thread(&pool, "t2", "acc1").await;
-        // t1 has a message WITH attachments
         sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments) VALUES (?, ?, ?, ?, ?, ?, '', ?, '', '', 1)")
             .bind("m1").bind("t1").bind("acc1").bind("sender@test.com").bind("").bind("Subject").bind(1000i64)
             .execute(&pool).await.unwrap();
-        // t2 has a message WITHOUT attachments
+        sqlx::query("UPDATE threads SET sender = 'sender@test.com', subject = 'Subject', latest_date = 1000, metadata_synced = 1 WHERE id = 't1'")
+            .execute(&pool).await.unwrap();
         insert_message(&pool, "m2", "t2", "acc1", "sender@test.com", "", "Subject2", 2000).await;
 
         let threads = get_threads_inner(&pool, "acc1", None, None, 0, 50).await.unwrap();
@@ -927,11 +1100,11 @@ mod tests {
         let pool = setup_test_db().await;
         insert_thread(&pool, "t1", "acc1").await;
         insert_thread(&pool, "t2", "acc1").await;
-        // t1 has a message WITH attachments
         sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments) VALUES (?, ?, ?, ?, ?, ?, '', ?, '', '', 1)")
             .bind("m1").bind("t1").bind("acc1").bind("sender@test.com").bind("").bind("Subject").bind(1000i64)
             .execute(&pool).await.unwrap();
-        // t2 has a message WITHOUT attachments
+        sqlx::query("UPDATE threads SET sender = 'sender@test.com', subject = 'Subject', latest_date = 1000, metadata_synced = 1 WHERE id = 't1'")
+            .execute(&pool).await.unwrap();
         insert_message(&pool, "m2", "t2", "acc1", "sender@test.com", "", "Subject2", 2000).await;
 
         let ids = vec!["t1".to_string(), "t2".to_string()];
@@ -947,9 +1120,7 @@ mod tests {
     async fn test_get_threads_inner_has_attachments_multiple_messages() {
         let pool = setup_test_db().await;
         insert_thread(&pool, "t1", "acc1").await;
-        // First message without attachments
         insert_message(&pool, "m1", "t1", "acc1", "sender@test.com", "", "Subject", 1000).await;
-        // Second message WITH attachments
         sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments) VALUES (?, ?, ?, ?, ?, ?, '', ?, '', '', 1)")
             .bind("m2").bind("t1").bind("acc1").bind("sender@test.com").bind("").bind("Subject").bind(2000i64)
             .execute(&pool).await.unwrap();
@@ -1021,5 +1192,76 @@ mod tests {
         let normal_thread = threads.iter().find(|t| t.id == "t2").unwrap();
         assert!(important_thread.important);
         assert!(!normal_thread.important);
+    }
+
+    #[tokio::test]
+    async fn test_get_thread_count_inner_empty() {
+        let pool = setup_test_db().await;
+        let store = crate::page_token_store::PageTokenStore::new();
+        let result = get_thread_count_inner(&pool, "acc1", None, None, &store).await.unwrap();
+        assert_eq!(result.count, 0);
+        assert!(!result.has_more_remote);
+    }
+
+    #[tokio::test]
+    async fn test_get_thread_count_inner_with_threads() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_thread(&pool, "t2", "acc1").await;
+        insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "", "Sub1", 1000).await;
+        insert_message(&pool, "m2", "t2", "acc1", "s@t.com", "", "Sub2", 2000).await;
+
+        let store = crate::page_token_store::PageTokenStore::new();
+        let result = get_thread_count_inner(&pool, "acc1", None, None, &store).await.unwrap();
+        assert_eq!(result.count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_thread_count_inner_category_filtering() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_thread(&pool, "t2", "acc1").await;
+        insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "", "Sub1", 1000).await;
+        insert_message(&pool, "m2", "t2", "acc1", "s@t.com", "", "Sub2", 2000).await;
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('t1', 'INBOX')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('t2', 'INBOX')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('t2', 'CATEGORY_SOCIAL')").execute(&pool).await.unwrap();
+
+        let store = crate::page_token_store::PageTokenStore::new();
+        let primary = get_thread_count_inner(&pool, "acc1", Some("INBOX"), Some(ThreadCategory::Primary), &store).await.unwrap();
+        assert_eq!(primary.count, 1);
+
+        let social = get_thread_count_inner(&pool, "acc1", Some("INBOX"), Some(ThreadCategory::Social), &store).await.unwrap();
+        assert_eq!(social.count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_get_thread_count_inner_has_more_remote() {
+        let pool = setup_test_db().await;
+        let store = crate::page_token_store::PageTokenStore::new();
+        store.set("acc1:INBOX", "some-token".to_string());
+
+        let result = get_thread_count_inner(&pool, "acc1", Some("INBOX"), None, &store).await.unwrap();
+        assert!(result.has_more_remote);
+    }
+
+    #[tokio::test]
+    async fn test_filter_no_metadata() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        insert_thread(&pool, "t2", "acc1").await;
+        insert_message(&pool, "m1", "t1", "acc1", "s@t.com", "", "Sub", 1000).await;
+
+        let ids = vec!["t1".to_string(), "t2".to_string()];
+        let no_meta = filter_no_metadata(&pool, &ids).await;
+        assert_eq!(no_meta, vec!["t2".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_get_threads_inner_excludes_no_metadata() {
+        let pool = setup_test_db().await;
+        insert_thread(&pool, "t1", "acc1").await;
+        let threads = get_threads_inner(&pool, "acc1", None, None, 0, 50).await.unwrap();
+        assert!(threads.is_empty());
     }
 }

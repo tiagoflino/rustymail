@@ -37,7 +37,7 @@ pub async fn sync_gmail_data(
         match result {
             Ok(Some(delta)) => {
                 if !delta.threads_to_hydrate.is_empty() {
-                    crate::gmail_api::batch_hydrate_threads(
+                    crate::gmail_api::batch_metadata_hydrate(
                         pool.inner(),
                         &account.id,
                         &account.access_token,
@@ -55,16 +55,16 @@ pub async fn sync_gmail_data(
             }
             Ok(None) => {
                 println!("[Sync] History expired (404), falling back to full sync");
-                full_sync(pool.inner(), &account, &label_id).await?;
+                full_sync(pool.inner(), &account, &label_id, &app_handle).await?;
             }
             Err(e) => {
                 println!("[Sync] Incremental sync error: {}, falling back to full sync", e);
-                full_sync(pool.inner(), &account, &label_id).await?;
+                full_sync(pool.inner(), &account, &label_id, &app_handle).await?;
             }
         }
     } else {
         println!("[Sync] No historyId stored, running full sync");
-        full_sync(pool.inner(), &account, &label_id).await?;
+        full_sync(pool.inner(), &account, &label_id, &app_handle).await?;
     }
 
     spawn_background_cleanup(pool.inner(), &account, &app_handle);
@@ -76,40 +76,38 @@ async fn full_sync(
     pool: &sqlx::SqlitePool,
     account: &super::accounts::ActiveAccountFull,
     label_id: &Option<String>,
+    app_handle: &tauri::AppHandle,
 ) -> Result<(), String> {
+    let token_store = app_handle.state::<crate::page_token_store::PageTokenStore>();
+
     let target_labels = if let Some(ref lid) = label_id {
         vec![lid.as_str()]
     } else {
         vec!["INBOX"]
     };
 
-    crate::gmail_api::fetch_and_store_threads(
+    let sync_key = format!("{}:{}", account.id, target_labels.first().unwrap_or(&"INBOX"));
+    token_store.remove(&sync_key);
+
+    let fetch_result = crate::gmail_api::fetch_and_store_threads(
         pool,
         &account.id,
         &account.access_token,
         Some(&target_labels),
         100,
+        None,
+        None,
     )
     .await?;
 
-    #[derive(sqlx::FromRow)]
-    struct PrefetchSetting {
-        value: String,
+    if let Some(token) = fetch_result.next_page_token {
+        token_store.set(&sync_key, token);
     }
-    let prefetch = sqlx::query_as::<_, PrefetchSetting>(
-        "SELECT value FROM settings WHERE key = 'prefetch_bodies'",
-    )
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None)
-    .map(|r| r.value == "true")
-    .unwrap_or(false);
 
-    // Re-hydrate threads with new activity (history_id changed on Gmail)
     let stale = crate::gmail_api::get_stale_thread_ids(pool, &account.id).await;
     if !stale.is_empty() {
         println!("[Sync] Re-hydrating {} stale threads", stale.len());
-        crate::gmail_api::batch_hydrate_threads(
+        crate::gmail_api::batch_metadata_hydrate(
             pool,
             &account.id,
             &account.access_token,
@@ -118,12 +116,10 @@ async fn full_sync(
         .await;
     }
 
-    // Hydrate threads that have never been fetched
-    let unhydrated = crate::gmail_api::get_unhydrated_thread_ids(pool, &account.id).await;
-    if !unhydrated.is_empty() {
-        let limit = if prefetch { unhydrated.len() } else { 100 };
-        let batch: Vec<String> = unhydrated.into_iter().take(limit).collect();
-        crate::gmail_api::batch_hydrate_threads(
+    let no_metadata = crate::gmail_api::get_no_metadata_thread_ids(pool, &account.id).await;
+    if !no_metadata.is_empty() {
+        let batch: Vec<String> = no_metadata.into_iter().take(100).collect();
+        crate::gmail_api::batch_metadata_hydrate(
             pool,
             &account.id,
             &account.access_token,
@@ -132,20 +128,9 @@ async fn full_sync(
         .await;
     }
 
-    // After full sync, store the latest historyId from the most recent thread
-    #[derive(sqlx::FromRow)]
-    struct HistoryRow {
-        history_id: String,
-    }
-    if let Ok(Some(row)) = sqlx::query_as::<_, HistoryRow>(
-        "SELECT history_id FROM threads WHERE account_id = ? AND history_id IS NOT NULL AND history_id != '' ORDER BY CAST(history_id AS INTEGER) DESC LIMIT 1",
-    )
-    .bind(&account.id)
-    .fetch_optional(pool)
-    .await
-    {
-        crate::gmail_api::set_last_history_id(pool, &account.id, &row.history_id).await;
-        println!("[Sync] Stored historyId={} after full sync", row.history_id);
+    if let Ok(history_id) = crate::gmail_api::get_profile_history_id(&account.access_token).await {
+        crate::gmail_api::set_last_history_id(pool, &account.id, &history_id).await;
+        println!("[Sync] Stored historyId={} from profile after full sync", history_id);
     }
 
     Ok(())
@@ -161,14 +146,14 @@ fn spawn_background_cleanup(
     let bg_token = account.access_token.clone();
     let bg_app = app_handle.clone();
     tokio::spawn(async move {
-        let all_unhydrated =
-            crate::gmail_api::get_unhydrated_thread_ids(&bg_pool, &bg_account_id).await;
-        if !all_unhydrated.is_empty() {
-            crate::gmail_api::batch_hydrate_threads(
+        let no_metadata =
+            crate::gmail_api::get_no_metadata_thread_ids(&bg_pool, &bg_account_id).await;
+        if !no_metadata.is_empty() {
+            crate::gmail_api::batch_metadata_hydrate(
                 &bg_pool,
                 &bg_account_id,
                 &bg_token,
-                all_unhydrated,
+                no_metadata,
             )
             .await;
         }

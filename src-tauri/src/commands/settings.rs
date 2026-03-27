@@ -112,7 +112,7 @@ mod tests {
     async fn test_get_settings_inner_returns_defaults() {
         let pool = setup_test_db().await;
         let settings = get_settings_inner(&pool).await.unwrap();
-        assert!(settings.len() >= 13, "Expected at least 13 settings, got {}", settings.len());
+        assert!(settings.len() >= 14, "Expected at least 14 settings, got {}", settings.len());
 
         let theme = settings.iter().find(|s| s.key == "theme");
         assert!(theme.is_some());

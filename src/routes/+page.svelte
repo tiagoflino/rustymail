@@ -43,6 +43,8 @@
     name: string;
     type: string;
     unread_count: number;
+    threads_total: number;
+    threads_unread: number;
   }
   interface AccountInfo {
     id: string;
@@ -115,16 +117,17 @@
 
   let appState = $state<"loading" | "onboarding" | "authenticated">("loading");
 
-  let threadOffset = $state(0);
-  const THREAD_PAGE_SIZE = 50;
-  let hasMore = $state(true);
-  let isLoadingMore = $state(false);
+  let currentPage = $state(0);
+  let threadsPerPage = $state(100);
+  let totalCount = $state(0);
+  let hasMoreRemote = $state(true);
+  let gmailTotal = $state<number | null>(null);
+  let isBackgroundFilling = $state(false);
   let bgSyncDone = $state(false);
   let globalSyncInterval: ReturnType<typeof setInterval> | null = null;
   let currentBgInterval: ReturnType<typeof setInterval> | null = null;
   const labelLastSyncMap: Record<string, number> = {};
   const categoryLastSyncMap: Record<string, number> = {};
-  const CATEGORY_MIN_THREADS = 30;
   const CATEGORY_SYNC_INTERVAL = 300000;
   let syncLock = false;
 
@@ -259,11 +262,10 @@
 
       if (!get(searchQuery)) {
         if (isManual) {
-          threadOffset = 0;
-          hasMore = true;
+          currentPage = 0;
           await loadThreads(true);
         } else {
-          await loadThreads(true, true);
+          await loadThreads(false, true);
         }
       }
 
@@ -288,6 +290,7 @@
       }
     } catch (e) {
       lastSyncError.set(String(e));
+      addToast("Sync failed — showing cached data", "error", 4000);
     } finally {
       isSyncing.set(false);
       syncLock = false;
@@ -346,33 +349,59 @@
 
   let isLabelFetching = $state(false);
 
+  async function updateThreadCount() {
+    const invocationLabelId = get(selectedLabelId) || null;
+    const category = $selectedLabelId === "INBOX" ? get(selectedCategory) : null;
+
+    if (category) {
+      const inboxLabel = $labels.find((l) => l.id === "INBOX");
+      gmailTotal = inboxLabel?.threads_total ?? null;
+      if (gmailTotal === 0) gmailTotal = null;
+
+      try {
+        const result: { count: number; has_more_remote: boolean } = await invoke("get_thread_count", {
+          labelId: invocationLabelId,
+          category: category,
+        });
+        totalCount = result.count;
+        hasMoreRemote = result.has_more_remote || (gmailTotal !== null && result.count < gmailTotal);
+      } catch (_) {}
+    } else {
+      const label = $labels.find((l) => l.id === invocationLabelId);
+      gmailTotal = label?.threads_total ?? null;
+      if (gmailTotal === 0) gmailTotal = null;
+
+      try {
+        const result: { count: number; has_more_remote: boolean } = await invoke("get_thread_count", {
+          labelId: invocationLabelId,
+          category: null,
+        });
+        totalCount = result.count;
+        hasMoreRemote = result.has_more_remote || (gmailTotal !== null && result.count < gmailTotal);
+      } catch (_) {}
+    }
+  }
+
   async function loadThreads(reset = false, silent = false) {
     if (isLoadingThreads && !silent) return;
     if (!silent) isLoadingThreads = true;
 
     const invocationLabelId = get(selectedLabelId) || null;
 
-    if (
-      reset &&
-      get(threads).length > 0 &&
-      !isLabelFetching &&
-      !get(searchQuery) &&
-      !silent
-    ) {
-    } else if (reset && !silent) {
+    if (reset && !silent) {
       if (get(searchQuery) && !isLabelFetching) return;
-      threadOffset = 0;
-      hasMore = true;
+      currentPage = 0;
       threads.set([]);
     }
 
     try {
       const category = $selectedLabelId === "INBOX" ? get(selectedCategory) : null;
+      const offset = currentPage * threadsPerPage;
       const fetched = (await invoke("get_threads", {
         labelId: invocationLabelId,
         category: category,
-        offset: reset ? 0 : threadOffset,
-        limit: THREAD_PAGE_SIZE,
+        offset: offset,
+        limit: threadsPerPage,
       })) as LocalThread[];
 
       if ((get(selectedLabelId) || null) !== invocationLabelId) return;
@@ -380,7 +409,11 @@
       if (reset && fetched.length === 0 && invocationLabelId && !silent) {
         isLabelFetching = true;
         try {
-          await invoke("fetch_label_threads", { labelId: invocationLabelId });
+          if (category) {
+            await invoke("fetch_category_threads", { category });
+          } else {
+            await invoke("fetch_label_threads", { labelId: invocationLabelId });
+          }
 
           if ((get(selectedLabelId) || null) !== invocationLabelId) return;
 
@@ -390,17 +423,20 @@
             labelId: invocationLabelId,
             category: category,
             offset: 0,
-            limit: THREAD_PAGE_SIZE,
+            limit: threadsPerPage,
           })) as LocalThread[];
 
           if ((get(selectedLabelId) || null) !== invocationLabelId) return;
 
           threads.set(retried);
-          hasMore = retried.length >= THREAD_PAGE_SIZE;
-          threadOffset = retried.length;
         } catch (_) {
         } finally {
           isLabelFetching = false;
+        }
+        await updateThreadCount();
+        if (get(threads).length < threadsPerPage && hasMoreRemote) {
+          isBackgroundFilling = true;
+          backgroundFillPage();
         }
         return;
       }
@@ -431,73 +467,130 @@
           if (!hasNew) return updated;
           return [...newOnes, ...updated];
         });
-      } else if (reset) {
-        threads.set(fetched);
-        threadOffset = fetched.length;
       } else {
-        threads.update((t) => [...t, ...fetched]);
-        threadOffset += fetched.length;
+        threads.set(fetched);
       }
-      hasMore = fetched.length >= THREAD_PAGE_SIZE;
+
+      await updateThreadCount();
+
+      if (!silent && get(threads).length < threadsPerPage && hasMoreRemote) {
+        isBackgroundFilling = true;
+        backgroundFillPage();
+      }
     } catch (e) {
       console.error("Failed to load threads", e);
     } finally {
       if (!silent) isLoadingThreads = false;
     }
-    threadListRef?.observeSentinel();
   }
 
-  async function loadMoreThreads() {
-    if (isLoadingMore || !hasMore) return;
-    isLoadingMore = true;
+  let backgroundFillGeneration = 0;
+
+  async function backgroundFillPage() {
+    isBackgroundFilling = true;
+    const gen = ++backgroundFillGeneration;
 
     const invocationLabelId = get(selectedLabelId) || null;
     const category = $selectedLabelId === "INBOX" ? get(selectedCategory) : null;
+    const targetPage = currentPage;
 
     try {
-      const fetched = (await invoke("get_threads", {
-        labelId: invocationLabelId,
-        category: category,
-        offset: threadOffset,
-        limit: THREAD_PAGE_SIZE,
-      }).catch(() => [])) as LocalThread[];
+      let more = true;
+      while (more && get(threads).length < threadsPerPage) {
+        if (gen !== backgroundFillGeneration) break;
+        if ((get(selectedLabelId) || null) !== invocationLabelId) break;
+        if (currentPage !== targetPage) break;
 
-      if ((get(selectedLabelId) || null) !== invocationLabelId) return;
+        if (category) {
+          more = await invoke("fetch_category_threads", { category }) as boolean;
+        } else if (invocationLabelId) {
+          more = await invoke("fetch_label_threads", { labelId: invocationLabelId }) as boolean;
+        } else {
+          break;
+        }
 
-      if (fetched.length > 0) {
-        threads.update((t) => [...t, ...fetched]);
-        hasMore = fetched.length >= THREAD_PAGE_SIZE;
-        threadOffset += fetched.length;
-      } else if (invocationLabelId) {
-        try {
-          await invoke("fetch_label_threads", { labelId: invocationLabelId });
+        if (gen !== backgroundFillGeneration) break;
 
-          if ((get(selectedLabelId) || null) !== invocationLabelId) return;
+        const offset = targetPage * threadsPerPage;
+        const fetched = (await invoke("get_threads", {
+          labelId: invocationLabelId,
+          category: category,
+          offset: offset,
+          limit: threadsPerPage,
+        })) as LocalThread[];
 
-          const retried = (await invoke("get_threads", {
+        if (gen !== backgroundFillGeneration) break;
+
+        threads.set(fetched);
+        await updateThreadCount();
+      }
+
+      if (!more && category && get(threads).length < threadsPerPage && gen === backgroundFillGeneration) {
+        let inboxMore = true;
+        while (inboxMore && get(threads).length < threadsPerPage) {
+          if (gen !== backgroundFillGeneration) break;
+
+          inboxMore = await invoke("fetch_label_threads", { labelId: "INBOX" }) as boolean;
+
+          if (gen !== backgroundFillGeneration) break;
+
+          const offset = targetPage * threadsPerPage;
+          const fetched = (await invoke("get_threads", {
             labelId: invocationLabelId,
             category: category,
-            offset: threadOffset,
-            limit: THREAD_PAGE_SIZE,
-          }).catch(() => [])) as LocalThread[];
+            offset: offset,
+            limit: threadsPerPage,
+          })) as LocalThread[];
 
-          if ((get(selectedLabelId) || null) !== invocationLabelId) return;
-
-          if (retried.length > 0) {
-            threads.update((t) => [...t, ...retried]);
-            threadOffset += retried.length;
-          }
-          hasMore = retried.length >= THREAD_PAGE_SIZE;
-        } catch (_) {
-          hasMore = false;
+          threads.set(fetched);
+          await updateThreadCount();
         }
-      } else {
-        hasMore = false;
       }
-    } finally {
-      isLoadingMore = false;
-      threadListRef?.observeSentinel();
-    }
+      if (more && gen === backgroundFillGeneration) {
+        let prefetchCount = 0;
+        const prefetchTarget = threadsPerPage;
+        while (more && prefetchCount < prefetchTarget) {
+          if (gen !== backgroundFillGeneration) break;
+          if (category) {
+            more = await invoke("fetch_category_threads", { category }) as boolean;
+          } else if (invocationLabelId) {
+            more = await invoke("fetch_label_threads", { labelId: invocationLabelId }) as boolean;
+          } else {
+            break;
+          }
+          prefetchCount += 30;
+        }
+        await updateThreadCount();
+      }
+    } catch (_) {}
+
+    isBackgroundFilling = false;
+  }
+
+  async function goToFirstPage() {
+    if (currentPage === 0) return;
+    backgroundFillGeneration++;
+    isBackgroundFilling = false;
+    currentPage = 0;
+    threadListRef?.resetScroll();
+    await loadThreads();
+  }
+
+  async function goToNextPage() {
+    backgroundFillGeneration++;
+    isBackgroundFilling = false;
+    currentPage++;
+    threadListRef?.resetScroll();
+    await loadThreads();
+  }
+
+  async function goToPrevPage() {
+    if (currentPage <= 0) return;
+    backgroundFillGeneration++;
+    isBackgroundFilling = false;
+    currentPage--;
+    threadListRef?.resetScroll();
+    await loadThreads();
   }
 
   async function loadLabels() {
@@ -525,9 +618,10 @@
     selectedThreadId.set(null);
     currentMessages.set([]);
     threadListRef?.clearSearchInput();
+    threadListRef?.resetScroll();
     searchQuery.set("");
-    threadOffset = 0;
-    hasMore = true;
+    currentPage = 0;
+    hasMoreRemote = true;
 
     if (labelId === "INBOX") {
       selectedCategory.set("primary");
@@ -539,54 +633,43 @@
       threads.set([]);
     }
 
+    await loadThreads(true);
+
     const lastSync = labelLastSyncMap[labelId] || 0;
     if (isReselect || Date.now() - lastSync > 300000) {
       isSyncing.set(true);
-      try {
-        await invoke("fetch_label_threads", { labelId: labelId });
-        labelLastSyncMap[labelId] = Date.now();
-      } catch (e) {
-        console.error("On-demand sync failed", e);
-      } finally {
-        isSyncing.set(false);
-      }
+      invoke("fetch_label_threads", { labelId: labelId })
+        .then(() => { labelLastSyncMap[labelId] = Date.now(); })
+        .catch((e) => { addToast(`Sync failed: ${e}`, "error", 4000); })
+        .finally(async () => {
+          isSyncing.set(false);
+          await loadThreads(false, true);
+        });
     }
-
-    await loadThreads(true);
   }
 
   async function selectCategory(category: string) {
     if ($selectedCategory === category) return;
     selectedCategory.set(category);
-    threadOffset = 0;
-    hasMore = true;
+    threadListRef?.resetScroll();
+    currentPage = 0;
+    hasMoreRemote = true;
     threads.set([]);
 
-    const needsSync = !categoryLastSyncMap[category] || 
+    await loadThreads(true);
+
+    const needsSync = !categoryLastSyncMap[category] ||
                        Date.now() - categoryLastSyncMap[category] > CATEGORY_SYNC_INTERVAL;
 
     if (needsSync) {
       isSyncing.set(true);
-      try {
-        await invoke("fetch_category_threads", { category });
-        categoryLastSyncMap[category] = Date.now();
-      } catch (e) {
-        console.error("Failed to fetch category threads", e);
-      } finally {
-        isSyncing.set(false);
-      }
-    }
-
-    await loadThreads(true);
-
-    if ($threads.length < CATEGORY_MIN_THREADS && hasMore) {
-      await fillCategoryThreads();
-    }
-  }
-
-  async function fillCategoryThreads() {
-    while ($threads.length < CATEGORY_MIN_THREADS && hasMore && !isLoadingMore) {
-      await loadMoreThreads();
+      invoke("fetch_category_threads", { category })
+        .then(() => { categoryLastSyncMap[category] = Date.now(); })
+        .catch((e) => { addToast(`Sync failed: ${e}`, "error", 4000); })
+        .finally(async () => {
+          isSyncing.set(false);
+          await loadThreads(false, true);
+        });
     }
   }
 
@@ -598,7 +681,7 @@
     }
     searchQuery.set(query);
     isSearching.set(true);
-    hasMore = false;
+    hasMoreRemote = false;
     try {
       await invoke("save_recent_search", { query });
       const results: LocalThread[] = (await invoke("search_messages", {
@@ -999,6 +1082,8 @@
     density = savedDensity || "default";
     const savedPane = await invoke("get_setting", { key: "reading_pane" }).catch(() => "") as string;
     readingPane = savedPane || "right";
+    const savedTpp = await invoke("get_setting", { key: "threads_per_page" }).catch(() => "") as string;
+    threadsPerPage = parseInt(savedTpp) || 100;
 
     await refreshAccountState();
     if (appState === "authenticated") {
@@ -1007,7 +1092,6 @@
       await checkAndSetupSync();
     }
 
-    setTimeout(() => threadListRef?.initObserver(), 100);
     setTimeout(() => checkForUpdates(true), 5000);
 
     // Request notification permission
@@ -1106,8 +1190,12 @@
       {isLoadingThreads}
       {isLabelFetching}
       {isMacOS}
-      {hasMore}
-      {isLoadingMore}
+      {currentPage}
+      {threadsPerPage}
+      {totalCount}
+      {hasMoreRemote}
+      {gmailTotal}
+      {isBackgroundFilling}
       activeLabelName={getActiveLabelName()}
       {searchQuery}
       {isSearching}
@@ -1116,7 +1204,9 @@
       onselectthread={selectThread}
       ontogglestar={toggleStar}
       ontoggleimportant={toggleImportant}
-      onloadmore={loadMoreThreads}
+      onfirstpage={goToFirstPage}
+      onprevpage={goToPrevPage}
+      onnextpage={goToNextPage}
       onsearch={handleSearch}
       onclearsearch={clearSearch}
       onselectcategory={selectCategory}
@@ -1147,6 +1237,7 @@
     onThemeChange={(mode) => applyTheme(mode as ThemeMode, false)}
     onDensityChange={(d) => density = d}
     onReadingPaneChange={(p) => readingPane = p}
+    onThreadsPerPageChange={(n) => { threadsPerPage = n; currentPage = 0; loadThreads(true); }}
   />
 {/if}
 
