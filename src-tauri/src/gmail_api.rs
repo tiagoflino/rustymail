@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::sync::Arc;
 
+type HydrateResult = Vec<(String, Result<ThreadDetailsResponse, (u16, String)>)>;
+
 fn gmail_api_url(path: &str) -> String {
     #[cfg(test)]
     {
@@ -625,7 +627,7 @@ pub async fn batch_hydrate_threads(
     let total = thread_ids.len();
     let mut completed = 0usize;
 
-    let api_results: Vec<(String, Result<ThreadDetailsResponse, (u16, String)>)> =
+    let api_results: HydrateResult =
         stream::iter(thread_ids)
             .map(|tid| {
                 let client = Arc::clone(&client);
@@ -719,7 +721,7 @@ pub async fn batch_metadata_hydrate(
     let total = thread_ids.len();
     let mut completed = 0usize;
 
-    let api_results: Vec<(String, Result<ThreadDetailsResponse, (u16, String)>)> =
+    let api_results: HydrateResult =
         stream::iter(thread_ids)
             .map(|tid| {
                 let client = Arc::clone(&client);
