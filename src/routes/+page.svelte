@@ -32,6 +32,8 @@
   import ThreadList from "$lib/components/ThreadList.svelte";
   import MessageDetail from "$lib/components/MessageDetail.svelte";
   import LinkSafetyDialog from "$lib/components/LinkSafetyDialog.svelte";
+  import CommandPalette from "$lib/components/CommandPalette.svelte";
+  import { shortcutManager } from "$lib/shortcut-manager";
   import { addToast } from "$lib/stores/toast";
   import {
     formatTime,
@@ -66,6 +68,7 @@
   let isLoading = $state(false);
   let isLoadingThreads = $state(false);
   let showCompose = $state(false);
+  let showCommandPalette = $state(false);
   let viewMode = $state<"mail" | "calendar">("mail");
 
   let isMacOS = $state(false);
@@ -169,6 +172,30 @@
     };
     composeKey++;
     showCompose = true;
+  }
+
+  function handleCommandAction(id: string) {
+    switch (id) {
+      case 'compose': showCompose = true; break;
+      case 'sync': performSync(true); break;
+      case 'settings': showSettings = true; break;
+      case 'theme': 
+        cycleTheme();
+        break;
+      case 'sidebar': toggleSidebar(); break;
+      case 'view_mail': viewMode = 'mail'; break;
+      case 'view_calendar': viewMode = 'calendar'; break;
+      case 'nav_inbox': selectLabel('INBOX'); break;
+      case 'nav_sent': selectLabel('SENT'); break;
+      case 'nav_drafts': selectLabel('DRAFT'); break;
+      case 'nav_trash': selectLabel('TRASH'); break;
+      default:
+        if (id.startsWith('switch_account_')) {
+          const accId = id.replace('switch_account_', '');
+          switchAccount(accId);
+        }
+        break;
+    }
   }
 
   type ThemeMode = "system" | "light" | "dark";
@@ -901,32 +928,16 @@
   }
 
   function handleKeydown(event: KeyboardEvent) {
+    shortcutManager.handleKeydown(event);
+    if (event.defaultPrevented) return;
     if (
       event.target instanceof HTMLInputElement ||
       event.target instanceof HTMLTextAreaElement ||
       (event.target instanceof HTMLElement && event.target.isContentEditable)
     )
       return;
-    if (showSettings) {
-      if (event.key === "Escape") showSettings = false;
-      return;
-    }
-    if (event.key === "[") {
-      toggleSidebar();
-      return;
-    }
-    if (event.key === "/") {
-      event.preventDefault();
-      threadListRef?.focusSearch();
-      return;
-    }
-    if (event.key === "Escape") {
-      if ($selectedThreadId) {
-        selectedThreadId.set(null);
-        currentMessages.set([]);
-      }
-      return;
-    }
+    
+    // Commands e, #, Shift+I, r remain as contextual thread actions
     if (!$selectedThreadId) return;
     if (event.key === "e") executeAction("archive");
     else if (event.key === "#") executeAction("trash");
@@ -1100,6 +1111,21 @@
       if (!granted) requestPermission();
     }).catch(() => {});
 
+    shortcutManager.loadSettings();
+    shortcutManager.on('palette', () => showCommandPalette = true);
+    shortcutManager.on('compose', () => openCompose());
+    shortcutManager.on('sync', () => performSync(true));
+    shortcutManager.on('settings', () => showSettings = true);
+    shortcutManager.on('search', () => threadListRef?.focusSearch());
+    shortcutManager.on('sidebar', () => toggleSidebar());
+    shortcutManager.on('escape', () => {
+      if (showCommandPalette) showCommandPalette = false;
+      else if (showSettings) showSettings = false;
+      else if (selectedThreadId) {
+        selectedThreadId.set(null);
+        currentMessages.set([]);
+      }
+    });
 
     // Tray event listeners
     listen("tray-compose", async () => {
@@ -1287,6 +1313,13 @@
   analysis={pendingLinkAnalysis}
   onconfirm={confirmOpenLink}
   ondismiss={dismissLinkDialog}
+/>
+
+<CommandPalette 
+  bind:show={showCommandPalette}
+  accounts={allAccounts}
+  onAction={handleCommandAction}
+  onClose={() => showCommandPalette = false}
 />
 
 <Toasts />

@@ -98,13 +98,13 @@
   });
 
   const shortcuts = [
-    { key: "/", action: "Focus search bar" },
-    { key: "Esc", action: "Deselect / Close" },
-    { key: "[", action: "Toggle sidebar" },
-    { key: "E", action: "Archive conversation" },
-    { key: "#", action: "Move to Trash" },
-    { key: "Shift + I", action: "Mark as Unread" },
-    { key: "R", action: "Reply to last message" },
+    { key: "⌘ K", action: "Command Palette" },
+    { key: "C", action: "Compose New" },
+    { key: "⌘ R", action: "Sync Now" },
+    { key: "⌘ ,", action: "Settings" },
+    { key: "/", action: "Search" },
+    { key: "Esc", action: "Close / Deselect" },
+    { key: "[", action: "Toggle Sidebar" },
   ];
 
   const syncFreqStops = [5, 10, 15, 30, 60, 120, 180, 300, 600, 900, 1800];
