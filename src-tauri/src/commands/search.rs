@@ -92,91 +92,101 @@ pub(crate) async fn search_messages_local(
 
     let has_operators = parsed.from.is_some() || parsed.to.is_some() || parsed.subject.is_some() || parsed.has_attachment || parsed.is_unread.is_some();
 
-    if has_operators {
-        let mut conditions = vec!["m.account_id = ?".to_string()];
-        let mut binds: Vec<String> = vec![account_id.to_string()];
+    if !has_operators && parsed.free_text.is_empty() {
+        return Ok(vec![]);
+    }
 
-        if let Some(ref f) = parsed.from {
-            conditions.push("m.sender LIKE ?".to_string());
-            binds.push(format!("%{}%", f));
-        }
-        if let Some(ref t) = parsed.to {
-            conditions.push("m.recipients LIKE ?".to_string());
-            binds.push(format!("%{}%", t));
-        }
-        if let Some(ref s) = parsed.subject {
-            conditions.push("m.subject LIKE ?".to_string());
-            binds.push(format!("%{}%", s));
-        }
-        if parsed.has_attachment {
-            conditions.push("m.has_attachments = 1".to_string());
-        }
-        if let Some(unread) = parsed.is_unread {
-            conditions.push("m.is_read = ?".to_string());
-            binds.push(if unread { "0".to_string() } else { "1".to_string() });
-        }
+    let mut base_conditions = vec!["m.account_id = ?".to_string()];
+    let mut base_binds: Vec<String> = vec![account_id.to_string()];
 
-        let where_clause = conditions.join(" AND ");
-        let sql = format!(
-            "SELECT DISTINCT m.thread_id FROM messages m WHERE {} LIMIT 50",
-            where_clause
-        );
+    let mut needs_thread_join = false;
 
-        #[derive(sqlx::FromRow)]
-        struct TidRow { thread_id: Option<String> }
-
-        let mut q = sqlx::query_as::<_, TidRow>(&sql);
-        for b in &binds {
-            q = q.bind(b);
-        }
-        let rows: Vec<TidRow> = q.fetch_all(pool).await.unwrap_or_default();
-        for r in rows {
-            if let Some(tid) = r.thread_id {
-                if seen.insert(tid.clone()) {
-                    all_thread_ids.push(tid);
-                }
-            }
+    if let Some(ref f) = parsed.from {
+        base_conditions.push("m.sender LIKE ?".to_string());
+        base_binds.push(format!("%{}%", f));
+    }
+    if let Some(ref t) = parsed.to {
+        base_conditions.push("m.recipients LIKE ?".to_string());
+        base_binds.push(format!("%{}%", t));
+    }
+    if let Some(ref s) = parsed.subject {
+        base_conditions.push("m.subject LIKE ?".to_string());
+        base_binds.push(format!("%{}%", s));
+    }
+    if parsed.has_attachment {
+        base_conditions.push("m.has_attachments = 1".to_string());
+    }
+    if let Some(unread) = parsed.is_unread {
+        needs_thread_join = true;
+        if unread {
+            base_conditions.push("t.unread > 0".to_string());
+        } else {
+            base_conditions.push("t.unread = 0".to_string());
         }
     }
 
-    // FTS5 for free text remainder
-    if !parsed.free_text.is_empty() {
-        #[derive(sqlx::FromRow)]
-        struct FtsRow { thread_id: Option<String> }
-        let fts_query = format!("{}*", parsed.free_text.replace('"', ""));
-        let local: Vec<FtsRow> = sqlx::query_as(
-            "SELECT DISTINCT m.thread_id FROM messages m
-             INNER JOIN messages_fts ON messages_fts.rowid = m.rowid
-             WHERE messages_fts MATCH ? AND m.account_id = ?
-             LIMIT 50",
-        )
-        .bind(&fts_query)
-        .bind(account_id)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
+    let thread_join = if needs_thread_join {
+        "INNER JOIN threads t ON m.thread_id = t.id"
+    } else {
+        ""
+    };
 
-        for r in local {
+    #[derive(sqlx::FromRow)]
+    struct TidRow { thread_id: Option<String> }
+
+    if parsed.free_text.is_empty() {
+        let where_clause = base_conditions.join(" AND ");
+        let sql = format!(
+            "SELECT DISTINCT m.thread_id FROM messages m {} WHERE {} LIMIT 50",
+            thread_join, where_clause
+        );
+
+        let mut q = sqlx::query_as::<_, TidRow>(&sql);
+        for b in &base_binds { q = q.bind(b); }
+        let rows = q.fetch_all(pool).await.unwrap_or_default();
+        for r in rows {
             if let Some(tid) = r.thread_id {
-                if seen.insert(tid.clone()) {
-                    all_thread_ids.push(tid);
-                }
+                if seen.insert(tid.clone()) { all_thread_ids.push(tid); }
+            }
+        }
+    } else {
+        let mut fts_conditions = base_conditions.clone();
+        fts_conditions.push("messages_fts MATCH ?".to_string());
+        let fts_where = fts_conditions.join(" AND ");
+        
+        let fts_sql = format!(
+            "SELECT DISTINCT m.thread_id FROM messages m INNER JOIN messages_fts ON messages_fts.rowid = m.rowid {} WHERE {} LIMIT 50",
+            thread_join, fts_where
+        );
+        let mut q_fts = sqlx::query_as::<_, TidRow>(&fts_sql);
+        for b in &base_binds { q_fts = q_fts.bind(b); }
+        let fts_query_val = format!("{}*", parsed.free_text.replace('"', ""));
+        q_fts = q_fts.bind(&fts_query_val);
+        
+        let rows = q_fts.fetch_all(pool).await.unwrap_or_default();
+        for r in rows {
+            if let Some(tid) = r.thread_id {
+                if seen.insert(tid.clone()) { all_thread_ids.push(tid); }
             }
         }
 
-        // LIKE fallback for free text
-        #[derive(sqlx::FromRow)]
-        struct LikeRow { thread_id: Option<String> }
-        let pattern = format!("%{}%", parsed.free_text);
-        let like_results: Vec<LikeRow> = sqlx::query_as(
-            "SELECT DISTINCT thread_id FROM messages WHERE account_id = ? AND (sender LIKE ? OR subject LIKE ?) LIMIT 30"
-        ).bind(account_id).bind(&pattern).bind(&pattern)
-        .fetch_all(pool).await.unwrap_or_default();
-        for r in like_results {
+        let mut like_conditions = base_conditions.clone();
+        like_conditions.push("(m.sender LIKE ? OR m.subject LIKE ?)".to_string());
+        let like_where = like_conditions.join(" AND ");
+        
+        let like_sql = format!(
+            "SELECT DISTINCT m.thread_id FROM messages m {} WHERE {} LIMIT 30",
+            thread_join, like_where
+        );
+        let mut q_like = sqlx::query_as::<_, TidRow>(&like_sql);
+        for b in &base_binds { q_like = q_like.bind(b); }
+        let like_pattern = format!("%{}%", parsed.free_text);
+        q_like = q_like.bind(&like_pattern).bind(&like_pattern);
+        
+        let rows = q_like.fetch_all(pool).await.unwrap_or_default();
+        for r in rows {
             if let Some(tid) = r.thread_id {
-                if seen.insert(tid.clone()) {
-                    all_thread_ids.push(tid);
-                }
+                if seen.insert(tid.clone()) { all_thread_ids.push(tid); }
             }
         }
     }

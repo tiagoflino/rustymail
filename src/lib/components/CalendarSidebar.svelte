@@ -17,11 +17,13 @@
     start?: CalendarDateTime;
     end?: CalendarDateTime;
     htmlLink?: string;
+    hangoutLink?: string;
   }
 
   let { onClose }: { onClose: () => void } = $props();
   let events = $state<CalendarEvent[]>([]);
   let isLoading = $state(true);
+  let expandedId = $state<string | null>(null);
   let errorMsg = $state('');
 
   onMount(async () => {
@@ -62,7 +64,27 @@
     return Object.entries(groups);
   }
 
+  function extractMeetingLink(ev: CalendarEvent): string | null {
+    if (ev.hangoutLink) return ev.hangoutLink;
+    const textToSearch = `${ev.location || ''} ${ev.description || ''}`;
+    const zoomMatch = textToSearch.match(/https:\/\/[a-zA-Z0-9-]+\.zoom\.us\/j\/[a-zA-Z0-9_.-]+/i);
+    if (zoomMatch) return zoomMatch[0];
+    const teamsMatch = textToSearch.match(/https:\/\/teams\.microsoft\.com\/l\/meetup-join\/[a-zA-Z0-9_.-]+/i);
+    if (teamsMatch) return teamsMatch[0];
+    const meetMatch = textToSearch.match(/https:\/\/meet\.google\.com\/[a-z-]+/i);
+    if (meetMatch) return meetMatch[0];
+    return null;
+  }
+
+  function openUrl(url: string) {
+    invoke('open_external_url', { url });
+  }
+
   const iconClose = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+  const iconAdd = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+  const iconVideo = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>`;
+  const iconLocation = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>`;
+  const iconChevronDown = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`;
   const iconCalendar = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>`;
   const iconLink = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/></svg>`;
 </script>
@@ -73,7 +95,10 @@
       <span class="cal-icon">{@html iconCalendar}</span>
       <span class="cal-title">Upcoming</span>
     </div>
-    <button class="close-btn" onclick={onClose}>{@html iconClose}</button>
+    <div class="header-actions">
+      <button class="icon-btn" onclick={() => openUrl('https://calendar.google.com/calendar/r/eventedit?action=TEMPLATE')} title="New Event">{@html iconAdd}</button>
+      <button class="icon-btn" onclick={onClose}>{@html iconClose}</button>
+    </div>
   </header>
 
   <div class="cal-content">
@@ -98,14 +123,45 @@
           <div class="day-group">
             <h3 class="day-header">{dateLabel}</h3>
             {#each dayEvents as ev}
-              <div class="event-card">
-                <div class="event-time">{formatEventTime(ev.start)}</div>
+              {@const meetingLink = extractMeetingLink(ev)}
+              {@const isExpanded = expandedId === ev.id}
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div class="event-card {isExpanded ? 'expanded' : ''}" onclick={() => expandedId = isExpanded ? null : ev.id}>
+                <div class="event-time-row">
+                  <div class="event-time">{formatEventTime(ev.start)}</div>
+                  <div class="card-chevron {isExpanded ? 'rotated' : ''}">{@html iconChevronDown}</div>
+                </div>
                 <div class="event-details">
                   <div class="event-summary">{ev.summary || 'Busy'}</div>
-                  {#if ev.htmlLink}
-                    <a href={ev.htmlLink} target="_blank" rel="noopener noreferrer" class="event-link" title="Open in Google Calendar">{@html iconLink}</a>
-                  {/if}
                 </div>
+                {#if isExpanded}
+                  <div class="event-expanded-content" onclick={(e) => e.stopPropagation()}>
+                    {#if ev.location}
+                      <div class="event-info-row">
+                        <span class="info-icon">{@html iconLocation}</span>
+                        <span class="info-text">{ev.location}</span>
+                      </div>
+                    {/if}
+                    {#if meetingLink}
+                      <div class="meeting-action">
+                        <button class="btn-join" onclick={() => openUrl(meetingLink)}>
+                          <span class="btn-icon">{@html iconVideo}</span> Join Meeting
+                        </button>
+                      </div>
+                    {/if}
+                    {#if ev.description}
+                      <div class="event-description">
+                         {@html ev.description}
+                      </div>
+                    {/if}
+                    {#if ev.htmlLink}
+                      <div class="event-link-row">
+                        <button onclick={() => openUrl(ev.htmlLink!)} class="event-link" title="Open in Google Calendar">{@html iconLink} Open in GCal</button>
+                      </div>
+                    {/if}
+                  </div>
+                {/if}
               </div>
             {/each}
           </div>
@@ -152,7 +208,13 @@
     color: var(--text-primary);
   }
 
-  .close-btn {
+  .header-actions {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+
+  .icon-btn {
     background: transparent;
     border: none;
     width: 24px;
@@ -165,7 +227,7 @@
     color: var(--text-secondary);
     transition: all 0.15s;
   }
-  .close-btn:hover {
+  .icon-btn:hover {
     background: var(--sidebar-hover);
     color: var(--text-primary);
   }
@@ -252,12 +314,28 @@
     gap: 4px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.02);
     border-left: 3px solid var(--accent-blue);
-    transition: transform 0.1s ease;
+    transition: box-shadow 0.1s ease;
+    cursor: pointer;
+    user-select: none;
   }
   
-  .event-card:hover {
-    transform: translateY(-1px);
+  .event-card:hover, .event-card.expanded {
     box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+  }
+
+  .event-time-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .card-chevron {
+    color: var(--text-secondary);
+    transition: transform 0.2s;
+    display: flex;
+  }
+  .card-chevron.rotated {
+    transform: rotate(180deg);
   }
 
   .event-time {
@@ -280,15 +358,98 @@
     line-height: 1.4;
   }
 
-  .event-link {
+  .event-expanded-content {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    cursor: default;
+    user-select: text;
+  }
+
+  .event-info-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    font-size: 12px;
     color: var(--text-secondary);
-    opacity: 0;
-    transition: opacity 0.2s;
+  }
+
+  .info-icon {
+    margin-top: 1px;
+    opacity: 0.7;
+    display: flex;
+  }
+
+  .info-text {
+    line-height: 1.3;
+  }
+
+  .meeting-action {
+    margin-top: 2px;
+  }
+
+  .btn-join {
     display: flex;
     align-items: center;
+    gap: 6px;
+    background: var(--accent-blue);
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: opacity 0.2s;
   }
-  .event-card:hover .event-link {
-    opacity: 1;
+  .btn-join:hover {
+    opacity: 0.9;
+  }
+
+  .btn-icon {
+    display: flex;
+  }
+
+  .event-description {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    max-height: 200px;
+    overflow-y: auto;
+    background: rgba(0,0,0,0.02);
+    padding: 8px;
+    border-radius: 4px;
+  }
+
+  .event-description :global(a) {
+    color: var(--accent-blue);
+    text-decoration: none;
+  }
+  .event-description :global(a:hover) {
+    text-decoration: underline;
+  }
+
+  .event-link-row {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 4px;
+  }
+
+  .event-link {
+    color: var(--text-secondary);
+    transition: color 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    text-decoration: none;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
   }
   .event-link:hover {
     color: var(--accent-blue);

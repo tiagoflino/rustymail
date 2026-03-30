@@ -26,7 +26,7 @@
   } from "$lib/components/icons";
   import Settings from "$lib/components/Settings.svelte";
   import Compose from "$lib/components/Compose.svelte";
-  import CalendarSidebar from "$lib/components/CalendarSidebar.svelte";
+  import FullCalendar from "$lib/components/FullCalendar.svelte";
   import Toasts from "$lib/components/Toasts.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import ThreadList from "$lib/components/ThreadList.svelte";
@@ -66,7 +66,7 @@
   let isLoading = $state(false);
   let isLoadingThreads = $state(false);
   let showCompose = $state(false);
-  let showCalendar = $state(false);
+  let viewMode = $state<"mail" | "calendar">("mail");
 
   let isMacOS = $state(false);
   let sidebarCollapsed = $state(false);
@@ -612,6 +612,7 @@
   }
 
   async function selectLabel(labelId: string) {
+    viewMode = "mail";
     const prev = $selectedLabelId;
     const isReselect = prev === labelId;
     selectedLabelId.set(labelId);
@@ -1177,7 +1178,7 @@
       oncompose={() => openCompose()}
       onsync={() => performSync(true)}
       onthemecycle={cycleTheme}
-      ontogglecalendar={() => (showCalendar = !showCalendar)}
+      ontogglecalendar={() => viewMode = viewMode === "calendar" ? "mail" : "calendar"}
       onsettings={() => (showSettings = true)}
       ontogglecollapse={toggleSidebar}
       onselectlabel={selectLabel}
@@ -1185,43 +1186,47 @@
       onaddaccount={addAccount}
     />
 
-    <ThreadList
-      bind:this={threadListRef}
-      {isLoadingThreads}
-      {isLabelFetching}
-      {isMacOS}
-      {currentPage}
-      {threadsPerPage}
-      {totalCount}
-      {hasMoreRemote}
-      {gmailTotal}
-      {isBackgroundFilling}
-      activeLabelName={getActiveLabelName()}
-      {searchQuery}
-      {isSearching}
-      showCategoryTabs={$selectedLabelId === "INBOX"}
-      {selectedCategory}
-      onselectthread={selectThread}
-      ontogglestar={toggleStar}
-      ontoggleimportant={toggleImportant}
-      onfirstpage={goToFirstPage}
-      onprevpage={goToPrevPage}
-      onnextpage={goToNextPage}
-      onsearch={handleSearch}
-      onclearsearch={clearSearch}
-      onselectcategory={selectCategory}
-    />
+    {#if viewMode === "mail"}
+      <ThreadList
+        bind:this={threadListRef}
+        {isLoadingThreads}
+        {isLabelFetching}
+        {isMacOS}
+        {currentPage}
+        {threadsPerPage}
+        {totalCount}
+        {hasMoreRemote}
+        {gmailTotal}
+        {isBackgroundFilling}
+        activeLabelName={getActiveLabelName()}
+        {searchQuery}
+        {isSearching}
+        showCategoryTabs={$selectedLabelId === "INBOX"}
+        {selectedCategory}
+        onselectthread={selectThread}
+        ontogglestar={toggleStar}
+        ontoggleimportant={toggleImportant}
+        onfirstpage={goToFirstPage}
+        onprevpage={goToPrevPage}
+        onnextpage={goToNextPage}
+        onsearch={handleSearch}
+        onclearsearch={clearSearch}
+        onselectcategory={selectCategory}
+      />
 
-    <MessageDetail
-      {isMacOS}
-      isTrashView={$selectedLabelId === "TRASH"}
-      onaction={executeAction}
-      onreply={handleReply}
-      onreplyall={handleReplyAll}
-      onforward={handleForward}
-      oneditdraft={handleEditDraft}
-      oniframeload={handleIframeLoad}
-    />
+      <MessageDetail
+        {isMacOS}
+        isTrashView={$selectedLabelId === "TRASH"}
+        onaction={executeAction}
+        onreply={handleReply}
+        onreplyall={handleReplyAll}
+        onforward={handleForward}
+        oneditdraft={handleEditDraft}
+        oniframeload={handleIframeLoad}
+      />
+    {:else}
+      <FullCalendar />
+    {/if}
   </div>
 
   <Settings
@@ -1276,10 +1281,6 @@
     />
   {/if}
 {/key}
-
-{#if showCalendar}
-  <CalendarSidebar onClose={() => (showCalendar = false)} />
-{/if}
 
 <LinkSafetyDialog
   url={pendingLinkUrl}
