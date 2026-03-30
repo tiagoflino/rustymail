@@ -149,6 +149,7 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         ("shortcut_sync", "Meta+r"),
         ("shortcut_settings", "Meta+,"),
         ("shortcut_search", "/"),
+        ("unified_indicator", "avatar"),
     ];
     for (key, value) in defaults {
         let _ = sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)")

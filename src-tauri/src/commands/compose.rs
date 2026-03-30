@@ -19,9 +19,13 @@ pub async fn send_message(
     in_reply_to: Option<String>,
     references: Option<String>,
     attachment_paths: Option<Vec<String>>,
+    account_id: Option<String>,
 ) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
-    let account = get_active_account(pool.inner()).await?;
+    let account = match account_id {
+        Some(id) => super::accounts::get_account_by_id(pool.inner(), &id).await?,
+        None => get_active_account(pool.inner()).await?,
+    };
 
     #[derive(sqlx::FromRow)]
     struct EmailRow {
@@ -132,9 +136,13 @@ pub async fn save_draft(
     references: Option<String>,
     draft_id: Option<String>,
     attachment_paths: Option<Vec<String>>,
+    account_id: Option<String>,
 ) -> Result<String, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
-    let account = get_active_account(pool.inner()).await?;
+    let account = match account_id {
+        Some(id) => super::accounts::get_account_by_id(pool.inner(), &id).await?,
+        None => get_active_account(pool.inner()).await?,
+    };
 
     #[derive(sqlx::FromRow)]
     struct EmailRow {

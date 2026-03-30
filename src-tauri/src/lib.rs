@@ -56,6 +56,8 @@ pub fn run() {
             commands::labels::get_labels,
             commands::threads::get_threads,
             commands::threads::get_thread_count,
+            commands::threads::get_unified_threads,
+            commands::threads::get_unified_thread_count,
             commands::threads::fetch_label_threads,
             commands::threads::fetch_category_threads,
             commands::threads::archive_thread,

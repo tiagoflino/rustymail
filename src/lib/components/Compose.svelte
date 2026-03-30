@@ -17,6 +17,7 @@
     inReplyTo = null,
     references = null,
     initialDraftId = null,
+    accountId = null,
     onDraftSaved = (id: string | null) => {},
   }: {
     onClose: () => void;
@@ -28,6 +29,7 @@
     inReplyTo?: string | null;
     references?: string | null;
     initialDraftId?: string | null;
+    accountId?: string | null;
     onDraftSaved?: (id: string | null) => void;
   } = $props();
 
@@ -275,6 +277,7 @@
       references: references,
       draftId: currentDraftId,
       attachmentPaths: attachments.length > 0 ? attachments.map((a) => a.path) : null,
+      accountId: accountId,
     };
 
     // Read the undo send delay setting
@@ -357,13 +360,14 @@
           references: sendPayload.references,
           draftId: sendPayload.draftId,
           attachmentPaths: sendPayload.attachmentPaths,
+          accountId: sendPayload.accountId,
         });
         
         // Ensure UI updates
         if (sendPayload.threadId) {
           await invoke("sync_thread_messages", { threadId: sendPayload.threadId }).catch(() => {});
         }
-        await invoke("fetch_label_threads", { labelId: "DRAFT" }).catch(() => {});
+        await invoke("fetch_label_threads", { labelId: "DRAFT", accountId: null }).catch(() => {});
         
         addToast("Send cancelled — message saved as draft.", "info", 4000);
       } catch (e) {
@@ -394,6 +398,7 @@
         references,
         draftId: currentDraftId,
         attachmentPaths: attachments.length > 0 ? attachments.map((a) => a.path) : null,
+        accountId: accountId,
       })) as string;
       if (currentDraftId) {
         onDraftSaved(currentDraftId);

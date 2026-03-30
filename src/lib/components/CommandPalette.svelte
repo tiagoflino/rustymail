@@ -39,7 +39,7 @@
     { id: "nav_trash", label: "Go to Trash" },
   ];
 
-  let accountActions = $derived(accounts.slice(0, 2).map(acc => ({
+  let accountActions: Action[] = $derived(accounts.slice(0, 2).map(acc => ({
     id: `switch_account_${acc.id}`,
     label: `Switch to ${acc.display_name || acc.email}`,
     icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`

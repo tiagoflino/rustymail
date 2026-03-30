@@ -17,10 +17,41 @@
   import { formatTime, decodeEntities } from "$lib/utils/formatters.js";
   import CategoryTabs from "./CategoryTabs.svelte";
 
+  interface AccountInfo {
+    id: string;
+    email: string;
+    display_name: string;
+    avatar_url: string;
+    is_active: boolean;
+  }
+
   interface SearchSuggestion {
     kind: string;
     text: string;
     detail: string;
+  }
+
+  // Predefined account color palette (Apple HIG complementary)
+  const ACCOUNT_COLORS = [
+    '#007AFF', // blue
+    '#FF9500', // orange
+    '#34C759', // green
+    '#AF52DE', // purple
+    '#FF3B30', // red
+    '#5AC8FA', // teal
+    '#FF2D55', // pink
+    '#FFCC00', // yellow
+  ];
+
+  function getAccountColor(accountId: string, accounts: AccountInfo[]): string {
+    const idx = accounts.findIndex(a => a.id === accountId);
+    return ACCOUNT_COLORS[idx >= 0 ? idx % ACCOUNT_COLORS.length : 0];
+  }
+
+  function getAccountInitial(accountId: string, accounts: AccountInfo[]): string {
+    const acc = accounts.find(a => a.id === accountId);
+    if (!acc) return '?';
+    return (acc.display_name || acc.email || '?')[0].toUpperCase();
   }
 
   interface Props {
@@ -38,6 +69,9 @@
     isSearching: Writable<boolean>;
     showCategoryTabs: boolean;
     selectedCategory: Writable<string>;
+    unifiedIndicator: string;
+    allAccounts: AccountInfo[];
+    isUnifiedView: boolean;
     onselectthread: (threadId: string) => void;
     ontogglestar: (threadId: string, starred: boolean) => void;
     ontoggleimportant: (threadId: string, important: boolean) => void;
@@ -64,6 +98,9 @@
     isSearching,
     showCategoryTabs,
     selectedCategory,
+    unifiedIndicator = 'avatar',
+    allAccounts = [],
+    isUnifiedView = false,
     onselectthread,
     ontogglestar,
     ontoggleimportant,
@@ -280,7 +317,12 @@
   {/if}
 
   <div class="list-header">
-    <h3>{$searchQuery ? "Search Results" : activeLabelName}</h3>
+    <h3>
+      {$searchQuery ? "Search Results" : activeLabelName}
+      {#if isUnifiedView && !$searchQuery}
+        <span class="unified-badge">Unified</span>
+      {/if}
+    </h3>
     {#if !$searchQuery && ($threads.length > 0 || isLoadingThreads || isBackgroundFilling)}
       <div class="pagination-controls">
         <span class="pagination-range">
@@ -348,6 +390,8 @@
           class="thread-item {thread.unread > 0
             ? 'unread'
             : ''} {$selectedThreadId === thread.id ? 'selected' : ''}"
+          class:unified={isUnifiedView}
+          style={isUnifiedView ? `--account-color: ${getAccountColor(thread.account_id, allAccounts)}` : ''}
           role="button"
           tabindex="0"
           onclick={() => onselectthread(thread.id)}
@@ -379,7 +423,33 @@
           </div>
           <div class="thread-content">
             <div class="thread-content-header">
-              <span class="thread-sender">{thread.sender}</span>
+              <span class="thread-sender">
+                {#if isUnifiedView && unifiedIndicator !== 'none'}
+                  {#if unifiedIndicator === 'avatar'}
+                    {@const acc = allAccounts.find(a => a.id === thread.account_id)}
+                    {#if acc?.avatar_url}
+                      <img
+                        src={acc.avatar_url}
+                        alt=""
+                        class="unified-avatar"
+                        referrerpolicy="no-referrer"
+                      />
+                    {:else}
+                      <span
+                        class="unified-avatar-placeholder"
+                        style="background: {getAccountColor(thread.account_id, allAccounts)}"
+                      >{getAccountInitial(thread.account_id, allAccounts)}</span>
+                    {/if}
+                  {:else if unifiedIndicator === 'color'}
+                    <span
+                      class="unified-color-dot"
+                      style="background: {getAccountColor(thread.account_id, allAccounts)}"
+                      title={allAccounts.find(a => a.id === thread.account_id)?.email ?? ''}
+                    ></span>
+                  {/if}
+                {/if}
+                {thread.sender}
+              </span>
               <span class="thread-meta">
                 {#if thread.has_attachments}
                   <span class="thread-clip"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg></span>
@@ -597,6 +667,8 @@
     line-height: 16px;
     letter-spacing: -0.08px;
     color: var(--text-primary);
+    display: flex;
+    align-items: center;
   }
   .thread-scroll-area {
     flex: 1;
@@ -665,25 +737,28 @@
     background: var(--sidebar-hover);
     color: var(--text-primary);
   }
-  .pagination-btn:active:not(:disabled) {
-    background: var(--border-color);
-  }
-  .pagination-btn:disabled {
-    opacity: 0.4;
-    cursor: default;
+  .thread-list {
+    flex: 1;
+    overflow-y: auto;
+    position: relative;
   }
   .thread-item {
     display: flex;
-    padding: 10px 14px;
+    padding: 12px 12px;
     border-bottom: 1px solid var(--border-color);
     cursor: pointer;
-    align-items: flex-start;
-    transition: background 0.1s ease;
-    width: 100%;
-    text-align: left;
-    font-family: var(--font-family);
-    color: var(--text-primary);
-    outline: none;
+    background: var(--bg-view);
+    position: relative;
+    transition: background 0.15s ease;
+  }
+  .thread-item.unified::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--account-color);
   }
   .thread-item:not(.unread) {
     background-color: var(--sidebar-hover);
@@ -700,9 +775,9 @@
     flex-direction: column;
     align-items: center;
     gap: 4px;
-    margin-right: 10px;
+    margin-right: 8px;
     flex-shrink: 0;
-    width: 40px;
+    width: 28px;
   }
   .thread-star {
     background: none;
@@ -851,5 +926,57 @@
     display: flex;
     flex-direction: column;
     height: 100%;
+  }
+
+  /* Unified Inbox account indicators */
+  .unified-avatar {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    object-fit: cover;
+    vertical-align: middle;
+    margin-right: 5px;
+    flex-shrink: 0;
+    border: 1px solid var(--border-color);
+  }
+  .unified-avatar-placeholder {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    font-size: 9px;
+    font-weight: 700;
+    color: #fff;
+    vertical-align: middle;
+    margin-right: 5px;
+    flex-shrink: 0;
+    line-height: 1;
+  }
+  .unified-color-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 8px;
+    display: inline-block;
+    vertical-align: middle;
+    flex-shrink: 0;
+    border: 1.5px solid rgba(255, 255, 255, 0.4);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  }
+  :global(body.test-dark) .unified-color-dot {
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+  .unified-badge {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: rgba(10, 132, 255, 0.1);
+    color: var(--accent-blue);
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 8px;
   }
 </style>

@@ -91,6 +91,53 @@ pub(crate) async fn get_active_account(pool: &sqlx::SqlitePool) -> Result<Active
     })
 }
 
+pub(crate) async fn get_account_by_id(pool: &sqlx::SqlitePool, account_id: &str) -> Result<ActiveAccountFull, String> {
+    let row = sqlx::query_as::<_, ActiveAccountRow>(
+        "SELECT id, token_expiry FROM accounts WHERE id = ? LIMIT 1"
+    )
+        .bind(account_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Account parameter not found: {}", e))?;
+
+    let now = chrono::Utc::now().timestamp();
+    let expiry = row.token_expiry.unwrap_or(0);
+    if expiry > 0 && expiry - 300 < now {
+        let token_to_use = crate::credentials::get_refresh_token(&row.id).unwrap_or_default();
+        if !token_to_use.is_empty() && refresh_and_update(pool, &row.id, &token_to_use).await.is_ok() {
+            let refreshed = sqlx::query_as::<_, ActiveAccountRow>(
+                "SELECT id, token_expiry FROM accounts WHERE id = ? LIMIT 1"
+            )
+                .bind(account_id)
+                .fetch_one(pool)
+                .await
+                .map_err(|_| "Failed to read account after refresh.".to_string())?;
+
+            let access_token = crate::credentials::get_access_token(&refreshed.id)
+                .map_err(|e| format!("Failed to read access token from keyring: {}", e))?;
+            let refresh_token = crate::credentials::get_refresh_token(&refreshed.id).ok();
+
+            return Ok(ActiveAccountFull {
+                id: refreshed.id,
+                access_token,
+                refresh_token,
+                token_expiry: refreshed.token_expiry,
+            });
+        }
+    }
+
+    let access_token = crate::credentials::get_access_token(&row.id)
+        .map_err(|e| format!("Failed to read access token from keyring: {}", e))?;
+    let refresh_token = crate::credentials::get_refresh_token(&row.id).ok();
+
+    Ok(ActiveAccountFull {
+        id: row.id,
+        access_token,
+        refresh_token,
+        token_expiry: row.token_expiry,
+    })
+}
+
 #[cfg(not(debug_assertions))]
 fn get_client_credentials() -> Result<(String, String), String> {
     Ok((

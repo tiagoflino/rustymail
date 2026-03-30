@@ -133,6 +133,8 @@
   const categoryLastSyncMap: Record<string, number> = {};
   const CATEGORY_SYNC_INTERVAL = 300000;
   let syncLock = false;
+  let unifiedIndicatorSetting = $state("avatar");
+  let isUnifiedEnabledSetting = $state(true);
 
   let composeKey = $state(0);
   let composeProps = $state({
@@ -144,6 +146,7 @@
     inReplyTo: null as string | null,
     references: null as string | null,
     initialDraftId: null as string | null,
+    accountId: null as string | null,
   });
 
   async function openCompose(props: Partial<typeof composeProps> = {}) {
@@ -168,6 +171,7 @@
       inReplyTo: null,
       references: null,
       initialDraftId: draftId,
+      accountId: null,
       ...props,
     };
     composeKey++;
@@ -189,6 +193,10 @@
       case 'nav_sent': selectLabel('SENT'); break;
       case 'nav_drafts': selectLabel('DRAFT'); break;
       case 'nav_trash': selectLabel('TRASH'); break;
+      case 'nav_unified_inbox': selectLabel('UNIFIED_INBOX'); break;
+      case 'nav_unified_sent': selectLabel('UNIFIED_SENT'); break;
+      case 'nav_unified_drafts': selectLabel('UNIFIED_DRAFT'); break;
+      case 'nav_unified_trash': selectLabel('UNIFIED_TRASH'); break;
       default:
         if (id.startsWith('switch_account_')) {
           const accId = id.replace('switch_account_', '');
@@ -278,12 +286,32 @@
     syncLock = true;
 
     const syncLabelId = get(selectedLabelId) || "INBOX";
+    const isUnified = syncLabelId.startsWith("UNIFIED_");
+    const realLabelId = isUnified ? syncLabelId.replace("UNIFIED_", "") : syncLabelId;
 
     try {
       isSyncing.set(true);
       lastSyncError.set(null);
 
-      const result = await invoke<{ new_message_ids: string[] }>("sync_gmail_data", { labelId: syncLabelId });
+      let allNewMessageIds: string[] = [];
+
+      if (isUnified) {
+        // Sync each account sequentially
+        for (const acc of allAccounts) {
+          try {
+            const result = await invoke<{ new_message_ids: string[] }>("sync_gmail_data", {
+              labelId: realLabelId,
+              accountId: acc.id,
+            });
+            allNewMessageIds.push(...result.new_message_ids);
+          } catch (e) {
+            console.warn(`[UnifiedSync] Failed to sync account ${acc.id}:`, e);
+          }
+        }
+      } else {
+        const result = await invoke<{ new_message_ids: string[] }>("sync_gmail_data", { labelId: realLabelId, accountId: null });
+        allNewMessageIds = result.new_message_ids;
+      }
 
       if (get(selectedLabelId) !== syncLabelId) return;
 
@@ -303,11 +331,11 @@
       }
 
       // Desktop notifications for new messages (background syncs only)
-      if (!isManual && result.new_message_ids.length > 0) {
+      if (!isManual && allNewMessageIds.length > 0) {
         try {
           const enabled = await invoke<string>("get_setting", { key: "notifications_enabled" });
           if (enabled === "true") {
-            const count = result.new_message_ids.length;
+            const count = allNewMessageIds.length;
             sendNotification({
               title: "Rustymail",
               body: count === 1 ? "You have a new message" : `You have ${count} new messages`,
@@ -379,6 +407,9 @@
   async function updateThreadCount() {
     const invocationLabelId = get(selectedLabelId) || null;
     const category = $selectedLabelId === "INBOX" ? get(selectedCategory) : null;
+    const isUnified = invocationLabelId?.startsWith("UNIFIED_") ?? false;
+    const realLabelId = isUnified ? (invocationLabelId ?? "").replace("UNIFIED_", "") : invocationLabelId;
+    const accountIds = isUnified ? allAccounts.map(a => a.id) : [];
 
     if (category) {
       const inboxLabel = $labels.find((l) => l.id === "INBOX");
@@ -386,10 +417,16 @@
       if (gmailTotal === 0) gmailTotal = null;
 
       try {
-        const result: { count: number; has_more_remote: boolean } = await invoke("get_thread_count", {
-          labelId: invocationLabelId,
-          category: category,
-        });
+        const result: { count: number; has_more_remote: boolean } = isUnified
+          ? await invoke("get_unified_thread_count", {
+              accountIds,
+              labelId: realLabelId,
+              category: category,
+            })
+          : await invoke("get_thread_count", {
+              labelId: realLabelId,
+              category: category,
+            });
         totalCount = result.count;
         hasMoreRemote = result.has_more_remote || (gmailTotal !== null && result.count < gmailTotal);
       } catch (_) {}
@@ -399,10 +436,16 @@
       if (gmailTotal === 0) gmailTotal = null;
 
       try {
-        const result: { count: number; has_more_remote: boolean } = await invoke("get_thread_count", {
-          labelId: invocationLabelId,
-          category: null,
-        });
+        const result: { count: number; has_more_remote: boolean } = isUnified
+          ? await invoke("get_unified_thread_count", {
+              accountIds,
+              labelId: realLabelId,
+              category: null,
+            })
+          : await invoke("get_thread_count", {
+              labelId: realLabelId,
+              category: null,
+            });
         totalCount = result.count;
         hasMoreRemote = result.has_more_remote || (gmailTotal !== null && result.count < gmailTotal);
       } catch (_) {}
@@ -414,6 +457,9 @@
     if (!silent) isLoadingThreads = true;
 
     const invocationLabelId = get(selectedLabelId) || null;
+    const isUnified = invocationLabelId?.startsWith("UNIFIED_") ?? false;
+    const realLabelId = isUnified ? (invocationLabelId ?? "").replace("UNIFIED_", "") : invocationLabelId;
+    const accountIds = isUnified ? allAccounts.map(a => a.id) : [];
 
     if (reset && !silent) {
       if (get(searchQuery) && !isLabelFetching) return;
@@ -424,12 +470,20 @@
     try {
       const category = $selectedLabelId === "INBOX" ? get(selectedCategory) : null;
       const offset = currentPage * threadsPerPage;
-      const fetched = (await invoke("get_threads", {
-        labelId: invocationLabelId,
-        category: category,
-        offset: offset,
-        limit: threadsPerPage,
-      })) as LocalThread[];
+      const fetched = isUnified
+        ? (await invoke("get_unified_threads", {
+            accountIds,
+            labelId: realLabelId,
+            category: category,
+            offset: offset,
+            limit: threadsPerPage,
+          })) as LocalThread[]
+        : (await invoke("get_threads", {
+            labelId: realLabelId,
+            category: category,
+            offset: offset,
+            limit: threadsPerPage,
+          })) as LocalThread[];
 
       if ((get(selectedLabelId) || null) !== invocationLabelId) return;
 
@@ -437,21 +491,37 @@
         isLabelFetching = true;
         try {
           if (category) {
-            await invoke("fetch_category_threads", { category });
-          } else {
-            await invoke("fetch_label_threads", { labelId: invocationLabelId });
+            if (isUnified) {
+              for (const accId of accountIds) await invoke("fetch_category_threads", { category, accountId: accId });
+            } else {
+              await invoke("fetch_category_threads", { category, accountId: null });
+            }
+          } else if (realLabelId) {
+            if (isUnified) {
+              for (const accId of accountIds) await invoke("fetch_label_threads", { labelId: realLabelId, accountId: accId });
+            } else {
+              await invoke("fetch_label_threads", { labelId: realLabelId, accountId: null });
+            }
           }
 
           if ((get(selectedLabelId) || null) !== invocationLabelId) return;
 
           if (invocationLabelId)
             labelLastSyncMap[invocationLabelId] = Date.now();
-          const retried = (await invoke("get_threads", {
-            labelId: invocationLabelId,
-            category: category,
-            offset: 0,
-            limit: threadsPerPage,
-          })) as LocalThread[];
+          const retried = isUnified
+            ? (await invoke("get_unified_threads", {
+                accountIds,
+                labelId: realLabelId,
+                category: category,
+                offset: 0,
+                limit: threadsPerPage,
+              })) as LocalThread[]
+            : (await invoke("get_threads", {
+                labelId: realLabelId,
+                category: category,
+                offset: 0,
+                limit: threadsPerPage,
+              })) as LocalThread[];
 
           if ((get(selectedLabelId) || null) !== invocationLabelId) return;
 
@@ -520,6 +590,9 @@
     const invocationLabelId = get(selectedLabelId) || null;
     const category = $selectedLabelId === "INBOX" ? get(selectedCategory) : null;
     const targetPage = currentPage;
+    const isUnified = invocationLabelId?.startsWith("UNIFIED_") ?? false;
+    const realLabelId = isUnified ? (invocationLabelId ?? "").replace("UNIFIED_", "") : invocationLabelId;
+    const accountIds = isUnified ? allAccounts.map(a => a.id) : [];
 
     try {
       let more = true;
@@ -529,9 +602,25 @@
         if (currentPage !== targetPage) break;
 
         if (category) {
-          more = await invoke("fetch_category_threads", { category }) as boolean;
-        } else if (invocationLabelId) {
-          more = await invoke("fetch_label_threads", { labelId: invocationLabelId }) as boolean;
+          if (isUnified) {
+            more = false;
+            for (const accId of accountIds) {
+              const m = await invoke("fetch_category_threads", { category, accountId: accId }) as boolean;
+              if (m) more = true;
+            }
+          } else {
+            more = await invoke("fetch_category_threads", { category, accountId: null }) as boolean;
+          }
+        } else if (realLabelId) {
+          if (isUnified) {
+            more = false;
+            for (const accId of accountIds) {
+              const m = await invoke("fetch_label_threads", { labelId: realLabelId, accountId: accId }) as boolean;
+              if (m) more = true;
+            }
+          } else {
+            more = await invoke("fetch_label_threads", { labelId: realLabelId, accountId: null }) as boolean;
+          }
         } else {
           break;
         }
@@ -539,12 +628,20 @@
         if (gen !== backgroundFillGeneration) break;
 
         const offset = targetPage * threadsPerPage;
-        const fetched = (await invoke("get_threads", {
-          labelId: invocationLabelId,
-          category: category,
-          offset: offset,
-          limit: threadsPerPage,
-        })) as LocalThread[];
+        const fetched = isUnified
+          ? (await invoke("get_unified_threads", {
+              accountIds,
+              labelId: realLabelId,
+              category: category,
+              offset: offset,
+              limit: threadsPerPage,
+            })) as LocalThread[]
+          : (await invoke("get_threads", {
+              labelId: realLabelId,
+              category: category,
+              offset: offset,
+              limit: threadsPerPage,
+            })) as LocalThread[];
 
         if (gen !== backgroundFillGeneration) break;
 
@@ -557,17 +654,33 @@
         while (inboxMore && get(threads).length < threadsPerPage) {
           if (gen !== backgroundFillGeneration) break;
 
-          inboxMore = await invoke("fetch_label_threads", { labelId: "INBOX" }) as boolean;
+          if (isUnified) {
+            inboxMore = false;
+            for (const accId of accountIds) {
+              const m = await invoke("fetch_label_threads", { labelId: "INBOX", accountId: accId }) as boolean;
+              if (m) inboxMore = true;
+            }
+          } else {
+            inboxMore = await invoke("fetch_label_threads", { labelId: "INBOX", accountId: null }) as boolean;
+          }
 
           if (gen !== backgroundFillGeneration) break;
 
           const offset = targetPage * threadsPerPage;
-          const fetched = (await invoke("get_threads", {
-            labelId: invocationLabelId,
-            category: category,
-            offset: offset,
-            limit: threadsPerPage,
-          })) as LocalThread[];
+          const fetched = isUnified
+            ? (await invoke("get_unified_threads", {
+                accountIds,
+                labelId: realLabelId,
+                category: category,
+                offset: offset,
+                limit: threadsPerPage,
+              })) as LocalThread[]
+            : (await invoke("get_threads", {
+                labelId: realLabelId,
+                category: category,
+                offset: offset,
+                limit: threadsPerPage,
+              })) as LocalThread[];
 
           threads.set(fetched);
           await updateThreadCount();
@@ -579,9 +692,27 @@
         while (more && prefetchCount < prefetchTarget) {
           if (gen !== backgroundFillGeneration) break;
           if (category) {
-            more = await invoke("fetch_category_threads", { category }) as boolean;
-          } else if (invocationLabelId) {
-            more = await invoke("fetch_label_threads", { labelId: invocationLabelId }) as boolean;
+            if (isUnified) {
+              let anyMore = false;
+              for (const accId of accountIds) {
+                const m = await invoke("fetch_category_threads", { category, accountId: accId }) as boolean;
+                if (m) anyMore = true;
+              }
+              more = anyMore;
+            } else {
+              more = await invoke("fetch_category_threads", { category, accountId: null }) as boolean;
+            }
+          } else if (realLabelId) {
+            if (isUnified) {
+              let anyMore = false;
+              for (const accId of accountIds) {
+                const m = await invoke("fetch_label_threads", { labelId: realLabelId, accountId: accId }) as boolean;
+                if (m) anyMore = true;
+              }
+              more = anyMore;
+            } else {
+              more = await invoke("fetch_label_threads", { labelId: realLabelId, accountId: null }) as boolean;
+            }
           } else {
             break;
           }
@@ -665,8 +796,19 @@
 
     const lastSync = labelLastSyncMap[labelId] || 0;
     if (isReselect || Date.now() - lastSync > 300000) {
+      const isUnifiedLabel = labelId.startsWith("UNIFIED_");
+      const realLabel = isUnifiedLabel ? labelId.replace("UNIFIED_", "") : labelId;
       isSyncing.set(true);
-      invoke("fetch_label_threads", { labelId: labelId })
+
+      const syncPromise = isUnifiedLabel
+        ? (async () => {
+            for (const acc of allAccounts) {
+              await invoke("fetch_label_threads", { labelId: realLabel, accountId: acc.id }).catch(() => {});
+            }
+          })()
+        : invoke("fetch_label_threads", { labelId: realLabel, accountId: null });
+
+      syncPromise
         .then(() => { labelLastSyncMap[labelId] = Date.now(); })
         .catch((e) => { addToast(`Sync failed: ${e}`, "error", 4000); })
         .finally(async () => {
@@ -691,7 +833,7 @@
 
     if (needsSync) {
       isSyncing.set(true);
-      invoke("fetch_category_threads", { category })
+      invoke("fetch_category_threads", { category, accountId: null })
         .then(() => { categoryLastSyncMap[category] = Date.now(); })
         .catch((e) => { addToast(`Sync failed: ${e}`, "error", 4000); })
         .finally(async () => {
@@ -978,6 +1120,7 @@
       threadId: msg.thread_id,
       inReplyTo: msg.id,
       references: msg.id,
+      accountId: thread?.account_id ?? null,
     });
   }
 
@@ -1019,6 +1162,7 @@
       threadId: msg.thread_id,
       inReplyTo: msg.id,
       references: msg.id,
+      accountId: thread?.account_id ?? null,
     });
   }
 
@@ -1072,6 +1216,15 @@
   $effect(() => {
     if (!showSettings) {
       refreshLinkBehavior();
+      invoke("get_setting", { key: "unified_indicator" }).catch(() => "").then((val) => {
+        unifiedIndicatorSetting = (val as string) || "avatar";
+      });
+      invoke("get_setting", { key: "enable_unified_inbox" }).catch(() => "").then((val) => {
+        isUnifiedEnabledSetting = (val as string) !== "false";
+        if (!isUnifiedEnabledSetting && $selectedLabelId.startsWith("UNIFIED_")) {
+          selectLabel("INBOX");
+        }
+      });
     }
   });
 
@@ -1096,6 +1249,10 @@
     readingPane = savedPane || "right";
     const savedTpp = await invoke("get_setting", { key: "threads_per_page" }).catch(() => "") as string;
     threadsPerPage = parseInt(savedTpp) || 100;
+    const savedIndicator = await invoke("get_setting", { key: "unified_indicator" }).catch(() => "") as string;
+    unifiedIndicatorSetting = savedIndicator || "avatar";
+    const savedUnified = await invoke("get_setting", { key: "enable_unified_inbox" }).catch(() => "") as string;
+    isUnifiedEnabledSetting = savedUnified !== "false";
 
     await refreshAccountState();
     if (appState === "authenticated") {
@@ -1163,7 +1320,12 @@
   });
 
   function getActiveLabelName(): string {
-    const label = $labels.find((l) => l.id === $selectedLabelId);
+    const lid = $selectedLabelId;
+    if (lid === "UNIFIED_INBOX") return "Inbox";
+    if (lid === "UNIFIED_SENT") return "Sent";
+    if (lid === "UNIFIED_DRAFT") return "Drafts";
+    if (lid === "UNIFIED_TRASH") return "Trash";
+    const label = $labels.find((l) => l.id === lid);
     return label ? formatLabelName(label.name) : "Inbox";
   }
 
@@ -1199,6 +1361,7 @@
       {themeLabel}
       sidebarCollapseIcon={iconSidebarCollapse}
       sidebarExpandIcon={iconSidebarExpand}
+      isUnifiedEnabled={isUnifiedEnabledSetting}
       {labels}
       {selectedLabelId}
       oncompose={() => openCompose()}
@@ -1229,6 +1392,9 @@
         {isSearching}
         showCategoryTabs={$selectedLabelId === "INBOX"}
         {selectedCategory}
+        unifiedIndicator={unifiedIndicatorSetting}
+        {allAccounts}
+        isUnifiedView={$selectedLabelId.startsWith("UNIFIED_")}
         onselectthread={selectThread}
         ontogglestar={toggleStar}
         ontoggleimportant={toggleImportant}

@@ -10,9 +10,13 @@ pub struct SyncResult {
 pub async fn sync_gmail_data(
     app_handle: tauri::AppHandle,
     label_id: Option<String>,
+    account_id: Option<String>,
 ) -> Result<SyncResult, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
-    let account = get_active_account(pool.inner()).await?;
+    let account = match account_id {
+        Some(id) => super::accounts::get_account_by_id(pool.inner(), &id).await?,
+        None => super::accounts::get_active_account(pool.inner()).await?,
+    };
 
     println!("[Sync] Starting sync for: {}", account.id);
 

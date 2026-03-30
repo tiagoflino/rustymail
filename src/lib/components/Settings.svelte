@@ -238,6 +238,47 @@
                 {@html iconPlus} Add Account
               </button>
             </div>
+
+            {#if accounts.length > 1}
+            <div class="section" style="margin-top: 2rem;">
+              <div class="section-title">Unified Inbox Interface</div>
+              <p class="section-desc">
+                Choose how to identify the source account for threads in the Unified view.
+              </p>
+              <div class="setting-card">
+                <div class="card-row">
+                  <label class="toggle-row">
+                    <div class="toggle-label">
+                      <span class="setting-name">Enable Unified Inbox</span>
+                      <span class="setting-hint">Group mail from all accounts into one view</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      class="toggle"
+                      checked={settings["enable_unified_inbox"] !== "false"}
+                      onchange={(e) => saveSetting("enable_unified_inbox", e.currentTarget.checked ? "true" : "false")}
+                    />
+                  </label>
+                </div>
+                <div class="card-row last">
+                  <div class="setting-row-inline">
+                    <div class="setting-label">
+                      <span class="setting-name">Context Indicator</span>
+                      <span class="setting-hint">Identify the source account for threads</span>
+                    </div>
+                    <div class="option-group">
+                      {#each [["avatar", "Avatar Image"], ["color", "Color Dot"], ["none", "None"]] as [val, label]}
+                        <button
+                          class="option-btn {(settings.unified_indicator || 'avatar') === val ? 'selected' : ''}"
+                          onclick={() => saveSetting("unified_indicator", val)}
+                        >{label}</button>
+                      {/each}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            {/if}
           {:else if activeTab === "sync"}
             <div class="section">
               <div class="section-title">Sync & Storage</div>
@@ -1061,16 +1102,12 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 12px 16px;
+    padding: 12px 0;
     border-bottom: 1px solid var(--border-color, rgba(0, 0, 0, 0.06));
-    transition: background 0.1s;
   }
   .account-row.last,
   .account-row:last-child {
     border-bottom: none;
-  }
-  .account-row:hover {
-    background: rgba(0, 0, 0, 0.02);
   }
 
   .account-avatar {
@@ -1150,19 +1187,25 @@
   .btn-add-account {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    margin-top: 10px;
-    padding: 0;
-    border: none;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 12px;
+    padding: 6px 12px;
+    border: 1px dashed var(--border-color);
+    border-radius: 8px;
     background: transparent;
-    color: var(--accent-blue, #0a84ff);
+    color: var(--text-primary);
     cursor: pointer;
     font-size: 13px;
+    font-weight: 500;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    transition: opacity 0.15s;
+    transition: all 0.15s;
+    width: 100%;
   }
   .btn-add-account:hover {
-    opacity: 0.7;
+    background: var(--sidebar-hover);
+    color: var(--accent-blue, #0a84ff);
+    border-color: var(--accent-blue, #0a84ff);
   }
 
   /* Shortcuts */

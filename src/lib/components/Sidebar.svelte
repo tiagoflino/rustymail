@@ -25,6 +25,7 @@
     name: string;
     type: string;
     unread_count: number;
+    bgColor?: string | null;
   }
 
   interface Props {
@@ -36,6 +37,7 @@
     themeLabel: string;
     sidebarCollapseIcon: string;
     sidebarExpandIcon: string;
+    isUnifiedEnabled: boolean;
     labels: Writable<LocalLabel[]>;
     selectedLabelId: Writable<string>;
     oncompose: () => void;
@@ -58,6 +60,7 @@
     themeLabel,
     sidebarCollapseIcon,
     sidebarExpandIcon,
+    isUnifiedEnabled,
     labels,
     selectedLabelId,
     oncompose,
@@ -156,7 +159,35 @@
   </div>
 
   <div class="sidebar-content">
-    <h2 class="sidebar-heading">Mailboxes</h2>
+    {#if isUnifiedEnabled && allAccounts.length > 1 && !collapsed}
+      <div class="unified-section">
+        <h2 class="sidebar-heading">Unified</h2>
+        <ul class="sidebar-menu">
+          {#each [
+            { id: 'UNIFIED_INBOX', icon: 'UNIFIED_INBOX', name: 'INBOX', display: 'Inbox' },
+            { id: 'UNIFIED_SENT', name: 'SENT', display: 'Sent' },
+            { id: 'UNIFIED_DRAFT', name: 'DRAFT', display: 'Drafts' },
+            { id: 'UNIFIED_TRASH', name: 'TRASH', display: 'Trash' }
+          ] as uLabel}
+            <li>
+              <div
+                class="sidebar-item {$selectedLabelId === uLabel.id ? 'active' : ''}"
+                role="button" tabindex="0"
+                onclick={() => onselectlabel(uLabel.id)}
+                onkeydown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") onselectlabel(uLabel.id);
+                }}
+              >
+                <span class="icon">{@html getLabelIcon(uLabel.icon || uLabel.name)}</span>
+                <span class="label-text">{uLabel.display}</span>
+              </div>
+            </li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
+
+    <h2 class="sidebar-heading">{activeAccount?.email || "Mailboxes"}</h2>
     <ul class="sidebar-menu">
       {#each $labels.filter((l) => l.type === "system" && !l.name.startsWith("CATEGORY_") && l.name !== "UNREAD") as label}
         <li>
@@ -492,6 +523,26 @@
   .sidebar-menu {
     list-style: none;
     margin-bottom: 8px;
+  }
+  .unified-section {
+    background: rgba(0, 0, 0, 0.03);
+    margin: 0 -8px 16px -8px;
+    padding: 4px 8px 8px 8px;
+    border-radius: 12px;
+    border: 1px solid rgba(0, 0, 0, 0.04);
+  }
+  :global(body.test-dark) .unified-section {
+    background: rgba(255, 255, 255, 0.03);
+    border-color: rgba(255, 255, 255, 0.05);
+  }
+  .unified-section .sidebar-heading {
+    padding: 8px 12px 6px 12px;
+    color: var(--text-primary);
+    font-weight: 600;
+    opacity: 0.8;
+  }
+  .unified-section .sidebar-menu {
+    margin-bottom: 0;
   }
   .sidebar-item {
     display: flex;

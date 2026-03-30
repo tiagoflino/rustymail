@@ -11,6 +11,7 @@ export interface LocalThread {
     starred: boolean;
     has_attachments?: boolean;
     important?: boolean;
+    account_id: string;
 }
 
 export const threads = writable<LocalThread[]>([]);
