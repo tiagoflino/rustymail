@@ -1,6 +1,6 @@
 [package]
 name = "rustymail"
-version = "0.5.0"
+version = "0.6.2"
 description = "Rustymail"
 authors = ["you"]
 edition = "2021"
