@@ -143,7 +143,7 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
             "https://www.googleapis.com/auth/gmail.labels".to_string(),
         ))
         .add_scope(oauth2::Scope::new(
-            "https://www.googleapis.com/auth/calendar.readonly".to_string(),
+            "https://www.googleapis.com/auth/calendar.events".to_string(),
         ))
         .add_scope(oauth2::Scope::new(
             "https://www.googleapis.com/auth/drive.file".to_string(),
@@ -172,6 +172,7 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
 
     let mut code = String::new();
     let mut state = String::new();
+    let mut error_param = String::new();
 
     if request_line.starts_with("GET") {
         let parts: Vec<&str> = request_line.split_whitespace().collect();
@@ -185,11 +186,25 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
                             code = v.to_string();
                         } else if k == "state" {
                             state = v.to_string();
+                        } else if k == "error" {
+                            error_param = v.to_string();
                         }
                     }
                 }
             }
         }
+    }
+
+    if !error_param.is_empty() {
+        let response = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body style='font-family:-apple-system,system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;color:#333;'><div style='text-align:center'><h2>Authentication Cancelled</h2><p>You did not approve the required permissions. You can close this tab and return to Rustymail.</p></div></body></html>";
+        let _ = stream.write_all(response.as_bytes()).await;
+        return Err(format!("Google authentication was cancelled or denied: {}", error_param));
+    }
+
+    if code.is_empty() {
+        let response = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body style='font-family:-apple-system,system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;color:#333;'><div style='text-align:center'><h2>Authentication Failed</h2><p>No authorization code received. You can close this tab and return to Rustymail.</p></div></body></html>";
+        let _ = stream.write_all(response.as_bytes()).await;
+        return Err("No authorization code received from Google.".to_string());
     }
 
     let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body style='font-family:-apple-system,system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;color:#333;'><div style='text-align:center'><h2>Authentication successful!</h2><p>You can close this tab and return to Rustymail.</p></div></body></html>";
@@ -221,9 +236,37 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
         .map(|r| r.secret().clone())
         .unwrap_or_default();
 
-    println!("Tokens acquired successfully!");
+    println!("Tokens acquired successfully! Validating permissions...");
 
     let http_client = reqwest::Client::new();
+    
+    // Validate scopes
+    if let Ok(token_info_res) = http_client
+        .get(format!("https://oauth2.googleapis.com/tokeninfo?access_token={}", access_token))
+        .send()
+        .await
+    {
+        if let Ok(token_info) = token_info_res.json::<serde_json::Value>().await {
+            if let Some(scope_str) = token_info["scope"].as_str() {
+                let granted_scopes: Vec<&str> = scope_str.split_whitespace().collect();
+                let required_scopes = vec![
+                    "https://www.googleapis.com/auth/gmail.readonly",
+                    "https://www.googleapis.com/auth/gmail.modify",
+                    "https://www.googleapis.com/auth/gmail.send",
+                    "https://www.googleapis.com/auth/gmail.labels",
+                    "https://www.googleapis.com/auth/calendar.events",
+                    "https://www.googleapis.com/auth/drive.file",
+                ];
+
+                for req_scope in required_scopes {
+                    if !granted_scopes.contains(&req_scope) {
+                        // Scope denied - we must fail safely so the user tries again
+                        return Err("Missing required permissions. Please authenticate again and ensure you check ALL permission boxes on the authorization screen.".to_string());
+                    }
+                }
+            }
+        }
+    }
     let (email, display_name, avatar_url) = match http_client
         .get("https://www.googleapis.com/oauth2/v2/userinfo")
         .header("Authorization", format!("Bearer {}", &access_token))
