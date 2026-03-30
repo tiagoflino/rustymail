@@ -10,6 +10,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 vi.mock('@tauri-apps/api/window', () => ({
     getCurrentWindow: vi.fn(() => ({
         setDecorations: vi.fn(() => Promise.resolve()),
+        setBadgeCount: vi.fn(() => Promise.resolve()),
         minimize: vi.fn(() => Promise.resolve()),
         maximize: vi.fn(() => Promise.resolve()),
         toggleMaximize: vi.fn(() => Promise.resolve()),

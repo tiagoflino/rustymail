@@ -97,7 +97,7 @@
     </div>
     <div class="header-actions">
       <button class="icon-btn" onclick={() => openUrl('https://calendar.google.com/calendar/r/eventedit?action=TEMPLATE')} title="New Event">{@html iconAdd}</button>
-      <button class="icon-btn" onclick={onClose}>{@html iconClose}</button>
+      <button class="icon-btn close-btn" onclick={onClose}>{@html iconClose}</button>
     </div>
   </header>
 
