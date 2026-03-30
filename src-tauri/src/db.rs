@@ -24,7 +24,9 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         type TEXT,
         unread_count INTEGER,
         threads_total INTEGER DEFAULT 0,
-        threads_unread INTEGER DEFAULT 0
+        threads_unread INTEGER DEFAULT 0,
+        bg_color TEXT,
+        text_color TEXT
     );
 
     CREATE TABLE IF NOT EXISTS threads (
@@ -235,6 +237,16 @@ async fn m004_backfill_thread_metadata(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+async fn m005_add_label_colors(pool: &SqlitePool) -> Result<()> {
+    for col in ["bg_color", "text_color"] {
+        if !has_column(pool, "labels", col).await {
+            sqlx::query(&format!("ALTER TABLE labels ADD COLUMN {} TEXT", col))
+                .execute(pool).await?;
+        }
+    }
+    Ok(())
+}
+
 async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     let applied: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
         .fetch_all(pool)
@@ -246,6 +258,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
             (1, "threads", "synced_history_id"),
             (2, "threads", "metadata_synced"),
             (3, "labels", "threads_total"),
+            (5, "labels", "bg_color"),
         ];
         for (version, table, column) in &bootstrap_checks {
             if has_column(pool, table, column).await {
@@ -266,7 +279,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 }
 
 async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()> {
-    for version in 1..=4i64 {
+    for version in 1..=5i64 {
         if !applied.contains(&version) {
             println!("[Migration] Running v{}...", version);
             match version {
@@ -274,6 +287,7 @@ async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()
                 2 => m002_add_thread_metadata_columns(pool).await?,
                 3 => m003_add_label_stats_columns(pool).await?,
                 4 => m004_backfill_thread_metadata(pool).await?,
+                5 => m005_add_label_colors(pool).await?,
                 _ => {}
             }
             sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
@@ -438,6 +452,8 @@ mod tests {
         let names: Vec<&str> = cols.iter().map(|c| c.name.as_str()).collect();
         assert!(names.contains(&"threads_total"), "labels missing threads_total column");
         assert!(names.contains(&"threads_unread"), "labels missing threads_unread column");
+        assert!(names.contains(&"bg_color"), "labels missing bg_color column");
+        assert!(names.contains(&"text_color"), "labels missing text_color column");
     }
 
     #[tokio::test]
@@ -452,6 +468,7 @@ mod tests {
         assert!(versions.contains(&2));
         assert!(versions.contains(&3));
         assert!(versions.contains(&4));
+        assert!(versions.contains(&5));
     }
 
     #[tokio::test]
@@ -462,6 +479,6 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
             .fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 4);
+        assert_eq!(count, 5);
     }
 }

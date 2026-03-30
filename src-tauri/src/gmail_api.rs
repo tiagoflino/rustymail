@@ -20,6 +20,14 @@ fn gmail_api_url(path: &str) -> String {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct LabelColor {
+    #[serde(rename = "backgroundColor")]
+    pub background_color: Option<String>,
+    #[serde(rename = "textColor")]
+    pub text_color: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct GmailLabel {
     pub id: String,
     pub name: String,
@@ -30,6 +38,7 @@ pub struct GmailLabel {
     pub threads_total: Option<i32>,
     #[serde(rename = "threadsUnread")]
     pub threads_unread: Option<i32>,
+    pub color: Option<LabelColor>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -337,10 +346,12 @@ pub async fn fetch_and_store_labels(
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
 
     for label in labels_res.labels {
+        let (bg, text) = label.color.map(|c| (c.background_color, c.text_color)).unwrap_or((None, None));
+
         sqlx::query(
-            "INSERT INTO labels (id, account_id, name, type, unread_count, threads_total, threads_unread)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET name=excluded.name, unread_count=excluded.unread_count, threads_total=excluded.threads_total, threads_unread=excluded.threads_unread",
+            "INSERT INTO labels (id, account_id, name, type, unread_count, threads_total, threads_unread, bg_color, text_color)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET name=excluded.name, unread_count=excluded.unread_count, threads_total=excluded.threads_total, threads_unread=excluded.threads_unread, bg_color=excluded.bg_color, text_color=excluded.text_color",
         )
         .bind(&label.id)
         .bind(account_id)
@@ -349,6 +360,8 @@ pub async fn fetch_and_store_labels(
         .bind(label.messages_unread.unwrap_or(0))
         .bind(label.threads_total.unwrap_or(0))
         .bind(label.threads_unread.unwrap_or(0))
+        .bind(bg)
+        .bind(text)
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;

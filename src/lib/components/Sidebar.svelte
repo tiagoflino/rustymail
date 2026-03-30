@@ -198,7 +198,7 @@
                   onselectlabel(label.id);
               }}
             >
-              <span class="icon">{@html getLabelIcon("FOLDER")}</span>
+              <span class="icon" style={label.bgColor ? `color: ${label.bgColor};` : ''}>{@html getLabelIcon("FOLDER")}</span>
               <span class="label-text">{label.name}</span>
               {#if label.unread_count > 0}<span class="badge"
                   >{label.unread_count}</span
