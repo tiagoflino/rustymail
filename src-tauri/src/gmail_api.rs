@@ -49,9 +49,10 @@ pub struct LabelsResponse {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct GmailThread {
     pub id: String,
-    pub snippet: String,
-    #[serde(rename = "historyId")]
-    pub history_id: String,
+    #[serde(default)]
+    pub snippet: Option<String>,
+    #[serde(rename = "historyId", default)]
+    pub history_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -447,7 +448,13 @@ pub async fn fetch_and_store_threads(
         return Err(format!("Failed to fetch threads: {}", res.status()));
     }
 
-    let threads_res: ThreadsResponse = res.json().await.map_err(|e| e.to_string())?;
+    let body = res.text().await.map_err(|e| e.to_string())?;
+
+    let threads_res: ThreadsResponse = if body.trim().is_empty() {
+        ThreadsResponse { threads: None, next_page_token: None }
+    } else {
+        serde_json::from_str(&body).map_err(|e| e.to_string())?
+    };
     let next_page_token = threads_res.next_page_token.clone();
     let mut fetched_ids: Vec<String> = Vec::new();
 
@@ -460,8 +467,8 @@ pub async fn fetch_and_store_threads(
                  VALUES (?, ?, ?, ?, ?)
                  ON CONFLICT(id) DO UPDATE SET snippet=excluded.snippet, history_id=excluded.history_id"
             )
-            .bind(&thread.id).bind(account_id).bind(&thread.snippet)
-            .bind(&thread.history_id).bind(0)
+            .bind(&thread.id).bind(account_id).bind(thread.snippet.as_deref().unwrap_or(""))
+            .bind(thread.history_id.as_deref().unwrap_or("")).bind(0)
             .execute(&mut *tx).await.map_err(|e| e.to_string())?;
 
             if let Some(labels) = &label_ids {
@@ -479,7 +486,7 @@ pub async fn fetch_and_store_threads(
         tx.commit().await.map_err(|e| e.to_string())?;
 
         // Seed history watermark from the highest historyId in the fetched threads
-        if let Some(max_hid) = threads.iter().map(|t| &t.history_id).max() {
+        if let Some(max_hid) = threads.iter().filter_map(|t| t.history_id.as_deref()).max() {
             set_last_history_id(pool, account_id, max_hid).await;
         }
     }

@@ -11,6 +11,7 @@
     iconCalendar,
   } from "$lib/components/icons";
   import { isSyncing, lastSyncError } from "$lib/stores/threads";
+  import { buildLabelTree, type LabelTreeNode } from "$lib/utils/labelTree";
 
   interface AccountInfo {
     id: string;
@@ -75,6 +76,17 @@
   }: Props = $props();
 
   let showAccountDropdown = $state(false);
+
+  let expandedLabels: Set<string> = $state(new Set());
+
+  function toggleLabelExpand(fullPath: string) {
+    if (expandedLabels.has(fullPath)) {
+      expandedLabels.delete(fullPath);
+    } else {
+      expandedLabels.add(fullPath);
+    }
+    expandedLabels = new Set(expandedLabels);
+  }
 </script>
 
 <aside class="pane-sidebar" class:collapsed>
@@ -212,31 +224,51 @@
       {/each}
     </ul>
 
+    {#snippet labelTreeNode(nodes: LabelTreeNode[], depth: number)}
+      {#each nodes as node}
+        {@const hasChildren = node.children.length > 0}
+        {@const isExpanded = expandedLabels.has(node.fullPath)}
+        {@const isActive = node.label && $selectedLabelId === node.label.id}
+        <li>
+          <div
+            class="sidebar-item {isActive ? 'active' : ''}"
+            style="padding-left: {12 + depth * 16}px;"
+            role="button"
+            tabindex="0"
+            onclick={() => {
+              if (node.label) onselectlabel(node.label.id);
+              if (hasChildren) toggleLabelExpand(node.fullPath);
+            }}
+            onkeydown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                if (node.label) onselectlabel(node.label.id);
+                if (hasChildren) toggleLabelExpand(node.fullPath);
+              }
+            }}
+          >
+            {#if hasChildren}
+              <span class="icon tree-chevron" class:expanded={isExpanded}>{@html iconChevronDown}</span>
+            {:else}
+              <span class="icon" style={node.label?.bgColor ? `color: ${node.label.bgColor};` : ''}>{@html getLabelIcon("FOLDER")}</span>
+            {/if}
+            <span class="label-text">{node.name}</span>
+            {#if node.label && node.label.unread_count > 0}
+              <span class="badge">{node.label.unread_count}</span>
+            {/if}
+          </div>
+          {#if hasChildren && isExpanded}
+            <ul class="sidebar-menu nested">
+              {@render labelTreeNode(node.children, depth + 1)}
+            </ul>
+          {/if}
+        </li>
+      {/each}
+    {/snippet}
+
     {#if !collapsed && $labels.filter((l) => l.type === "user").length > 0}
       <h2 class="sidebar-heading">Labels</h2>
       <ul class="sidebar-menu">
-        {#each $labels.filter((l) => l.type === "user") as label}
-          <li>
-            <div
-              class="sidebar-item {$selectedLabelId === label.id
-                ? 'active'
-                : ''}"
-              role="button"
-              tabindex="0"
-              onclick={() => onselectlabel(label.id)}
-              onkeydown={(e) => {
-                if (e.key === "Enter" || e.key === " ")
-                  onselectlabel(label.id);
-              }}
-            >
-              <span class="icon" style={label.bgColor ? `color: ${label.bgColor};` : ''}>{@html getLabelIcon("FOLDER")}</span>
-              <span class="label-text">{label.name}</span>
-              {#if label.unread_count > 0}<span class="badge"
-                  >{label.unread_count}</span
-                >{/if}
-            </div>
-          </li>
-        {/each}
+        {@render labelTreeNode(buildLabelTree($labels.filter((l) => l.type === "user")), 0)}
       </ul>
     {/if}
   </div>
@@ -700,6 +732,19 @@
     font-size: 11px;
     line-height: 14px;
     padding: 0 4px;
+  }
+  .tree-chevron {
+    transition: transform 0.15s ease;
+    transform: rotate(-90deg);
+    font-size: 10px;
+  }
+  .tree-chevron.expanded {
+    transform: rotate(0deg);
+  }
+  .sidebar-menu.nested {
+    padding: 0;
+    margin: 0;
+    list-style: none;
   }
   .spin {
     animation: spin 0.8s linear infinite;
