@@ -71,6 +71,7 @@ pub fn run() {
             commands::messages::get_attachments,
             commands::messages::download_attachment,
             commands::messages::open_attachment,
+            commands::messages::get_message_previews,
             commands::search::search_messages,
             commands::search::get_hydration_progress,
             commands::search::get_search_suggestions,

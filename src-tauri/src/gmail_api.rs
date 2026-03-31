@@ -156,6 +156,7 @@ struct HistoryResponse {
 pub struct SyncDelta {
     pub threads_to_hydrate: Vec<String>,
     pub new_inbox_message_ids: Vec<String>,
+    pub new_inbox_thread_ids: Vec<String>,
     pub new_history_id: String,
 }
 
@@ -1055,6 +1056,7 @@ pub async fn fetch_history(
 
     let mut threads_to_hydrate: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut new_inbox_message_ids: Vec<String> = Vec::new();
+    let mut new_inbox_thread_ids: Vec<String> = Vec::new();
 
     for record in &all_records {
         for added in &record.messages_added {
@@ -1062,6 +1064,7 @@ pub async fn fetch_history(
             if let Some(ref labels) = added.message.label_ids {
                 if labels.contains(&"INBOX".to_string()) && labels.contains(&"UNREAD".to_string()) {
                     new_inbox_message_ids.push(added.message.id.clone());
+                    new_inbox_thread_ids.push(added.message.thread_id.clone());
                 }
             }
         }
@@ -1138,6 +1141,7 @@ pub async fn fetch_history(
     Ok(Some(SyncDelta {
         threads_to_hydrate: threads_to_hydrate.into_iter().collect(),
         new_inbox_message_ids,
+        new_inbox_thread_ids,
         new_history_id: latest_history_id,
     }))
 }

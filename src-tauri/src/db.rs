@@ -137,6 +137,7 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         ("reply_position", "above"),
         ("notifications_enabled", "true"),
         ("notifications_sound", "true"),
+        ("notifications_preview", "false"),
         ("sync_frequency", "30"),
         ("max_threads_sync", "100"),
         ("max_cache_mb", "500"),

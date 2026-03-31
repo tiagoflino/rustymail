@@ -701,6 +701,26 @@
                     />
                   </label>
                 </div>
+                <div class="card-row">
+                  <label class="toggle-row">
+                    <div class="toggle-label">
+                      <span class="setting-name">Show Message Preview</span>
+                      <span class="setting-hint"
+                        >Show sender and subject in notifications</span
+                      >
+                    </div>
+                    <input
+                      type="checkbox"
+                      class="toggle"
+                      checked={settings.notifications_preview === "true"}
+                      onchange={(e) =>
+                        saveSetting(
+                          "notifications_preview",
+                          e.currentTarget.checked ? "true" : "false",
+                        )}
+                    />
+                  </label>
+                </div>
                 <div class="card-row last">
                   <label class="toggle-row">
                     <div class="toggle-label">

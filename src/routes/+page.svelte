@@ -2,7 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { listen } from "@tauri-apps/api/event";
-  import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
+  import { sendNotification, isPermissionGranted, requestPermission, onAction } from "@tauri-apps/plugin-notification";
   import { checkForUpdates, setupPeriodicUpdateCheck } from "$lib/utils/updater";
   import { analyzeLinkSafety, type LinkAnalysis } from "$lib/utils/linkSafety";
   import { onMount, onDestroy } from "svelte";
@@ -294,23 +294,26 @@
       lastSyncError.set(null);
 
       let allNewMessageIds: string[] = [];
+      let allNewThreadIds: string[] = [];
 
       if (isUnified) {
         // Sync each account sequentially
         for (const acc of allAccounts) {
           try {
-            const result = await invoke<{ new_message_ids: string[] }>("sync_gmail_data", {
+            const result = await invoke<{ new_message_ids: string[]; new_thread_ids: string[] }>("sync_gmail_data", {
               labelId: realLabelId,
               accountId: acc.id,
             });
             allNewMessageIds.push(...result.new_message_ids);
+            allNewThreadIds.push(...result.new_thread_ids);
           } catch (e) {
             console.warn(`[UnifiedSync] Failed to sync account ${acc.id}:`, e);
           }
         }
       } else {
-        const result = await invoke<{ new_message_ids: string[] }>("sync_gmail_data", { labelId: realLabelId, accountId: null });
+        const result = await invoke<{ new_message_ids: string[]; new_thread_ids: string[] }>("sync_gmail_data", { labelId: realLabelId, accountId: null });
         allNewMessageIds = result.new_message_ids;
+        allNewThreadIds = result.new_thread_ids;
       }
 
       if (get(selectedLabelId) !== syncLabelId) return;
@@ -336,10 +339,28 @@
           const enabled = await invoke<string>("get_setting", { key: "notifications_enabled" });
           if (enabled === "true") {
             const count = allNewMessageIds.length;
-            sendNotification({
-              title: "Rustymail",
-              body: count === 1 ? "You have a new message" : `You have ${count} new messages`,
-            });
+            const preview = await invoke<string>("get_setting", { key: "notifications_preview" });
+            let title = "Rustymail";
+            let body = count === 1 ? "You have a new message" : `You have ${count} new messages`;
+
+            if (preview === "true") {
+              try {
+                const previews = await invoke<Array<{ sender: string; subject: string }>>(
+                  "get_message_previews",
+                  { threadIds: allNewThreadIds }
+                );
+                if (previews.length > 0) {
+                  const latest = previews[0];
+                  const sender = latest.sender.replace(/<[^>]+>/g, "").trim();
+                  body = `${sender}: ${latest.subject}`;
+                  if (count > 1) {
+                    title = `Rustymail - ${count} new messages`;
+                  }
+                }
+              } catch (_) {}
+            }
+
+            sendNotification({ title, body });
           }
         } catch (_) {}
       }
@@ -1266,6 +1287,14 @@
     // Request notification permission
     isPermissionGranted().then((granted) => {
       if (!granted) requestPermission();
+    }).catch(() => {});
+
+    // Bring app to foreground when notification is clicked
+    onAction(() => {
+      const win = getCurrentWindow();
+      win.show();
+      win.unminimize();
+      win.setFocus();
     }).catch(() => {});
 
     shortcutManager.loadSettings();

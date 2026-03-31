@@ -4,6 +4,7 @@ use tauri::Manager;
 #[derive(serde::Serialize)]
 pub struct SyncResult {
     pub new_message_ids: Vec<String>,
+    pub new_thread_ids: Vec<String>,
 }
 
 #[tauri::command]
@@ -24,6 +25,7 @@ pub async fn sync_gmail_data(
         .await?;
 
     let mut new_message_ids: Vec<String> = Vec::new();
+    let mut new_thread_ids: Vec<String> = Vec::new();
 
     let last_history_id =
         crate::gmail_api::get_last_history_id(pool.inner(), &account.id).await;
@@ -56,6 +58,7 @@ pub async fn sync_gmail_data(
                 )
                 .await;
                 new_message_ids = delta.new_inbox_message_ids;
+                new_thread_ids = delta.new_inbox_thread_ids;
             }
             Ok(None) => {
                 println!("[Sync] History expired (404), falling back to full sync");
@@ -73,7 +76,7 @@ pub async fn sync_gmail_data(
 
     spawn_background_cleanup(pool.inner(), &account, &app_handle);
 
-    Ok(SyncResult { new_message_ids })
+    Ok(SyncResult { new_message_ids, new_thread_ids })
 }
 
 async fn full_sync(

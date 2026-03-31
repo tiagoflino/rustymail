@@ -236,6 +236,40 @@ pub async fn open_attachment(
         .map_err(|e| format!("Failed to open file: {}", e))
 }
 
+#[derive(serde::Serialize)]
+pub struct MessagePreview {
+    pub sender: String,
+    pub subject: String,
+}
+
+#[tauri::command]
+pub async fn get_message_previews(
+    app_handle: tauri::AppHandle,
+    thread_ids: Vec<String>,
+) -> Result<Vec<MessagePreview>, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    if thread_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let placeholders: Vec<String> = thread_ids.iter().enumerate().map(|(i, _)| format!("?{}", i + 1)).collect();
+    let query = format!(
+        "SELECT sender, subject FROM threads WHERE id IN ({}) ORDER BY latest_date DESC",
+        placeholders.join(", ")
+    );
+    let mut q = sqlx::query_as::<_, (Option<String>, Option<String>)>(&query);
+    for id in &thread_ids {
+        q = q.bind(id);
+    }
+    let rows = q.fetch_all(pool.inner()).await.map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|(sender, subject)| MessagePreview {
+            sender: sender.unwrap_or_default(),
+            subject: subject.unwrap_or_default(),
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
