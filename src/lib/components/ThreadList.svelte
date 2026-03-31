@@ -7,11 +7,10 @@
     iconHistory,
     iconUser,
     iconTag,
-    iconStar,
-    iconStarFilled,
     iconImportantArrow,
     iconImportantArrowFilled,
   } from "$lib/components/icons";
+  import { getStarIcon, getStarColor } from "$lib/components/starIcons";
   import { threads, isSyncing } from "$lib/stores/threads";
   import { selectedThreadId } from "$lib/stores/messages";
   import { formatTime, decodeEntities } from "$lib/utils/formatters.js";
@@ -73,7 +72,7 @@
     allAccounts: AccountInfo[];
     isUnifiedView: boolean;
     onselectthread: (threadId: string) => void;
-    ontogglestar: (threadId: string, starred: boolean) => void;
+    ontogglestar: (threadId: string, starType: string | null) => void;
     ontoggleimportant: (threadId: string, important: boolean) => void;
     onfirstpage: () => void;
     onprevpage: () => void;
@@ -402,12 +401,13 @@
           <div class="thread-item-leading">
             <button
               class="thread-star {thread.starred ? 'starred' : ''}"
+              style={thread.star_type ? `color: ${getStarColor(thread.star_type)};` : ''}
               onclick={(e) => {
                 e.stopPropagation();
-                ontogglestar(thread.id, thread.starred);
+                ontogglestar(thread.id, thread.star_type ?? null);
               }}
             >
-              {@html thread.starred ? iconStarFilled : iconStar}
+              {@html getStarIcon(thread.star_type ?? null)}
             </button>
             <button
               class="thread-important {thread.important ? 'active' : ''}"
@@ -800,7 +800,6 @@
     background: rgba(255, 255, 255, 0.05);
   }
   .thread-star.starred {
-    color: #f2a600;
     opacity: 1;
   }
   .thread-important {

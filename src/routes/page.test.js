@@ -74,8 +74,8 @@ describe('+page.svelte', () => {
     it('loads and displays threads when authenticated', async () => {
         isAuthenticated.set(true);
         const mockThreads = [
-            { id: 't1', snippet: 'Hello from test', sender: 'Sender 1', subject: 'Subject 1', internal_date: Date.now(), unread: 1, starred: false },
-            { id: 't2', snippet: 'Another one', sender: 'Sender 2', subject: 'Subject 2', internal_date: Date.now() - 1000, unread: 0, starred: true }
+            { id: 't1', snippet: 'Hello from test', sender: 'Sender 1', subject: 'Subject 1', internal_date: Date.now(), unread: 1, starred: false, star_type: null },
+            { id: 't2', snippet: 'Another one', sender: 'Sender 2', subject: 'Subject 2', internal_date: Date.now() - 1000, unread: 0, starred: true, star_type: 'YELLOW_STAR' }
         ];
 
         vi.mocked(invoke).mockImplementation(async (cmd) => {
@@ -105,7 +105,7 @@ describe('+page.svelte', () => {
     it('displays messages when a thread is selected', async () => {
         isAuthenticated.set(true);
         const mockThreads = [
-            { id: 't1', snippet: 'Thread 1', sender: 'Sender 1', subject: 'Subject 1', internal_date: Date.now(), unread: 1, starred: false }
+            { id: 't1', snippet: 'Thread 1', sender: 'Sender 1', subject: 'Subject 1', internal_date: Date.now(), unread: 1, starred: false, star_type: null }
         ];
         const mockMessages = [
             { id: 'm1', thread_id: 't1', sender: 'Sender 1', recipients: 'me@test.com', subject: 'Subject 1', snippet: 'Hello World', body_plain: 'Hello World', body_html: '', internal_date: Date.now(), is_draft: false }

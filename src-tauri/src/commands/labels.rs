@@ -171,13 +171,9 @@ mod tests {
             ("GREEN_CIRCLE", "Green circle"),
             ("RED_CIRCLE", "Red circle"),
             ("ORANGE_CIRCLE", "Orange circle"),
+            ("YELLOW_CIRCLE", "Yellow circle"),
             ("BLUE_CIRCLE", "Blue circle"),
             ("PURPLE_CIRCLE", "Purple circle"),
-            ("RED_BANG", "Red bang"),
-            ("BLUE_INFO", "Blue info"),
-            ("ORANGE_GUILLEMET", "Orange guillemet"),
-            ("GREEN_CHECK", "Green check"),
-            ("PURPLE_QUESTION", "Purple question"),
         ] {
             sqlx::query("INSERT INTO labels (id, account_id, name, type, unread_count) VALUES (?, 'acc1', ?, 'system', 0)")
                 .bind(id).bind(name)

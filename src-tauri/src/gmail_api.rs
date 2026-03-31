@@ -1104,6 +1104,9 @@ pub async fn fetch_history(
                     .execute(pool)
                     .await;
             }
+            if added.label_ids.iter().any(|l| l == "STARRED") {
+                threads_to_hydrate.insert(added.message.thread_id.clone());
+            }
         }
 
         // labelsRemoved: label_ids = the labels that were REMOVED
@@ -1220,6 +1223,77 @@ pub async fn modify_thread(
         .await
         .map_err(|e| e.to_string())?;
     }
+
+    // Handle superstar labels in message_labels for the thread's messages
+    let superstar_labels = [
+        "YELLOW_STAR", "ORANGE_STAR", "RED_STAR", "PURPLE_STAR", "BLUE_STAR", "GREEN_STAR",
+        "GREEN_CIRCLE", "RED_CIRCLE", "ORANGE_CIRCLE", "YELLOW_CIRCLE", "BLUE_CIRCLE", "PURPLE_CIRCLE",
+    ];
+    let stars_to_remove: Vec<&str> = remove_labels.iter()
+        .filter_map(|l| superstar_labels.iter().find(|&&s| s == l.as_str()).copied())
+        .collect();
+    let stars_to_add: Vec<&str> = add_labels.iter()
+        .filter_map(|l| superstar_labels.iter().find(|&&s| s == l.as_str()).copied())
+        .collect();
+
+    if !stars_to_remove.is_empty() {
+        // Get all message IDs for this thread
+        let msg_ids: Vec<String> = sqlx::query_scalar("SELECT id FROM messages WHERE thread_id = ?")
+            .bind(thread_id)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        for msg_id in &msg_ids {
+            for star in &stars_to_remove {
+                sqlx::query("DELETE FROM message_labels WHERE message_id = ? AND label_id = ?")
+                    .bind(msg_id)
+                    .bind(star)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        // Also remove from thread_labels
+        for star in &stars_to_remove {
+            sqlx::query("DELETE FROM thread_labels WHERE thread_id = ? AND label_id = ?")
+                .bind(thread_id)
+                .bind(star)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
+    if !stars_to_add.is_empty() {
+        // Get the first message ID for this thread (Gmail applies star to first message)
+        let first_msg_id: Option<String> = sqlx::query_scalar(
+            "SELECT id FROM messages WHERE thread_id = ? ORDER BY internal_date ASC LIMIT 1"
+        )
+            .bind(thread_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        if let Some(msg_id) = first_msg_id {
+            for star in &stars_to_add {
+                sqlx::query("INSERT OR IGNORE INTO message_labels (message_id, label_id) VALUES (?, ?)")
+                    .bind(&msg_id)
+                    .bind(star)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        // Also add to thread_labels
+        for star in &stars_to_add {
+            sqlx::query("INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?, ?)")
+                .bind(thread_id)
+                .bind(star)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
     tx.commit().await.map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -3903,8 +3977,8 @@ mod tests {
 
         let delta = result.unwrap().unwrap();
 
-        // Label changes should NOT trigger hydration
-        assert!(delta.threads_to_hydrate.is_empty());
+        // STARRED addition triggers hydration to pick up superstar label
+        assert!(delta.threads_to_hydrate.contains(&"t1".to_string()));
 
         // Verify label was applied locally
         let label_count: (i32,) = sqlx::query_as("SELECT COUNT(*) FROM message_labels WHERE message_id = 'msg1' AND label_id = 'STARRED'")

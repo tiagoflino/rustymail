@@ -24,6 +24,8 @@
   import {
     formatLabelName,
   } from "$lib/components/icons";
+  import { availableSuperstars } from "$lib/stores/superstars";
+  import { getNextStar } from "$lib/components/starIcons";
   import Settings from "$lib/components/Settings.svelte";
   import Compose from "$lib/components/Compose.svelte";
   import FullCalendar from "$lib/components/FullCalendar.svelte";
@@ -506,6 +508,9 @@
             limit: threadsPerPage,
           })) as LocalThread[];
 
+      const starredThreads = fetched.filter(t => t.starred);
+      if (starredThreads.length > 0) console.log("[DEBUG loadThreads] starred threads:", starredThreads.map(t => ({ id: t.id, starred: t.starred, star_type: t.star_type })));
+
       if ((get(selectedLabelId) || null) !== invocationLabelId) return;
 
       if (reset && fetched.length === 0 && invocationLabelId && !silent) {
@@ -959,23 +964,26 @@
     }
   }
 
-  async function toggleStar(threadId: string, currentStarred: boolean) {
-    const newState = !currentStarred;
+  async function cycleStar(threadId: string, currentStarType: string | null) {
+    const available = get(availableSuperstars);
+    const nextStar = getNextStar(currentStarType, available);
+    const newStarred = nextStar !== null;
+    const currentList = get(threads);
+
+    // Optimistic update
     threads.update((list) =>
-      list.map((t) => (t.id === threadId ? { ...t, starred: newState } : t)),
+      list.map((t) => (t.id === threadId ? { ...t, starred: newStarred, star_type: nextStar } : t)),
     );
     try {
-      await invoke("toggle_thread_star", {
+      await invoke("set_thread_star", {
         threadId: threadId,
-        starred: newState,
+        starLabelId: nextStar,
+        accountId: null,
       });
     } catch (e) {
-      console.error("Failed to toggle star", e);
-      threads.update((list) =>
-        list.map((t) =>
-          t.id === threadId ? { ...t, starred: currentStarred } : t,
-        ),
-      );
+      console.error("Failed to set star", e);
+      threads.set(currentList);
+      addToast("Failed to update star", "error", 3000);
     }
   }
 
@@ -1065,6 +1073,11 @@
       await invoke("switch_account", { accountId: accountId });
       await refreshAccountState();
       await performSync(true);
+
+      // Reload superstars for new account
+      invoke<string[]>("get_available_superstars", { accountId: null })
+        .then((stars) => availableSuperstars.set(stars))
+        .catch(() => availableSuperstars.set(["YELLOW_STAR"]));
     } catch (e) {
       console.error("Switch account failed", e);
     }
@@ -1280,6 +1293,11 @@
       await loadLabels();
       await loadThreads(true);
       await checkAndSetupSync();
+
+      // Load available superstars
+      invoke<string[]>("get_available_superstars", { accountId: null })
+        .then((stars) => availableSuperstars.set(stars))
+        .catch(() => availableSuperstars.set(["YELLOW_STAR"]));
     }
 
     setTimeout(() => checkForUpdates(true), 5000);
@@ -1425,7 +1443,7 @@
         {allAccounts}
         isUnifiedView={$selectedLabelId.startsWith("UNIFIED_")}
         onselectthread={selectThread}
-        ontogglestar={toggleStar}
+        ontogglestar={cycleStar}
         ontoggleimportant={toggleImportant}
         onfirstpage={goToFirstPage}
         onprevpage={goToPrevPage}

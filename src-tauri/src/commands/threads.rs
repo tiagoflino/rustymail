@@ -11,6 +11,7 @@ pub struct LocalThread {
     pub subject: String,
     pub internal_date: i64,
     pub starred: bool,
+    pub star_type: Option<String>,
     pub has_attachments: bool,
     pub important: bool,
     pub account_id: String,
@@ -67,6 +68,7 @@ pub(crate) async fn get_threads_inner(
         subject: Option<String>,
         msg_date: Option<i64>,
         starred: Option<i32>,
+        star_type: Option<String>,
         has_attachments: Option<i32>,
         important: Option<i32>,
         account_id: String,
@@ -79,6 +81,10 @@ pub(crate) async fn get_threads_inner(
                 t.subject as subject,
                 t.latest_date as msg_date,
                 EXISTS (SELECT 1 FROM thread_labels tl WHERE tl.thread_id = t.id AND tl.label_id = 'STARRED') as starred,
+                (SELECT tls.label_id FROM thread_labels tls
+                 WHERE tls.thread_id = t.id
+                 AND tls.label_id IN ('YELLOW_STAR','ORANGE_STAR','RED_STAR','PURPLE_STAR','BLUE_STAR','GREEN_STAR','GREEN_CIRCLE','RED_CIRCLE','ORANGE_CIRCLE','YELLOW_CIRCLE','BLUE_CIRCLE','PURPLE_CIRCLE')
+                 LIMIT 1) as star_type,
                 EXISTS (SELECT 1 FROM messages m6 WHERE m6.thread_id = t.id AND m6.has_attachments = 1) as has_attachments,
                 EXISTS (SELECT 1 FROM thread_labels tl2 WHERE tl2.thread_id = t.id AND tl2.label_id = 'IMPORTANT') as important,
                 t.account_id
@@ -206,6 +212,7 @@ pub(crate) async fn get_threads_inner(
             subject: r.subject.unwrap_or_else(|| "No Subject".to_string()),
             internal_date: r.msg_date.unwrap_or(0),
             starred: r.starred.unwrap_or(0) == 1,
+            star_type: r.star_type,
             has_attachments: r.has_attachments.unwrap_or(0) == 1,
             important: r.important.unwrap_or(0) == 1,
             account_id: r.account_id,
@@ -388,6 +395,7 @@ pub(crate) async fn get_unified_threads_inner(
         subject: Option<String>,
         msg_date: Option<i64>,
         starred: Option<i32>,
+        star_type: Option<String>,
         has_attachments: Option<i32>,
         important: Option<i32>,
         account_id: String,
@@ -399,6 +407,10 @@ pub(crate) async fn get_unified_threads_inner(
                 t.subject as subject,
                 t.latest_date as msg_date,
                 EXISTS (SELECT 1 FROM thread_labels tl WHERE tl.thread_id = t.id AND tl.label_id = 'STARRED') as starred,
+                (SELECT tls.label_id FROM thread_labels tls
+                 WHERE tls.thread_id = t.id
+                 AND tls.label_id IN ('YELLOW_STAR','ORANGE_STAR','RED_STAR','PURPLE_STAR','BLUE_STAR','GREEN_STAR','GREEN_CIRCLE','RED_CIRCLE','ORANGE_CIRCLE','YELLOW_CIRCLE','BLUE_CIRCLE','PURPLE_CIRCLE')
+                 LIMIT 1) as star_type,
                 EXISTS (SELECT 1 FROM messages m6 WHERE m6.thread_id = t.id AND m6.has_attachments = 1) as has_attachments,
                 EXISTS (SELECT 1 FROM thread_labels tl2 WHERE tl2.thread_id = t.id AND tl2.label_id = 'IMPORTANT') as important,
                 t.account_id
@@ -530,6 +542,7 @@ pub(crate) async fn get_unified_threads_inner(
             subject: r.subject.unwrap_or_else(|| "No Subject".to_string()),
             internal_date: r.msg_date.unwrap_or(0),
             starred: r.starred.unwrap_or(0) == 1,
+            star_type: r.star_type,
             has_attachments: r.has_attachments.unwrap_or(0) == 1,
             important: r.important.unwrap_or(0) == 1,
             account_id: r.account_id,
@@ -812,6 +825,10 @@ pub(crate) async fn fetch_threads_by_ids(
                 t.subject as subject,
                 t.latest_date as msg_date,
                 EXISTS (SELECT 1 FROM thread_labels tl WHERE tl.thread_id = t.id AND tl.label_id = 'STARRED') as starred,
+                (SELECT tls.label_id FROM thread_labels tls
+                 WHERE tls.thread_id = t.id
+                 AND tls.label_id IN ('YELLOW_STAR','ORANGE_STAR','RED_STAR','PURPLE_STAR','BLUE_STAR','GREEN_STAR','GREEN_CIRCLE','RED_CIRCLE','ORANGE_CIRCLE','YELLOW_CIRCLE','BLUE_CIRCLE','PURPLE_CIRCLE')
+                 LIMIT 1) as star_type,
                 EXISTS (SELECT 1 FROM messages m6 WHERE m6.thread_id = t.id AND m6.has_attachments = 1) as has_attachments,
                 EXISTS (SELECT 1 FROM thread_labels tl2 WHERE tl2.thread_id = t.id AND tl2.label_id = 'IMPORTANT') as important,
                 t.account_id
@@ -831,6 +848,7 @@ pub(crate) async fn fetch_threads_by_ids(
         subject: Option<String>,
         msg_date: Option<i64>,
         starred: Option<i32>,
+        star_type: Option<String>,
         has_attachments: Option<i32>,
         important: Option<i32>,
         account_id: String,
@@ -854,6 +872,7 @@ pub(crate) async fn fetch_threads_by_ids(
             subject: r.subject.unwrap_or_else(|| "No Subject".to_string()),
             internal_date: r.msg_date.unwrap_or(0),
             starred: r.starred.unwrap_or(0) == 1,
+            star_type: r.star_type,
             has_attachments: r.has_attachments.unwrap_or(0) == 1,
             important: r.important.unwrap_or(0) == 1,
             account_id: r.account_id,
@@ -942,19 +961,46 @@ pub async fn mark_thread_read_status(
     .await
 }
 
+const SUPERSTAR_ORDER: &[&str] = &[
+    "YELLOW_STAR", "ORANGE_STAR", "RED_STAR", "PURPLE_STAR", "BLUE_STAR", "GREEN_STAR",
+    "GREEN_CIRCLE", "RED_CIRCLE", "ORANGE_CIRCLE", "YELLOW_CIRCLE", "BLUE_CIRCLE", "PURPLE_CIRCLE",
+];
+
 #[tauri::command]
-pub async fn toggle_thread_star(
+pub async fn set_thread_star(
     app_handle: tauri::AppHandle,
     thread_id: String,
-    starred: bool,
+    star_label_id: Option<String>,
+    account_id: Option<String>,
 ) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
-    let account = get_active_account(pool.inner()).await?;
-    let (add, remove) = if starred {
-        (vec!["STARRED".to_string()], vec![])
-    } else {
-        (vec![], vec!["STARRED".to_string()])
+    let account = match account_id {
+        Some(id) => super::accounts::get_account_by_id(pool.inner(), &id).await?,
+        None => get_active_account(pool.inner()).await?,
     };
+
+    // Only remove superstars that actually exist in the user's account
+    let existing_stars = sqlx::query_scalar::<_, String>(
+        "SELECT id FROM labels WHERE account_id = ? AND id IN ('YELLOW_STAR','ORANGE_STAR','RED_STAR','PURPLE_STAR','BLUE_STAR','GREEN_STAR','GREEN_CIRCLE','RED_CIRCLE','ORANGE_CIRCLE','YELLOW_CIRCLE','BLUE_CIRCLE','PURPLE_CIRCLE')"
+    )
+    .bind(&account.id)
+    .fetch_all(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let add = match star_label_id {
+        Some(ref label) => vec!["STARRED".to_string(), label.clone()],
+        None => vec![],
+    };
+
+    let mut remove: Vec<String> = existing_stars
+        .into_iter()
+        .filter(|s| !add.contains(s))
+        .collect();
+    if !add.contains(&"STARRED".to_string()) {
+        remove.push("STARRED".to_string());
+    }
+
     crate::gmail_api::modify_thread(
         pool.inner(),
         &account.id,
@@ -964,6 +1010,31 @@ pub async fn toggle_thread_star(
         remove,
     )
     .await
+}
+
+#[tauri::command]
+pub async fn get_available_superstars(
+    app_handle: tauri::AppHandle,
+    account_id: Option<String>,
+) -> Result<Vec<String>, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = match account_id {
+        Some(id) => super::accounts::get_account_by_id(pool.inner(), &id).await?,
+        None => get_active_account(pool.inner()).await?,
+    };
+
+    let rows = sqlx::query_scalar::<_, String>(
+        "SELECT id FROM labels WHERE account_id = ? AND id IN ('YELLOW_STAR','ORANGE_STAR','RED_STAR','PURPLE_STAR','BLUE_STAR','GREEN_STAR','GREEN_CIRCLE','RED_CIRCLE','ORANGE_CIRCLE','YELLOW_CIRCLE','BLUE_CIRCLE','PURPLE_CIRCLE')"
+    )
+    .bind(&account.id)
+    .fetch_all(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(SUPERSTAR_ORDER.iter()
+        .filter(|s| rows.contains(&s.to_string()))
+        .map(|s| s.to_string())
+        .collect())
 }
 
 #[tauri::command]

@@ -9,6 +9,7 @@ export interface LocalThread {
     subject: string;
     internal_date: number;
     starred: boolean;
+    star_type?: string | null;
     has_attachments?: boolean;
     important?: boolean;
     account_id: string;
