@@ -566,29 +566,22 @@
 
       if (silent) {
         threads.update((current) => {
-          const map = new Map(current.map((t) => [t.id, t]));
-          let hasNew = false;
-          const updated = [...current];
-          const newOnes: LocalThread[] = [];
+          const fetchedMap = new Map(fetched.map((t) => [t.id, t]));
+          const kept: LocalThread[] = [];
 
-          for (const f of fetched) {
-            const existing = map.get(f.id);
-            if (existing) {
-              if (
-                existing.unread !== f.unread ||
-                existing.starred !== f.starred ||
-                existing.snippet !== f.snippet
-              ) {
-                Object.assign(existing, f);
-              }
-            } else {
-              newOnes.push(f);
-              hasNew = true;
+          for (const t of current) {
+            const fresh = fetchedMap.get(t.id);
+            if (fresh) {
+              Object.assign(t, fresh);
+              kept.push(t);
+              fetchedMap.delete(t.id);
             }
           }
 
-          if (!hasNew) return updated;
-          return [...newOnes, ...updated];
+          const newOnes = [...fetchedMap.values()];
+
+          if (newOnes.length === 0 && kept.length === current.length) return kept;
+          return [...newOnes, ...kept];
         });
       } else {
         threads.set(fetched);
