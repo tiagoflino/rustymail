@@ -835,6 +835,13 @@ pub async fn batch_metadata_hydrate(
                     continue;
                 }
 
+                let _ = sqlx::query(
+                    "DELETE FROM thread_labels WHERE thread_id = ? AND label_id NOT LIKE 'CATEGORY_%'"
+                )
+                .bind(tid)
+                .execute(pool)
+                .await;
+
                 for msg in messages {
                     if let Some(label_ids) = &msg.label_ids {
                         for label_id in label_ids {
@@ -1137,13 +1144,30 @@ pub async fn fetch_history(
                             .await;
                     }
                 }
-            if removed.label_ids.iter().any(|l| l == "INBOX") {
-                let _ = sqlx::query(
-                    "DELETE FROM thread_labels WHERE thread_id = ? AND label_id = 'INBOX'"
+            for label in &removed.label_ids {
+                if label == "UNREAD" {
+                    continue;
+                }
+                let still_has: (i32,) = sqlx::query_as(
+                    "SELECT COUNT(*) FROM message_labels ml
+                     JOIN messages m ON ml.message_id = m.id
+                     WHERE m.thread_id = ? AND ml.label_id = ? AND ml.message_id != ?"
                 )
                 .bind(&removed.message.thread_id)
-                .execute(pool)
-                .await;
+                .bind(label)
+                .bind(&removed.message.id)
+                .fetch_one(pool)
+                .await
+                .unwrap_or((0,));
+                if still_has.0 == 0 {
+                    let _ = sqlx::query(
+                        "DELETE FROM thread_labels WHERE thread_id = ? AND label_id = ?"
+                    )
+                    .bind(&removed.message.thread_id)
+                    .bind(label)
+                    .execute(pool)
+                    .await;
+                }
             }
         }
     }
