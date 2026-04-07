@@ -35,8 +35,10 @@
   import MessageDetail from "$lib/components/MessageDetail.svelte";
   import LinkSafetyDialog from "$lib/components/LinkSafetyDialog.svelte";
   import CommandPalette from "$lib/components/CommandPalette.svelte";
+  import UpdateModal from "$lib/components/UpdateModal.svelte";
   import { shortcutManager } from "$lib/shortcut-manager";
   import { addToast } from "$lib/stores/toast";
+  import { pendingUpdate, installAndRestart } from "$lib/utils/updater";
   import {
     formatTime,
     prepareQuotedHtml,
@@ -1534,6 +1536,14 @@
   onAction={handleCommandAction}
   onClose={() => showCommandPalette = false}
 />
+
+{#if $pendingUpdate}
+  <UpdateModal
+    update={$pendingUpdate}
+    onClose={() => pendingUpdate.set(null)}
+    onInstall={installAndRestart}
+  />
+{/if}
 
 <Toasts />
 

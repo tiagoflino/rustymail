@@ -2,23 +2,16 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { addToast } from "$lib/stores/toast";
 
-let pendingUpdate: Update | null = null;
+import { writable, get } from "svelte/store";
+
+export const pendingUpdate = writable<Update | null>(null);
 let isInstalling = false;
 
 export async function checkForUpdates(silent: boolean = true): Promise<void> {
     try {
         const update = await check();
         if (update) {
-            pendingUpdate = update;
-            addToast(
-                `Rustymail ${update.version} is available`,
-                "info",
-                0,
-                {
-                    label: "Update",
-                    onClick: () => installAndRestart(),
-                }
-            );
+            pendingUpdate.set(update);
         } else if (!silent) {
             addToast("You're on the latest version", "success", 3000);
         }
@@ -30,14 +23,15 @@ export async function checkForUpdates(silent: boolean = true): Promise<void> {
     }
 }
 
-async function installAndRestart(): Promise<void> {
-    if (!pendingUpdate || isInstalling) return;
+export async function installAndRestart(): Promise<void> {
+    const update = get(pendingUpdate);
+    if (!update || isInstalling) return;
     isInstalling = true;
 
     addToast("Downloading update...", "info", 0);
 
     try {
-        await pendingUpdate.downloadAndInstall();
+        await update.downloadAndInstall();
         await relaunch();
     } catch (error) {
         console.error("Update install failed:", error);
