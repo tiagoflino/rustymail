@@ -29,6 +29,7 @@
   import Settings from "$lib/components/Settings.svelte";
   import Compose from "$lib/components/Compose.svelte";
   import FullCalendar from "$lib/components/FullCalendar.svelte";
+  import Subscriptions from "$lib/components/Subscriptions.svelte";
   import Toasts from "$lib/components/Toasts.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import ThreadList from "$lib/components/ThreadList.svelte";
@@ -73,7 +74,7 @@
   let isLoadingThreads = $state(false);
   let showCompose = $state(false);
   let showCommandPalette = $state(false);
-  let viewMode = $state<"mail" | "calendar">("mail");
+  let viewMode = $state<"mail" | "calendar" | "subscriptions">("mail");
 
   let isMacOS = $state(false);
   let sidebarCollapsed = $state(false);
@@ -193,6 +194,7 @@
       case 'sidebar': toggleSidebar(); break;
       case 'view_mail': viewMode = 'mail'; break;
       case 'view_calendar': viewMode = 'calendar'; break;
+      case 'view_subscriptions': viewMode = 'subscriptions'; break;
       case 'nav_inbox': selectLabel('INBOX'); break;
       case 'nav_sent': selectLabel('SENT'); break;
       case 'nav_drafts': selectLabel('DRAFT'); break;
@@ -1410,6 +1412,7 @@
       onsync={() => performSync(true)}
       onthemecycle={cycleTheme}
       ontogglecalendar={() => viewMode = viewMode === "calendar" ? "mail" : "calendar"}
+      ontogglesubscriptions={() => viewMode = viewMode === "subscriptions" ? "mail" : "subscriptions"}
       onsettings={() => (showSettings = true)}
       ontogglecollapse={toggleSidebar}
       onselectlabel={selectLabel}
@@ -1458,8 +1461,10 @@
         oneditdraft={handleEditDraft}
         oniframeload={handleIframeLoad}
       />
-    {:else}
+    {:else if viewMode === "calendar"}
       <FullCalendar />
+    {:else if viewMode === "subscriptions"}
+      <Subscriptions accountId={activeAccount?.id ?? ""} />
     {/if}
   </div>
 
