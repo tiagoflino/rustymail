@@ -99,6 +99,26 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         value TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS subscriptions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id TEXT NOT NULL,
+        sender_email TEXT NOT NULL,
+        sender_name TEXT,
+        detection_method TEXT NOT NULL,
+        detection_details TEXT,
+        unsubscribe_url TEXT,
+        unsubscribe_mailto TEXT,
+        supports_one_click INTEGER DEFAULT 0,
+        status TEXT DEFAULT 'active',
+        message_count INTEGER DEFAULT 1,
+        read_count INTEGER DEFAULT 0,
+        avg_frequency_days REAL,
+        first_seen INTEGER NOT NULL,
+        last_seen INTEGER NOT NULL,
+        user_corrected INTEGER DEFAULT 0,
+        UNIQUE(account_id, sender_email)
+    );
+
     CREATE TABLE IF NOT EXISTS schema_migrations (
         version INTEGER PRIMARY KEY,
         applied_at TEXT DEFAULT (datetime('now'))
@@ -112,6 +132,9 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
     CREATE INDEX IF NOT EXISTS idx_message_labels_label ON message_labels(label_id);
     CREATE INDEX IF NOT EXISTS idx_threads_account ON threads(account_id);
     CREATE INDEX IF NOT EXISTS idx_labels_account ON labels(account_id);
+    CREATE INDEX IF NOT EXISTS idx_subscriptions_account ON subscriptions(account_id);
+    CREATE INDEX IF NOT EXISTS idx_subscriptions_sender ON subscriptions(sender_email);
+    CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions(account_id, status);
 
     PRAGMA journal_mode=WAL;
     "#;
@@ -254,6 +277,44 @@ async fn m005_add_label_colors(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+async fn m006_create_subscriptions_table(pool: &SqlitePool) -> Result<()> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS subscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            sender_email TEXT NOT NULL,
+            sender_name TEXT,
+            detection_method TEXT NOT NULL,
+            detection_details TEXT,
+            unsubscribe_url TEXT,
+            unsubscribe_mailto TEXT,
+            supports_one_click INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active',
+            message_count INTEGER DEFAULT 1,
+            read_count INTEGER DEFAULT 0,
+            avg_frequency_days REAL,
+            first_seen INTEGER NOT NULL,
+            last_seen INTEGER NOT NULL,
+            user_corrected INTEGER DEFAULT 0,
+            UNIQUE(account_id, sender_email)
+        )"
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_subscriptions_account ON subscriptions(account_id)")
+        .execute(pool)
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_subscriptions_sender ON subscriptions(sender_email)")
+        .execute(pool)
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions(account_id, status)")
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
 async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     let applied: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
         .fetch_all(pool)
@@ -286,7 +347,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 }
 
 async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()> {
-    for version in 1..=5i64 {
+    for version in 1..=6i64 {
         if !applied.contains(&version) {
             println!("[Migration] Running v{}...", version);
             match version {
@@ -295,6 +356,7 @@ async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()
                 3 => m003_add_label_stats_columns(pool).await?,
                 4 => m004_backfill_thread_metadata(pool).await?,
                 5 => m005_add_label_colors(pool).await?,
+                6 => m006_create_subscriptions_table(pool).await?,
                 _ => {}
             }
             sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
@@ -332,7 +394,7 @@ mod tests {
         for expected in &[
             "accounts", "attachments", "drafts", "history_state", "labels",
             "message_labels", "messages", "messages_fts", "schema_migrations",
-            "settings", "thread_labels", "threads",
+            "settings", "subscriptions", "thread_labels", "threads",
         ] {
             assert!(names.contains(expected), "Missing table: {expected}");
         }
@@ -476,6 +538,7 @@ mod tests {
         assert!(versions.contains(&3));
         assert!(versions.contains(&4));
         assert!(versions.contains(&5));
+        assert!(versions.contains(&6));
     }
 
     #[tokio::test]
@@ -486,6 +549,29 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
             .fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 5);
+        assert_eq!(count, 6);
+    }
+
+    #[tokio::test]
+    async fn test_subscriptions_table_exists() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+
+        let tables: Vec<(String,)> = sqlx::query_as(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name = 'subscriptions'"
+        ).fetch_all(&pool).await.unwrap();
+
+        assert!(!tables.is_empty(), "subscriptions table should exist");
+    }
+
+    #[tokio::test]
+    async fn test_migrations_include_m006() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let versions: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations WHERE version = 6")
+            .fetch_all(&pool).await.unwrap();
+        assert!(!versions.is_empty(), "migration 6 should be applied");
     }
 }

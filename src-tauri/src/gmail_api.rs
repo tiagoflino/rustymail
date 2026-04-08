@@ -623,6 +623,53 @@ async fn store_thread_messages(
             .bind(&msg.id)
             .execute(&mut *tx)
             .await;
+
+            // Subscription detection
+            if let Some(payload) = &msg.payload {
+                if let Some(headers) = &payload.headers {
+                    let header_vec: Vec<(&str, &str)> = headers
+                        .iter()
+                        .map(|h| (h.name.as_str(), h.value.as_str()))
+                        .collect();
+                    
+                    let detection_input = crate::subscription_detector::DetectionInput {
+                        headers: header_vec,
+                        body_plain: Some(body_plain.as_str()),
+                        body_html: Some(body_html.as_str()),
+                        sender: &sender,
+                    };
+                    
+                    let result = crate::subscription_detector::detect(&detection_input);
+                    
+                    if result.is_subscription {
+                        let method = result.methods.join(", ");
+                        let _ = sqlx::query(
+                            "INSERT INTO subscriptions (account_id, sender_email, sender_name, detection_method, detection_details, unsubscribe_url, unsubscribe_mailto, supports_one_click, first_seen, last_seen)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             ON CONFLICT(account_id, sender_email) DO UPDATE SET
+                                detection_method = excluded.detection_method,
+                                detection_details = excluded.detection_details,
+                                unsubscribe_url = COALESCE(excluded.unsubscribe_url, subscriptions.unsubscribe_url),
+                                unsubscribe_mailto = COALESCE(excluded.unsubscribe_mailto, subscriptions.unsubscribe_mailto),
+                                supports_one_click = MAX(subscriptions.supports_one_click, excluded.supports_one_click),
+                                message_count = message_count + 1,
+                                last_seen = excluded.last_seen"
+                        )
+                        .bind(account_id)
+                        .bind(&result.sender_email)
+                        .bind(&result.sender_name)
+                        .bind(&method)
+                        .bind(&result.details)
+                        .bind(&result.unsubscribe_url)
+                        .bind(&result.unsubscribe_mailto)
+                        .bind(if result.supports_one_click { 1 } else { 0 })
+                        .bind(internal_date)
+                        .bind(internal_date)
+                        .execute(&mut *tx)
+                        .await;
+                    }
+                }
+            }
         }
 
         // Mark thread as synced at current history_id
