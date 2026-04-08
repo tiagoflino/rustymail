@@ -37,6 +37,9 @@
     { id: "nav_sent", label: "Go to Sent" },
     { id: "nav_drafts", label: "Go to Drafts" },
     { id: "nav_trash", label: "Go to Trash" },
+    { id: "snooze_later_today", label: "Snooze: Later Today" },
+    { id: "snooze_tomorrow", label: "Snooze: Tomorrow Morning" },
+    { id: "snooze_next_week", label: "Snooze: Next Week" },
   ];
 
   let accountActions: Action[] = $derived(accounts.slice(0, 2).map(acc => ({

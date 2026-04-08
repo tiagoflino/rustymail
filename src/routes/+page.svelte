@@ -74,6 +74,7 @@
   let showCompose = $state(false);
   let showCommandPalette = $state(false);
   let viewMode = $state<"mail" | "calendar">("mail");
+  let snoozedThreadIds: Set<string> = $state(new Set());
 
   let isMacOS = $state(false);
   let sidebarCollapsed = $state(false);
@@ -201,6 +202,11 @@
       case 'nav_unified_sent': selectLabel('UNIFIED_SENT'); break;
       case 'nav_unified_drafts': selectLabel('UNIFIED_DRAFT'); break;
       case 'nav_unified_trash': selectLabel('UNIFIED_TRASH'); break;
+      case 'snooze_later_today':
+      case 'snooze_tomorrow':
+      case 'snooze_next_week':
+        handleSnoozeFromPalette(id);
+        break;
       default:
         if (id.startsWith('switch_account_')) {
           const accId = id.replace('switch_account_', '');
@@ -294,6 +300,8 @@
     const realLabelId = isUnified ? syncLabelId.replace("UNIFIED_", "") : syncLabelId;
 
     try {
+      await checkSnoozedThreads();
+
       isSyncing.set(true);
       lastSyncError.set(null);
 
@@ -490,6 +498,38 @@
       if (get(searchQuery) && !isLabelFetching) return;
       currentPage = 0;
       threads.set([]);
+    }
+
+    if ($selectedLabelId === "SNOOZED" || $selectedLabelId === "UNIFIED_SNOOZED") {
+      try {
+        const snoozedInfo: any[] = await invoke("get_snoozed_threads");
+        const snoozedList = snoozedInfo.map(s => ({
+          id: s.thread_id,
+          subject: s.subject,
+          sender: s.sender,
+          snippet: `Snoozed until ${new Date(s.snoozed_until * 1000).toLocaleString()}`,
+          date: new Date(s.created_at * 1000).toISOString(),
+          unread: 0,
+          starred: false,
+          star_type: null,
+          important: false,
+          labels: ["SNOOZED"],
+          message_count: 0,
+          has_attachments: false,
+          account_id: s.account_id,
+        }));
+        threads.set(snoozedList);
+        totalCount = snoozedList.length;
+        hasMoreRemote = false;
+        isMessagesLoading.set(false);
+      } catch (e) {
+        console.error("Failed to load snoozed threads", e);
+        threads.set([]);
+        totalCount = 0;
+        hasMoreRemote = false;
+        isMessagesLoading.set(false);
+      }
+      return;
     }
 
     try {
@@ -918,6 +958,22 @@
 
     const currentList = $threads;
 
+    if (action.startsWith("snooze:")) {
+      const until = parseInt(action.split(":")[1]);
+      threads.set(currentList.filter((t) => t.id !== threadId));
+      selectedThreadId.set(null);
+      currentMessages.set([]);
+      try {
+        await invoke("snooze_thread", { threadId: threadId, snoozedUntil: until });
+        addToast("Conversation snoozed.", "info");
+      } catch (e) {
+        console.error("snooze failed", e);
+        addToast(`Failed to snooze: ${e}`, "error", 5000);
+        threads.set(currentList);
+      }
+      return;
+    }
+
     if (action === "archive" || action === "trash" || action === "untrash") {
       threads.set(currentList.filter((t) => t.id !== threadId));
       selectedThreadId.set(null);
@@ -957,6 +1013,47 @@
       addToast(`Failed to ${action}: ${e}`, "error", 5000);
       threads.set(currentList);
     }
+  }
+
+  async function checkSnoozedThreads() {
+    try {
+      const unsnoozed: string[] = await invoke("check_snoozed_threads");
+      if (unsnoozed.length > 0) {
+        console.log("[Snooze] Un-snoozed threads:", unsnoozed);
+        if ($selectedLabelId === "INBOX" || $selectedLabelId === "SNOOZED") {
+          loadThreads(true);
+        }
+      }
+    } catch (e) {
+      console.error("[Snooze] check failed:", e);
+    }
+  }
+
+  function handleSnoozeFromPalette(id: string) {
+    const now = new Date();
+    let until: number;
+    if (id === "snooze_later_today") {
+      if (now.getHours() >= 18) {
+        const tomorrow = new Date(now);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        tomorrow.setHours(9, 0, 0, 0);
+        until = Math.floor(tomorrow.getTime() / 1000);
+      } else {
+        until = Math.floor((now.getTime() + 3 * 60 * 60 * 1000) / 1000);
+      }
+    } else if (id === "snooze_tomorrow") {
+      const tomorrow = new Date(now);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      tomorrow.setHours(9, 0, 0, 0);
+      until = Math.floor(tomorrow.getTime() / 1000);
+    } else {
+      const daysUntilMonday = (8 - now.getDay()) % 7 || 7;
+      const monday = new Date(now);
+      monday.setDate(monday.getDate() + daysUntilMonday);
+      monday.setHours(9, 0, 0, 0);
+      until = Math.floor(monday.getTime() / 1000);
+    }
+    executeAction("snooze:" + until);
   }
 
   async function cycleStar(threadId: string, currentStarType: string | null) {

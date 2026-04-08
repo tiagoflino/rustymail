@@ -11,7 +11,9 @@
     iconReplyAll,
     iconForward,
     iconDraft,
+    iconSnooze,
   } from "$lib/components/icons";
+  import SnoozePopover from "./SnoozePopover.svelte";
   import {
     selectedThreadId,
     currentMessages,
@@ -24,6 +26,7 @@
   let expandedMessages = $state(new Set<string>());
   let lastExpandedThreadId: string | null = null;
   let lastExpandedMsgIds: string | null = null;
+  let showSnoozePopover = $state(false);
 
   $effect(() => {
     const msgs = $currentMessages;
@@ -275,6 +278,26 @@
           >Archive</span
         >
       </button>
+      <button
+        onclick={() => showSnoozePopover = !showSnoozePopover}
+        class="toolbar-btn"
+        title="Snooze (H)"
+      >
+        <span class="toolbar-icon">{@html iconSnooze}</span><span>Snooze</span>
+      </button>
+      {#if showSnoozePopover}
+        <div class="snooze-popover-anchor" style="position:relative;">
+          <div style="position:absolute;top:4px;left:0;z-index:200;">
+            <SnoozePopover
+              onsnooze={(until) => {
+                showSnoozePopover = false;
+                onaction("snooze:" + until);
+              }}
+              onclose={() => showSnoozePopover = false}
+            />
+          </div>
+        </div>
+      {/if}
       {#if isTrashView}
         <button
           onclick={() => onaction("untrash")}
