@@ -11,6 +11,7 @@ pub struct DetectionInput<'a> {
 #[derive(Debug, Clone)]
 pub struct DetectionResult {
     pub is_subscription: bool,
+    #[allow(dead_code)]
     pub confidence: f32,
     pub methods: Vec<String>,
     pub details: String,
@@ -45,7 +46,7 @@ fn extract_list_unsubscribe_url(header_value: &str) -> (Option<String>, Option<S
     for part in header_value.split(',') {
         let part = part.trim();
         if part.starts_with('<') && part.ends_with('>') {
-            let inner = &part[1..part.len()-1];
+            let inner = &part[1..part.len() - 1];
             if inner.starts_with("http://") || inner.starts_with("https://") {
                 url = Some(inner.to_string());
             } else if inner.contains('@') {

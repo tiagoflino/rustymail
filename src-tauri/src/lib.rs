@@ -94,6 +94,9 @@ pub fn run() {
             commands::misc::get_file_size,
             commands::subscriptions::get_subscriptions,
             commands::subscriptions::correct_subscription,
+            commands::subscriptions::delete_subscription,
+            commands::subscriptions::unsubscribe,
+            commands::subscriptions::scan_subscriptions,
             tray::update_tray_unread,
         ])
         .run(tauri::generate_context!())

@@ -1,5 +1,7 @@
+use crate::subscription_detector::{detect, DetectionInput};
 use sqlx::SqlitePool;
 use tauri::Manager;
+use tauri_plugin_opener::OpenerExt;
 
 #[derive(serde::Serialize)]
 pub struct SubscriptionInfo {
@@ -134,10 +136,234 @@ pub async fn correct_subscription(
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+pub struct UnsubscribeResult {
+    pub method: String,
+    pub success: bool,
+    pub message: String,
+    pub opened_browser: bool,
+}
+
+#[tauri::command]
+pub async fn delete_subscription(
+    app_handle: tauri::AppHandle,
+    subscription_id: i64,
+) -> Result<(), String> {
+    let pool = app_handle.state::<SqlitePool>();
+
+    sqlx::query("DELETE FROM subscriptions WHERE id = ?")
+        .bind(subscription_id)
+        .execute(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn unsubscribe(
+    app_handle: tauri::AppHandle,
+    subscription_id: i64,
+) -> Result<UnsubscribeResult, String> {
+    let pool = app_handle.state::<SqlitePool>();
+
+    #[derive(sqlx::FromRow)]
+    struct SubRow {
+        unsubscribe_url: Option<String>,
+        unsubscribe_mailto: Option<String>,
+        supports_one_click: i32,
+    }
+
+    let row = sqlx::query_as::<_, SubRow>(
+        "SELECT unsubscribe_url, unsubscribe_mailto, supports_one_click FROM subscriptions WHERE id = ?"
+    )
+    .bind(subscription_id)
+    .fetch_optional(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let sub = match row {
+        Some(r) => r,
+        None => return Ok(UnsubscribeResult {
+            method: "none".to_string(),
+            success: false,
+            message: "Subscription not found".to_string(),
+            opened_browser: false,
+        }),
+    };
+
+    if sub.supports_one_click == 1 {
+        if let Some(url) = &sub.unsubscribe_url {
+            let client = reqwest::Client::new();
+            let result = client.post(url)
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .body("List-Unsubscribe=One-Click")
+                .send()
+                .await;
+
+            if let Ok(resp) = result {
+                if resp.status().is_success() || resp.status().is_redirection() {
+                    let _ = sqlx::query("UPDATE subscriptions SET status = \"unsubscribed\" WHERE id = ?")
+                        .bind(subscription_id)
+                        .execute(pool.inner())
+                        .await;
+
+                    return Ok(UnsubscribeResult {
+                        method: "one_click".to_string(),
+                        success: true,
+                        message: "Successfully unsubscribed via one-click".to_string(),
+                        opened_browser: false,
+                    });
+                }
+            }
+        }
+    }
+
+    if sub.unsubscribe_mailto.is_some() {
+        return Ok(UnsubscribeResult {
+            method: "mailto".to_string(),
+            success: false,
+            message: "Mailto unsubscribe requires manual action".to_string(),
+            opened_browser: false,
+        });
+    }
+
+    if let Some(url) = &sub.unsubscribe_url {
+        if let Err(e) = app_handle.opener().open_url(url, None::<&str>) {
+            return Ok(UnsubscribeResult {
+                method: "https".to_string(),
+                success: false,
+                message: format!("Failed to open URL: {}", e),
+                opened_browser: false,
+            });
+        }
+
+        let _ = sqlx::query("UPDATE subscriptions SET status = \"unsubscribed\" WHERE id = ?")
+            .bind(subscription_id)
+            .execute(pool.inner())
+            .await;
+
+        return Ok(UnsubscribeResult {
+            method: "https".to_string(),
+            success: true,
+            message: "Opened unsubscribe URL in browser".to_string(),
+            opened_browser: true,
+        });
+    }
+
+    Ok(UnsubscribeResult {
+        method: "none".to_string(),
+        success: false,
+        message: "No unsubscribe method available".to_string(),
+        opened_browser: false,
+    })
+}
+
+#[derive(serde::Serialize)]
+pub struct ScanResult {
+    pub messages_scanned: i64,
+    pub subscriptions_found: i64,
+    pub subscriptions_updated: i64,
+}
+
+#[tauri::command]
+pub async fn scan_subscriptions(
+    app_handle: tauri::AppHandle,
+    account_id: String,
+) -> Result<ScanResult, String> {
+    let pool = app_handle.state::<SqlitePool>();
+    scan_subscriptions_inner(pool.inner(), &account_id).await
+}
+
+pub async fn scan_subscriptions_inner(
+    pool: &SqlitePool,
+    account_id: &str,
+) -> Result<ScanResult, String> {
+    #[derive(sqlx::FromRow)]
+    #[allow(dead_code)]
+    struct MsgRow {
+        id: String,
+        sender: String,
+        body_plain: Option<String>,
+        body_html: Option<String>,
+    }
+
+    let messages = sqlx::query_as::<_, MsgRow>(
+        "SELECT m.id, m.sender, m.body_plain, m.body_html 
+         FROM messages m 
+         JOIN threads t ON m.thread_id = t.id 
+         WHERE t.account_id = ?"
+    )
+    .bind(account_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut messages_scanned = 0;
+    let mut subscriptions_found = 0;
+    let mut subscriptions_updated = 0;
+
+    for msg in messages {
+        messages_scanned += 1;
+
+        let input = DetectionInput {
+            headers: vec![],
+            body_plain: msg.body_plain.as_deref(),
+            body_html: msg.body_html.as_deref(),
+            sender: &msg.sender,
+        };
+
+        let result = detect(&input);
+
+        if result.is_subscription {
+            let now = chrono::Utc::now().timestamp_millis();
+
+            let insert_result = sqlx::query(
+                "INSERT INTO subscriptions (account_id, sender_email, sender_name, detection_method, detection_details, unsubscribe_url, unsubscribe_mailto, supports_one_click, first_seen, last_seen, message_count)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                 ON CONFLICT(account_id, sender_email) DO UPDATE SET
+                    detection_method = excluded.detection_method,
+                    detection_details = excluded.detection_details,
+                    unsubscribe_url = COALESCE(excluded.unsubscribe_url, subscriptions.unsubscribe_url),
+                    unsubscribe_mailto = COALESCE(excluded.unsubscribe_mailto, subscriptions.unsubscribe_mailto),
+                    supports_one_click = MAX(subscriptions.supports_one_click, excluded.supports_one_click),
+                    message_count = message_count + 1,
+                    last_seen = excluded.last_seen"
+            )
+            .bind(account_id)
+            .bind(&result.sender_email)
+            .bind(&result.sender_name)
+            .bind(result.methods.join(", "))
+            .bind(&result.details)
+            .bind(&result.unsubscribe_url)
+            .bind(&result.unsubscribe_mailto)
+            .bind(if result.supports_one_click { 1 } else { 0 })
+            .bind(now)
+            .bind(now)
+            .execute(pool)
+            .await;
+
+            if let Ok(res) = insert_result {
+                if res.rows_affected() > 0 {
+                    subscriptions_found += 1;
+                } else {
+                    subscriptions_updated += 1;
+                }
+            }
+        }
+    }
+
+    Ok(ScanResult {
+        messages_scanned,
+        subscriptions_found,
+        subscriptions_updated,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::test_helpers::setup_test_db;
+    use super::super::test_helpers::{insert_account, insert_message, insert_thread, setup_test_db};
 
     #[tokio::test]
     async fn test_get_subscriptions_empty() {
@@ -303,6 +529,109 @@ mod tests {
         
         sqlx::query("UPDATE subscriptions SET user_corrected = 1, status = ? WHERE id = ?")
             .bind(status)
+            .bind(subscription_id)
+            .execute(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_subscription() {
+        let pool = setup_test_db().await;
+        
+        let id = sqlx::query(
+            "INSERT INTO subscriptions (account_id, sender_email, sender_name, detection_method, 
+             first_seen, last_seen, status) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind("acc1")
+        .bind("newsletter@example.com")
+        .bind("Newsletter")
+        .bind("List-Unsubscribe header")
+        .bind(1000)
+        .bind(2000)
+        .bind("active")
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+
+        delete_subscription_inner(&pool, id).await.unwrap();
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM subscriptions WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(count.0, 0);
+    }
+
+    #[tokio::test]
+    async fn test_delete_subscription_nonexistent() {
+        let pool = setup_test_db().await;
+        
+        let result = delete_subscription_inner(&pool, 99999).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_unsubscribe_result_serialization() {
+        let result = UnsubscribeResult {
+            method: "one_click".to_string(),
+            success: true,
+            message: "Success".to_string(),
+            opened_browser: false,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("one_click"));
+        assert!(json.contains("success"));
+
+        let scan_result = ScanResult {
+            messages_scanned: 10,
+            subscriptions_found: 5,
+            subscriptions_updated: 2,
+        };
+        let json = serde_json::to_string(&scan_result).unwrap();
+        assert!(json.contains("messages_scanned"));
+    }
+
+    #[tokio::test]
+    async fn test_scan_subscriptions_basic() {
+        let pool = setup_test_db().await;
+        
+        insert_account(&pool, "acc1", "user@gmail.com", "User", 1, 1000).await;
+        insert_thread(&pool, "thread1", "acc1").await;
+        insert_message(&pool, "msg1", "thread1", "acc1", "newsletter@example.com", "user@gmail.com", "Newsletter", 1000).await;
+        
+        sqlx::query("UPDATE messages SET body_html = '<html><body><a href=\"https://example.com/unsubscribe\">unsubscribe</a></body></html>' WHERE id = 'msg1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let result = scan_subscriptions_inner(&pool, "acc1").await.unwrap();
+        
+        assert_eq!(result.messages_scanned, 1);
+        assert_eq!(result.subscriptions_found, 1);
+        assert_eq!(result.subscriptions_updated, 0);
+
+        let sub: (String, String) = sqlx::query_as(
+            "SELECT sender_email, detection_method FROM subscriptions WHERE account_id = 'acc1'"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        
+        assert_eq!(sub.0, "newsletter@example.com");
+        assert!(sub.1.contains("Unsubscribe link"));
+    }
+
+    async fn delete_subscription_inner(
+        pool: &SqlitePool,
+        subscription_id: i64,
+    ) -> Result<(), String> {
+        sqlx::query("DELETE FROM subscriptions WHERE id = ?")
             .bind(subscription_id)
             .execute(pool)
             .await
