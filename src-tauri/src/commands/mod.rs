@@ -8,6 +8,7 @@ pub mod search;
 pub mod settings;
 pub mod sync;
 pub mod threads;
+pub mod subscriptions;
 
 #[cfg(test)]
 pub(crate) mod test_helpers;
