@@ -893,6 +893,11 @@
     loadThreads(true);
   }
 
+  async function handleSelectSubscription(senderEmail: string) {
+    viewMode = "mail";
+    await handleSearch(`from:${senderEmail}`);
+  }
+
   async function executeAction(action: "archive" | "trash" | "unread" | "untrash" | string) {
     const threadId = $selectedThreadId;
     if (!threadId) return;
@@ -1464,7 +1469,7 @@
     {:else if viewMode === "calendar"}
       <FullCalendar />
     {:else if viewMode === "subscriptions"}
-      <Subscriptions accountId={activeAccount?.id ?? ""} />
+      <Subscriptions accountId={activeAccount?.id ?? ""} onselectsubscription={handleSelectSubscription} />
     {/if}
   </div>
 

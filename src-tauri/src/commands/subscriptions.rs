@@ -1,6 +1,6 @@
 use crate::subscription_detector::{detect, DetectionInput};
 use sqlx::SqlitePool;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 
 #[derive(serde::Serialize)]
@@ -202,7 +202,7 @@ pub async fn unsubscribe(
                 .await;
 
             if let Ok(resp) = result {
-                if resp.status().is_success() || resp.status().is_redirection() {
+                if resp.status().is_success() {
                     let _ = sqlx::query("UPDATE subscriptions SET status = \"unsubscribed\" WHERE id = ?")
                         .bind(subscription_id)
                         .execute(pool.inner())
@@ -219,15 +219,6 @@ pub async fn unsubscribe(
         }
     }
 
-    if sub.unsubscribe_mailto.is_some() {
-        return Ok(UnsubscribeResult {
-            method: "mailto".to_string(),
-            success: false,
-            message: "Mailto unsubscribe requires manual action".to_string(),
-            opened_browser: false,
-        });
-    }
-
     if let Some(url) = &sub.unsubscribe_url {
         if let Err(e) = app_handle.opener().open_url(url, None::<&str>) {
             return Ok(UnsubscribeResult {
@@ -238,16 +229,20 @@ pub async fn unsubscribe(
             });
         }
 
-        let _ = sqlx::query("UPDATE subscriptions SET status = \"unsubscribed\" WHERE id = ?")
-            .bind(subscription_id)
-            .execute(pool.inner())
-            .await;
-
         return Ok(UnsubscribeResult {
             method: "https".to_string(),
             success: true,
             message: "Opened unsubscribe URL in browser".to_string(),
             opened_browser: true,
+        });
+    }
+
+    if sub.unsubscribe_mailto.is_some() {
+        return Ok(UnsubscribeResult {
+            method: "mailto".to_string(),
+            success: false,
+            message: "Mailto unsubscribe requires manual action".to_string(),
+            opened_browser: false,
         });
     }
 
@@ -259,11 +254,26 @@ pub async fn unsubscribe(
     })
 }
 
+#[tauri::command]
+pub async fn mark_unsubscribed(
+    app_handle: tauri::AppHandle,
+    subscription_id: i64,
+) -> Result<(), String> {
+    let pool = app_handle.state::<SqlitePool>();
+    sqlx::query("UPDATE subscriptions SET status = 'unsubscribed' WHERE id = ?")
+        .bind(subscription_id)
+        .execute(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[derive(serde::Serialize)]
 pub struct ScanResult {
     pub messages_scanned: i64,
     pub subscriptions_found: i64,
     pub subscriptions_updated: i64,
+    pub enriched: i64,
 }
 
 #[tauri::command]
@@ -272,12 +282,15 @@ pub async fn scan_subscriptions(
     account_id: String,
 ) -> Result<ScanResult, String> {
     let pool = app_handle.state::<SqlitePool>();
-    scan_subscriptions_inner(pool.inner(), &account_id).await
+    let account = super::accounts::get_account_by_id(pool.inner(), &account_id).await?;
+    scan_subscriptions_inner(Some(&app_handle), pool.inner(), &account_id, &account.access_token).await
 }
 
 pub async fn scan_subscriptions_inner(
+    app_handle: Option<&tauri::AppHandle>,
     pool: &SqlitePool,
     account_id: &str,
+    access_token: &str,
 ) -> Result<ScanResult, String> {
     #[derive(sqlx::FromRow)]
     #[allow(dead_code)]
@@ -286,12 +299,13 @@ pub async fn scan_subscriptions_inner(
         sender: String,
         body_plain: Option<String>,
         body_html: Option<String>,
+        internal_date: i64,
     }
 
     let messages = sqlx::query_as::<_, MsgRow>(
-        "SELECT m.id, m.sender, m.body_plain, m.body_html 
-         FROM messages m 
-         JOIN threads t ON m.thread_id = t.id 
+        "SELECT m.id, m.sender, m.body_plain, m.body_html, m.internal_date
+         FROM messages m
+         JOIN threads t ON m.thread_id = t.id
          WHERE t.account_id = ?"
     )
     .bind(account_id)
@@ -299,12 +313,16 @@ pub async fn scan_subscriptions_inner(
     .await
     .map_err(|e| e.to_string())?;
 
-    let mut messages_scanned = 0;
+    let mut messages_scanned: i64 = 0;
     let mut subscriptions_found = 0;
     let mut subscriptions_updated = 0;
+    let total_messages = messages.len() as i64;
 
     for msg in messages {
         messages_scanned += 1;
+        if messages_scanned % 50 == 0 || messages_scanned == total_messages {
+            if let Some(h) = app_handle { let _ = h.emit("scan-progress", format!("Scanning messages ({}/{})", messages_scanned, total_messages)); }
+        }
 
         let input = DetectionInput {
             headers: vec![],
@@ -316,8 +334,6 @@ pub async fn scan_subscriptions_inner(
         let result = detect(&input);
 
         if result.is_subscription {
-            let now = chrono::Utc::now().timestamp_millis();
-
             let insert_result = sqlx::query(
                 "INSERT INTO subscriptions (account_id, sender_email, sender_name, detection_method, detection_details, unsubscribe_url, unsubscribe_mailto, supports_one_click, first_seen, last_seen, message_count)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
@@ -328,7 +344,7 @@ pub async fn scan_subscriptions_inner(
                     unsubscribe_mailto = COALESCE(excluded.unsubscribe_mailto, subscriptions.unsubscribe_mailto),
                     supports_one_click = MAX(subscriptions.supports_one_click, excluded.supports_one_click),
                     message_count = message_count + 1,
-                    last_seen = excluded.last_seen"
+                    last_seen = MAX(subscriptions.last_seen, excluded.last_seen)"
             )
             .bind(account_id)
             .bind(&result.sender_email)
@@ -338,8 +354,8 @@ pub async fn scan_subscriptions_inner(
             .bind(&result.unsubscribe_url)
             .bind(&result.unsubscribe_mailto)
             .bind(if result.supports_one_click { 1 } else { 0 })
-            .bind(now)
-            .bind(now)
+            .bind(msg.internal_date)
+            .bind(msg.internal_date)
             .execute(pool)
             .await;
 
@@ -353,10 +369,128 @@ pub async fn scan_subscriptions_inner(
         }
     }
 
+    if let Some(h) = app_handle { let _ = h.emit("scan-progress", "Recomputing statistics...".to_string()); }
+
+    // Recompute statistics from actual message data
+    let _ = sqlx::query(
+        "UPDATE subscriptions SET
+            first_seen = sub_stats.min_date,
+            last_seen = sub_stats.max_date,
+            message_count = sub_stats.msg_count,
+            avg_frequency_days = CASE
+                WHEN sub_stats.msg_count > 1 THEN
+                    (sub_stats.max_date - sub_stats.min_date) / ((sub_stats.msg_count - 1) * 86400000.0)
+                ELSE NULL
+            END
+         FROM (
+            SELECT
+                s.id as sub_id,
+                MIN(m.internal_date) as min_date,
+                MAX(m.internal_date) as max_date,
+                COUNT(m.id) as msg_count
+            FROM subscriptions s
+            JOIN messages m ON m.sender LIKE '%' || s.sender_email || '%'
+            JOIN threads t ON m.thread_id = t.id AND t.account_id = s.account_id
+            WHERE s.account_id = ?
+            GROUP BY s.id
+         ) sub_stats
+         WHERE subscriptions.id = sub_stats.sub_id"
+    )
+    .bind(account_id)
+    .execute(pool)
+    .await;
+
+    // Enrich subscriptions missing unsubscribe data by fetching headers from Gmail
+    let mut enriched: i64 = 0;
+
+    #[derive(sqlx::FromRow)]
+    struct SubMissingUnsub {
+        id: i64,
+        sender_email: String,
+    }
+
+    let subs_to_enrich = sqlx::query_as::<_, SubMissingUnsub>(
+        "SELECT id, sender_email FROM subscriptions
+         WHERE account_id = ? AND unsubscribe_url IS NULL AND unsubscribe_mailto IS NULL"
+    )
+    .bind(account_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let total_to_enrich = subs_to_enrich.len();
+    if total_to_enrich > 0 {
+        if let Some(h) = app_handle { let _ = h.emit("scan-progress", format!("Enriching subscriptions (0/{})", total_to_enrich)); }
+    }
+
+    for (i, sub) in subs_to_enrich.iter().enumerate() {
+        #[derive(sqlx::FromRow)]
+        struct MsgRef {
+            id: String,
+            sender: String,
+        }
+
+        let msg_row = sqlx::query_as::<_, MsgRef>(
+            "SELECT m.id, m.sender FROM messages m
+             JOIN threads t ON m.thread_id = t.id
+             WHERE t.account_id = ? AND m.sender LIKE '%' || ? || '%'
+             ORDER BY m.internal_date DESC LIMIT 1"
+        )
+        .bind(account_id)
+        .bind(&sub.sender_email)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+
+        if let Some(h) = app_handle { let _ = h.emit("scan-progress", format!("Enriching subscriptions ({}/{})", i + 1, total_to_enrich)); }
+
+        if let Some(msg_ref) = msg_row {
+            if let Ok(gmail_msg) = crate::gmail_api::fetch_message_metadata(access_token, &msg_ref.id).await {
+                if let Some(payload) = &gmail_msg.payload {
+                    if let Some(headers) = &payload.headers {
+                        let header_vec: Vec<(&str, &str)> = headers
+                            .iter()
+                            .map(|h| (h.name.as_str(), h.value.as_str()))
+                            .collect();
+
+                        let input = DetectionInput {
+                            headers: header_vec,
+                            body_plain: None,
+                            body_html: None,
+                            sender: &msg_ref.sender,
+                        };
+
+                        let result = detect(&input);
+
+                        if result.unsubscribe_url.is_some() || result.unsubscribe_mailto.is_some() {
+                            let _ = sqlx::query(
+                                "UPDATE subscriptions SET
+                                    unsubscribe_url = COALESCE(?, unsubscribe_url),
+                                    unsubscribe_mailto = COALESCE(?, unsubscribe_mailto),
+                                    supports_one_click = MAX(supports_one_click, ?)
+                                 WHERE id = ?"
+                            )
+                            .bind(&result.unsubscribe_url)
+                            .bind(&result.unsubscribe_mailto)
+                            .bind(if result.supports_one_click { 1 } else { 0 })
+                            .bind(sub.id)
+                            .execute(pool)
+                            .await;
+
+                            enriched += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(ScanResult {
         messages_scanned,
         subscriptions_found,
         subscriptions_updated,
+        enriched,
     })
 }
 
@@ -592,6 +726,7 @@ mod tests {
             messages_scanned: 10,
             subscriptions_found: 5,
             subscriptions_updated: 2,
+            enriched: 0,
         };
         let json = serde_json::to_string(&scan_result).unwrap();
         assert!(json.contains("messages_scanned"));
@@ -610,7 +745,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = scan_subscriptions_inner(&pool, "acc1").await.unwrap();
+        let result = scan_subscriptions_inner(None, &pool, "acc1", "fake_token").await.unwrap();
         
         assert_eq!(result.messages_scanned, 1);
         assert_eq!(result.subscriptions_found, 1);

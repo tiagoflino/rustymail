@@ -653,7 +653,7 @@ async fn store_thread_messages(
                                 unsubscribe_mailto = COALESCE(excluded.unsubscribe_mailto, subscriptions.unsubscribe_mailto),
                                 supports_one_click = MAX(subscriptions.supports_one_click, excluded.supports_one_click),
                                 message_count = message_count + 1,
-                                last_seen = excluded.last_seen"
+                                last_seen = MAX(subscriptions.last_seen, excluded.last_seen)"
                         )
                         .bind(account_id)
                         .bind(&result.sender_email)
@@ -968,6 +968,28 @@ pub async fn get_profile_history_id(access_token: &str) -> Result<String, String
     }
     let profile: Profile = res.json().await.map_err(|e| e.to_string())?;
     Ok(profile.history_id)
+}
+
+pub async fn fetch_message_metadata(
+    access_token: &str,
+    message_id: &str,
+) -> Result<GmailMessage, String> {
+    let client = Client::new();
+    let res = client
+        .get(gmail_api_url(&format!(
+            "/gmail/v1/users/me/messages/{}?format=metadata",
+            message_id
+        )))
+        .header("Authorization", format!("Bearer {}", access_token))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !res.status().is_success() {
+        return Err(format!("Gmail API error: {}", res.status()));
+    }
+
+    res.json::<GmailMessage>().await.map_err(|e| e.to_string())
 }
 
 pub async fn get_stale_thread_ids(pool: &SqlitePool, account_id: &str) -> Vec<String> {

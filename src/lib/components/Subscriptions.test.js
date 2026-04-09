@@ -14,40 +14,43 @@ describe('Subscriptions.svelte', () => {
 
     const mockSubscriptions = [
         {
-            id: "1",
+            id: 1,
             sender_name: "Newsletter Co",
             sender_email: "news@example.com",
             message_count: 42,
             avg_frequency_days: 7.0,
-            last_seen: "2026-04-01T00:00:00Z",
+            last_seen: 1774828800000,
             status: "active",
             detection_method: "list-unsubscribe",
-            unsubscribe_method: "mailto",
-            unsubscribe_mailto: "unsubscribe@example.com"
+            unsubscribe_url: "https://example.com/unsub",
+            unsubscribe_mailto: "unsubscribe@example.com",
+            supports_one_click: false
         },
         {
-            id: "2",
+            id: 2,
             sender_name: "Daily Digest",
             sender_email: "digest@daily.com",
             message_count: 100,
             avg_frequency_days: 1.0,
-            last_seen: "2026-04-07T00:00:00Z",
+            last_seen: 1775347200000,
             status: "unsubscribed",
             detection_method: "manual",
-            unsubscribe_method: null,
-            unsubscribe_mailto: null
+            unsubscribe_url: null,
+            unsubscribe_mailto: null,
+            supports_one_click: false
         },
         {
-            id: "3",
+            id: 3,
             sender_name: "Promo Alerts",
             sender_email: "promo@shop.com",
             message_count: 15,
             avg_frequency_days: null,
-            last_seen: "2026-03-15T00:00:00Z",
+            last_seen: 1773638400000,
             status: "ignored",
             detection_method: "list-unsubscribe",
-            unsubscribe_method: null,
-            unsubscribe_mailto: null
+            unsubscribe_url: null,
+            unsubscribe_mailto: null,
+            supports_one_click: false
         }
     ];
 
@@ -96,7 +99,7 @@ describe('Subscriptions.svelte', () => {
     });
 
     it('scan button calls scan_subscriptions command and reloads list', async () => {
-        vi.mocked(invoke).mockResolvedValueOnce([]).mockResolvedValueOnce({ scanned: 100, found: 5 });
+        vi.mocked(invoke).mockResolvedValueOnce([]).mockResolvedValueOnce({ messages_scanned: 100, subscriptions_found: 5, enriched: 3 });
         
         render(Subscriptions, { accountId: "test-account" });
 
@@ -151,22 +154,39 @@ describe('Subscriptions.svelte', () => {
         expect(screen.queryByText('Newsletter Co')).not.toBeInTheDocument();
     });
 
-    it('unsubscribe button calls unsubscribe command', async () => {
+    it('unsubscribe button opens dialog, confirms via link, and marks done', async () => {
         vi.mocked(invoke)
             .mockResolvedValueOnce(mockSubscriptions)
-            .mockResolvedValueOnce({ method: "mailto", success: true, message: "Done", opened_browser: false });
-        
+            .mockResolvedValueOnce({ method: "https", success: true, message: "Opened", opened_browser: true })
+            .mockResolvedValueOnce(undefined)
+            .mockResolvedValueOnce(mockSubscriptions);
+
         render(Subscriptions, { accountId: "test-account" });
 
         await waitFor(() => {
-            expect(screen.getByText('Unsubscribe')).toBeInTheDocument();
+            expect(screen.getByTitle('Unsubscribe')).toBeInTheDocument();
         });
 
-        const unsubscribeBtn = screen.getByText('Unsubscribe');
-        await fireEvent.click(unsubscribeBtn);
+        await fireEvent.click(screen.getByTitle('Unsubscribe'));
 
         await waitFor(() => {
-            expect(vi.mocked(invoke)).toHaveBeenCalledWith('unsubscribe', { subscriptionId: "1" });
+            expect(screen.getByText('Open Link')).toBeInTheDocument();
+        });
+
+        await fireEvent.click(screen.getByText('Open Link'));
+
+        await waitFor(() => {
+            expect(vi.mocked(invoke)).toHaveBeenCalledWith('unsubscribe', { subscriptionId: 1 });
+        });
+
+        await waitFor(() => {
+            expect(screen.getByText('Did you unsubscribe?')).toBeInTheDocument();
+        });
+
+        await fireEvent.click(screen.getByText('Yes'));
+
+        await waitFor(() => {
+            expect(vi.mocked(invoke)).toHaveBeenCalledWith('mark_unsubscribed', { subscriptionId: 1 });
         });
     });
 
@@ -179,13 +199,13 @@ describe('Subscriptions.svelte', () => {
         render(Subscriptions, { accountId: "test-account" });
 
         await waitFor(() => {
-            expect(screen.getAllByText('Delete')[0]).toBeInTheDocument();
+            expect(screen.getAllByTitle('Delete')[0]).toBeInTheDocument();
         });
 
-        await fireEvent.click(screen.getAllByText('Delete')[0]);
+        await fireEvent.click(screen.getAllByTitle('Delete')[0]);
 
         await waitFor(() => {
-            expect(vi.mocked(invoke)).toHaveBeenCalledWith('delete_subscription', { subscriptionId: "1" });
+            expect(vi.mocked(invoke)).toHaveBeenCalledWith('delete_subscription', { subscriptionId: 2 });
         });
     });
 
@@ -198,13 +218,13 @@ describe('Subscriptions.svelte', () => {
         render(Subscriptions, { accountId: "test-account" });
 
         await waitFor(() => {
-            expect(screen.getAllByText('Not a subscription')[0]).toBeInTheDocument();
+            expect(screen.getAllByTitle('Not a subscription')[0]).toBeInTheDocument();
         });
 
-        await fireEvent.click(screen.getAllByText('Not a subscription')[0]);
+        await fireEvent.click(screen.getAllByTitle('Not a subscription')[0]);
 
         await waitFor(() => {
-            expect(vi.mocked(invoke)).toHaveBeenCalledWith('correct_subscription', { subscriptionId: "1", isSubscription: false });
+            expect(vi.mocked(invoke)).toHaveBeenCalledWith('correct_subscription', { subscriptionId: 2, isSubscription: false });
         });
     });
 });

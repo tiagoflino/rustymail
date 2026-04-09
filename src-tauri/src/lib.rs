@@ -97,6 +97,7 @@ pub fn run() {
             commands::subscriptions::delete_subscription,
             commands::subscriptions::unsubscribe,
             commands::subscriptions::scan_subscriptions,
+            commands::subscriptions::mark_unsubscribed,
             tray::update_tray_unread,
         ])
         .run(tauri::generate_context!())
