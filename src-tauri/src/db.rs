@@ -120,7 +120,7 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
     CREATE INDEX IF NOT EXISTS idx_message_labels_label ON message_labels(label_id);
     CREATE INDEX IF NOT EXISTS idx_threads_account ON threads(account_id);
     CREATE INDEX IF NOT EXISTS idx_labels_account ON labels(account_id);
-    CREATE INDEX IF NOT EXISTS idx_snoozed_until ON snoozed_threads(snoozed_until);
+    CREATE INDEX IF NOT EXISTS idx_snoozed_account_until ON snoozed_threads(account_id, snoozed_until);
 
     PRAGMA journal_mode=WAL;
     "#;
@@ -286,7 +286,7 @@ async fn m006_create_snoozed_threads(pool: &SqlitePool) -> Result<()> {
         )
         .execute(pool)
         .await?;
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_snoozed_until ON snoozed_threads(snoozed_until)")
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_snoozed_account_until ON snoozed_threads(account_id, snoozed_until)")
             .execute(pool)
             .await?;
     }
@@ -398,7 +398,7 @@ mod tests {
         for expected in &[
             "idx_labels_account", "idx_message_labels_label",
             "idx_messages_account", "idx_messages_internal_date", "idx_messages_thread",
-            "idx_snoozed_until",
+            "idx_snoozed_account_until",
             "idx_thread_labels_label", "idx_thread_labels_thread", "idx_threads_account",
         ] {
             assert!(names.contains(expected), "Missing index: {expected}");

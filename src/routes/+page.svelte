@@ -43,6 +43,7 @@
     formatTime,
     prepareQuotedHtml,
   } from "$lib/utils/formatters.js";
+  import { snoozeOptions } from "$lib/utils/snooze";
 
   interface LocalLabel {
     id: string;
@@ -74,7 +75,8 @@
   let showCompose = $state(false);
   let showCommandPalette = $state(false);
   let viewMode = $state<"mail" | "calendar">("mail");
-  let snoozedThreadIds: Set<string> = $state(new Set());
+  let snoozePopoverOpen = $state(false);
+  let snoozedCount = $state(0);
 
   let isMacOS = $state(false);
   let sidebarCollapsed = $state(false);
@@ -299,8 +301,16 @@
     const isUnified = syncLabelId.startsWith("UNIFIED_");
     const realLabelId = isUnified ? syncLabelId.replace("UNIFIED_", "") : syncLabelId;
 
+    const isSnoozedView = syncLabelId === "SNOOZED" || syncLabelId === "UNIFIED_SNOOZED";
+
     try {
       await checkSnoozedThreads();
+
+      // Snoozed is a virtual label — skip Gmail sync, just reload local data
+      if (isSnoozedView) {
+        await loadThreads(true);
+        return;
+      }
 
       isSyncing.set(true);
       lastSyncError.set(null);
@@ -517,17 +527,20 @@
           message_count: 0,
           has_attachments: false,
           account_id: s.account_id,
+          history_id: "",
+          internal_date: s.created_at,
         }));
         threads.set(snoozedList);
+        snoozedCount = snoozedList.length;
         totalCount = snoozedList.length;
         hasMoreRemote = false;
-        isMessagesLoading.set(false);
       } catch (e) {
         console.error("Failed to load snoozed threads", e);
         threads.set([]);
         totalCount = 0;
         hasMoreRemote = false;
-        isMessagesLoading.set(false);
+      } finally {
+        isLoadingThreads = false;
       }
       return;
     }
@@ -855,6 +868,9 @@
 
     await loadThreads(true);
 
+    // SNOOZED is a virtual label — no Gmail sync needed
+    if (labelId === "SNOOZED" || labelId === "UNIFIED_SNOOZED") return;
+
     const lastSync = labelLastSyncMap[labelId] || 0;
     if (isReselect || Date.now() - lastSync > 300000) {
       const isUnifiedLabel = labelId.startsWith("UNIFIED_");
@@ -958,18 +974,54 @@
 
     const currentList = $threads;
 
+    if (action === "unsnooze") {
+      const previousList = currentList;
+      threads.set(currentList.filter((t) => t.id !== threadId));
+      selectedThreadId.set(null);
+      currentMessages.set([]);
+      try {
+        await invoke("unsnooze_thread", { threadId: threadId });
+        addToast("Conversation unsnoozed.", "info");
+        if ($selectedLabelId === "SNOOZED" || $selectedLabelId === "UNIFIED_SNOOZED") {
+          snoozedCount = Math.max(0, snoozedCount - 1);
+        }
+        if ($selectedLabelId === "INBOX" || $selectedLabelId === "UNIFIED_INBOX") {
+          await loadThreads(true);
+        }
+      } catch (e) {
+        console.error("unsnooze failed", e);
+        addToast(`Failed to unsnooze: ${e}`, "error", 5000);
+        threads.set(previousList);
+      }
+      return;
+    }
+
     if (action.startsWith("snooze:")) {
-      const until = parseInt(action.split(":")[1]);
+      const until = Number(action.split(":")[1]);
+      const previousList = currentList;
       threads.set(currentList.filter((t) => t.id !== threadId));
       selectedThreadId.set(null);
       currentMessages.set([]);
       try {
         await invoke("snooze_thread", { threadId: threadId, snoozedUntil: until });
-        addToast("Conversation snoozed.", "info");
+        snoozedCount += 1;
+        addToast("Conversation snoozed.", "info", 6000, {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              await invoke("unsnooze_thread", { threadId: threadId });
+              snoozedCount = Math.max(0, snoozedCount - 1);
+              await loadThreads(true);
+            } catch (e) {
+              console.error("Undo snooze failed", e);
+              addToast(`Failed to undo snooze: ${e}`, "error", 5000);
+            }
+          },
+        });
       } catch (e) {
         console.error("snooze failed", e);
         addToast(`Failed to snooze: ${e}`, "error", 5000);
-        threads.set(currentList);
+        threads.set(previousList);
       }
       return;
     }
@@ -1020,9 +1072,7 @@
       const unsnoozed: string[] = await invoke("check_snoozed_threads");
       if (unsnoozed.length > 0) {
         console.log("[Snooze] Un-snoozed threads:", unsnoozed);
-        if ($selectedLabelId === "INBOX" || $selectedLabelId === "SNOOZED") {
-          loadThreads(true);
-        }
+        snoozedCount = Math.max(0, snoozedCount - unsnoozed.length);
       }
     } catch (e) {
       console.error("[Snooze] check failed:", e);
@@ -1030,30 +1080,10 @@
   }
 
   function handleSnoozeFromPalette(id: string) {
-    const now = new Date();
-    let until: number;
-    if (id === "snooze_later_today") {
-      if (now.getHours() >= 18) {
-        const tomorrow = new Date(now);
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        tomorrow.setHours(9, 0, 0, 0);
-        until = Math.floor(tomorrow.getTime() / 1000);
-      } else {
-        until = Math.floor((now.getTime() + 3 * 60 * 60 * 1000) / 1000);
-      }
-    } else if (id === "snooze_tomorrow") {
-      const tomorrow = new Date(now);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      tomorrow.setHours(9, 0, 0, 0);
-      until = Math.floor(tomorrow.getTime() / 1000);
-    } else {
-      const daysUntilMonday = (8 - now.getDay()) % 7 || 7;
-      const monday = new Date(now);
-      monday.setDate(monday.getDate() + daysUntilMonday);
-      monday.setHours(9, 0, 0, 0);
-      until = Math.floor(monday.getTime() / 1000);
-    }
-    executeAction("snooze:" + until);
+    const map: Record<string, number> = { snooze_later_today: 0, snooze_tomorrow: 1, snooze_next_week: 2 };
+    const index = map[id];
+    if (index === undefined) return;
+    executeAction("snooze:" + snoozeOptions[index].compute());
   }
 
   async function cycleStar(threadId: string, currentStarType: string | null) {
@@ -1210,6 +1240,7 @@
     if (event.key === "e") executeAction("archive");
     else if (event.key === "#") executeAction("trash");
     else if (event.key === "I" && event.shiftKey) executeAction("unread");
+    else if (event.key === "h") snoozePopoverOpen = true;
     else if (event.key === "r") {
       const msgs = $currentMessages;
       if (msgs.length > 0) handleReply(msgs[msgs.length - 1]);
@@ -1503,6 +1534,7 @@
       isUnifiedEnabled={isUnifiedEnabledSetting}
       {labels}
       {selectedLabelId}
+      snoozedCount={snoozedCount}
       oncompose={() => openCompose()}
       onsync={() => performSync(true)}
       onthemecycle={cycleTheme}
@@ -1548,6 +1580,8 @@
       <MessageDetail
         {isMacOS}
         isTrashView={$selectedLabelId === "TRASH"}
+        isSnoozedView={$selectedLabelId === "SNOOZED" || $selectedLabelId === "UNIFIED_SNOOZED"}
+        bind:showSnoozePopover={snoozePopoverOpen}
         onaction={executeAction}
         onreply={handleReply}
         onreplyall={handleReplyAll}
@@ -1620,9 +1654,10 @@
   ondismiss={dismissLinkDialog}
 />
 
-<CommandPalette 
+<CommandPalette
   bind:show={showCommandPalette}
   accounts={allAccounts}
+  hasThread={!!$selectedThreadId}
   onAction={handleCommandAction}
   onClose={() => showCommandPalette = false}
 />

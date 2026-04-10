@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { fly, fade } from "svelte/transition";
+  import { iconSnooze } from "$lib/components/icons";
 
   interface Action {
     id: string;
@@ -12,11 +13,13 @@
   let {
     show = $bindable(false),
     accounts = [],
+    hasThread = false,
     onClose = () => {},
     onAction = (id: string) => {},
   }: {
     show?: boolean;
     accounts?: Array<{ id: string; email: string; display_name: string }>;
+    hasThread?: boolean;
     onClose?: () => void;
     onAction?: (id: string) => void;
   } = $props();
@@ -25,7 +28,7 @@
   let activeIndex = $state(0);
   let inputEl = $state<HTMLInputElement>();
 
-  const baseActions: Action[] = [
+  let baseActions: Action[] = $derived([
     { id: "compose", label: "Compose New Email", shortcut: "C" },
     { id: "sync", label: "Sync Now", shortcut: "⌘R" },
     { id: "settings", label: "Open Settings", shortcut: "⌘," },
@@ -37,10 +40,12 @@
     { id: "nav_sent", label: "Go to Sent" },
     { id: "nav_drafts", label: "Go to Drafts" },
     { id: "nav_trash", label: "Go to Trash" },
-    { id: "snooze_later_today", label: "Snooze: Later Today" },
-    { id: "snooze_tomorrow", label: "Snooze: Tomorrow Morning" },
-    { id: "snooze_next_week", label: "Snooze: Next Week" },
-  ];
+    ...(hasThread ? [
+      { id: "snooze_later_today", label: "Snooze: Later Today", icon: iconSnooze },
+      { id: "snooze_tomorrow", label: "Snooze: Tomorrow Morning", icon: iconSnooze },
+      { id: "snooze_next_week", label: "Snooze: Next Week", icon: iconSnooze },
+    ] : []),
+  ]);
 
   let accountActions: Action[] = $derived(accounts.slice(0, 2).map(acc => ({
     id: `switch_account_${acc.id}`,

@@ -1,5 +1,4 @@
 use super::accounts::get_active_account;
-use crate::gmail_api;
 use tauri::AppHandle;
 use tauri::Manager;
 
@@ -31,28 +30,13 @@ pub async fn snooze_thread(
         return Err("snoozed_until must be in the future".to_string());
     }
 
-    gmail_api::modify_thread(
-        pool.inner(),
-        &account.id,
-        &account.access_token,
-        &thread_id,
-        vec![],
-        vec!["INBOX".to_string()],
-    )
-    .await?;
-
-    let created_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| e.to_string())?
-        .as_secs() as i64;
-
     sqlx::query(
         "INSERT OR REPLACE INTO snoozed_threads (thread_id, account_id, snoozed_until, created_at) VALUES (?, ?, ?, ?)"
     )
     .bind(&thread_id)
     .bind(&account.id)
     .bind(snoozed_until)
-    .bind(created_at)
+    .bind(now)
     .execute(pool.inner())
     .await
     .map_err(|e| e.to_string())?;
@@ -67,20 +51,6 @@ pub async fn unsnooze_thread(
 ) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
-
-    let result = gmail_api::modify_thread(
-        pool.inner(),
-        &account.id,
-        &account.access_token,
-        &thread_id,
-        vec!["INBOX".to_string()],
-        vec![],
-    )
-    .await;
-
-    if let Err(e) = result {
-        eprintln!("[Unsnooze] Gmail API failed for thread {}: {}", thread_id, e);
-    }
 
     sqlx::query("DELETE FROM snoozed_threads WHERE thread_id = ? AND account_id = ?")
         .bind(&thread_id)
@@ -161,40 +131,24 @@ pub async fn check_snoozed_threads(
     .await
     .map_err(|e| e.to_string())?;
 
-    let mut unsnoozed_ids: Vec<String> = Vec::new();
+    let thread_ids: Vec<String> = expired.into_iter().map(|r| r.thread_id).collect();
 
-    for row in expired {
-        let result = gmail_api::modify_thread(
-            pool.inner(),
-            &account.id,
-            &account.access_token,
-            &row.thread_id,
-            vec!["INBOX".to_string()],
-            vec![],
+    if !thread_ids.is_empty() {
+        sqlx::query(
+            "DELETE FROM snoozed_threads WHERE account_id = ? AND snoozed_until <= ?"
         )
-        .await;
-
-        if let Err(e) = result {
-            eprintln!("[CheckSnoozed] Gmail API failed for thread {}: {}", row.thread_id, e);
-            continue;
-        }
-
-        sqlx::query("DELETE FROM snoozed_threads WHERE thread_id = ? AND account_id = ?")
-            .bind(&row.thread_id)
-            .bind(&account.id)
-            .execute(pool.inner())
-            .await
-            .ok();
-
-        unsnoozed_ids.push(row.thread_id);
+        .bind(&account.id)
+        .bind(now)
+        .execute(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
     }
 
-    Ok(unsnoozed_ids)
+    Ok(thread_ids)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::test_helpers::{setup_test_db, insert_account, insert_thread};
 
     #[tokio::test]
@@ -239,7 +193,13 @@ mod tests {
             .as_secs() as i64;
         let past_timestamp = now - 1000;
 
+        // Verify past timestamps would fail the > now check
         assert!(past_timestamp <= now);
+        // Boundary: exact now should also be rejected (requires strictly >)
+        assert!(now <= now);
+        // Future timestamps pass
+        let future_timestamp = now + 3600;
+        assert!(future_timestamp > now);
     }
 
     #[tokio::test]

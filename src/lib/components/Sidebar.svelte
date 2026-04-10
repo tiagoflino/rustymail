@@ -42,6 +42,7 @@
     isUnifiedEnabled: boolean;
     labels: Writable<LocalLabel[]>;
     selectedLabelId: Writable<string>;
+    snoozedCount?: number;
     oncompose: () => void;
     onsync: () => void;
     onthemecycle: () => void;
@@ -65,6 +66,7 @@
     isUnifiedEnabled,
     labels,
     selectedLabelId,
+    snoozedCount = 0,
     oncompose,
     onsync,
     onthemecycle,
@@ -224,9 +226,6 @@
           </div>
         </li>
       {/each}
-    </ul>
-
-    <ul class="sidebar-menu">
       <li>
         <div
           class="sidebar-item {$selectedLabelId === 'SNOOZED' ? 'active' : ''}"
@@ -239,6 +238,7 @@
         >
           <span class="icon">{@html iconSnooze}</span>
           <span class="label-text">Snoozed</span>
+          {#if snoozedCount > 0}<span class="badge">{snoozedCount}</span>{/if}
         </div>
       </li>
     </ul>
