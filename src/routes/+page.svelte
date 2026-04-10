@@ -39,7 +39,7 @@
   import UpdateModal from "$lib/components/UpdateModal.svelte";
   import { shortcutManager } from "$lib/shortcut-manager";
   import { addToast } from "$lib/stores/toast";
-  import { pendingUpdate, installAndRestart } from "$lib/utils/updater";
+  import { pendingUpdate } from "$lib/utils/updater";
   import {
     formatTime,
     prepareQuotedHtml,
@@ -1542,9 +1542,12 @@
 
 {#if $pendingUpdate}
   <UpdateModal
-    update={$pendingUpdate}
+    currentVersion={$pendingUpdate.currentVersion}
+    newVersion={$pendingUpdate.newVersion}
+    releaseDate={$pendingUpdate.releaseDate}
+    releaseNotes={$pendingUpdate.releaseNotes}
     onClose={() => pendingUpdate.set(null)}
-    onInstall={installAndRestart}
+    onInstall={$pendingUpdate.onInstall}
   />
 {/if}
 
