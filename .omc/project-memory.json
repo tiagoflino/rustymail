@@ -1,0 +1,265 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1775799042623,
+  "projectRoot": "/Users/tiagoflino/repositories/rustymail",
+  "techStack": {
+    "languages": [
+      {
+        "name": "JavaScript/TypeScript",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "package.json"
+        ]
+      },
+      {
+        "name": "JavaScript",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "jsconfig.json"
+        ]
+      },
+      {
+        "name": "C/C++",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "Makefile"
+        ]
+      }
+    ],
+    "frameworks": [
+      {
+        "name": "@sveltejs/kit",
+        "version": "2.9.0",
+        "category": "fullstack"
+      },
+      {
+        "name": "svelte",
+        "version": "5.0.0",
+        "category": "frontend"
+      },
+      {
+        "name": "vite",
+        "version": "6.0.3",
+        "category": "build"
+      },
+      {
+        "name": "vitest",
+        "version": "4.0.18",
+        "category": "testing"
+      }
+    ],
+    "packageManager": "npm",
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": "npm run build",
+    "testCommand": "npm test",
+    "lintCommand": null,
+    "devCommand": "npm run dev",
+    "scripts": {
+      "dev": "vite dev",
+      "build": "vite build",
+      "preview": "vite preview",
+      "check": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json",
+      "check:watch": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json --watch",
+      "tauri": "tauri",
+      "test": "vitest run",
+      "test:watch": "vitest",
+      "test:coverage": "vitest run --coverage"
+    }
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "src",
+      "static"
+    ],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "build": {
+      "path": "build",
+      "purpose": "Build output",
+      "fileCount": 7,
+      "lastAccessed": 1775799042617,
+      "keyFiles": [
+        "app-icon.png",
+        "email-shell.html",
+        "favicon.png",
+        "index.html",
+        "svelte.svg"
+      ]
+    },
+    "plans": {
+      "path": "plans",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1775799042618,
+      "keyFiles": [
+        "sunny-gathering-pearl.md"
+      ]
+    },
+    "src": {
+      "path": "src",
+      "purpose": "Source code",
+      "fileCount": 2,
+      "lastAccessed": 1775799042619,
+      "keyFiles": [
+        "app.css",
+        "app.html"
+      ]
+    },
+    "src-tauri": {
+      "path": "src-tauri",
+      "purpose": null,
+      "fileCount": 6,
+      "lastAccessed": 1775799042619,
+      "keyFiles": [
+        "Cargo.lock",
+        "Cargo.toml",
+        "build.rs",
+        "tauri.conf.json",
+        "test_lettre"
+      ]
+    },
+    "static": {
+      "path": "static",
+      "purpose": "Static files",
+      "fileCount": 6,
+      "lastAccessed": 1775799042619,
+      "keyFiles": [
+        "app-icon.png",
+        "email-shell.html",
+        "favicon.png",
+        "svelte.svg",
+        "tauri.svg"
+      ]
+    },
+    "src/lib": {
+      "path": "src/lib",
+      "purpose": "Library code",
+      "fileCount": 1,
+      "lastAccessed": 1775799042620,
+      "keyFiles": [
+        "shortcut-manager.ts"
+      ]
+    },
+    "src/routes": {
+      "path": "src/routes",
+      "purpose": "Route handlers",
+      "fileCount": 4,
+      "lastAccessed": 1775799042620,
+      "keyFiles": [
+        "+layout.js",
+        "+layout.svelte",
+        "+page.svelte"
+      ]
+    },
+    "src-tauri/src": {
+      "path": "src-tauri/src",
+      "purpose": "Source code",
+      "fileCount": 9,
+      "lastAccessed": 1775799042620,
+      "keyFiles": [
+        "calendar_api.rs",
+        "credentials.rs",
+        "db.rs"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "src/lib/components/EventModal.svelte",
+      "accessCount": 58,
+      "lastAccessed": 1775810050759,
+      "type": "file"
+    },
+    {
+      "path": "src/lib/components/FullCalendar.svelte",
+      "accessCount": 34,
+      "lastAccessed": 1775810109132,
+      "type": "file"
+    },
+    {
+      "path": "src-tauri/src/db.rs",
+      "accessCount": 14,
+      "lastAccessed": 1775995141136,
+      "type": "file"
+    },
+    {
+      "path": "src/lib/components/Subscriptions.svelte",
+      "accessCount": 12,
+      "lastAccessed": 1775806150539,
+      "type": "file"
+    },
+    {
+      "path": "src/lib/components/UpdateModal.svelte",
+      "accessCount": 11,
+      "lastAccessed": 1775992150290,
+      "type": "file"
+    },
+    {
+      "path": "src/lib/components/SnoozePopover.test.js",
+      "accessCount": 9,
+      "lastAccessed": 1775995218183,
+      "type": "file"
+    },
+    {
+      "path": "src/lib/components/CommandPalette.svelte",
+      "accessCount": 8,
+      "lastAccessed": 1775810052002,
+      "type": "file"
+    },
+    {
+      "path": "src/lib/utils/updater.ts",
+      "accessCount": 5,
+      "lastAccessed": 1775992164535,
+      "type": "file"
+    },
+    {
+      "path": "src/lib/components/ThreadList.svelte",
+      "accessCount": 3,
+      "lastAccessed": 1775806584957,
+      "type": "file"
+    },
+    {
+      "path": "src/lib/components/Sidebar.svelte",
+      "accessCount": 2,
+      "lastAccessed": 1775995057740,
+      "type": "file"
+    },
+    {
+      "path": "src/routes/+page.svelte",
+      "accessCount": 2,
+      "lastAccessed": 1775995066063,
+      "type": "file"
+    },
+    {
+      "path": "package.json",
+      "accessCount": 1,
+      "lastAccessed": 1775805290187,
+      "type": "file"
+    },
+    {
+      "path": "Makefile",
+      "accessCount": 1,
+      "lastAccessed": 1775805300491,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

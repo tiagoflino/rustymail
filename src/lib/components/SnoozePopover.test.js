@@ -14,7 +14,9 @@ beforeEach(() => {
 });
 
 describe("SnoozePopover", () => {
+  /** @type {any} */
   let onsnooze;
+  /** @type {any} */
   let onclose;
 
   beforeEach(() => {
@@ -43,7 +45,7 @@ describe("SnoozePopover", () => {
 
   it("fires onsnooze with future timestamp on click", async () => {
     render(SnoozePopover, { props: { onsnooze, onclose } });
-    const btn = screen.getByText("Later Today").closest("button");
+    const btn = /** @type {HTMLButtonElement} */ (/** @type {HTMLButtonElement} */ (screen.getByText("Later Today").closest("button")));
     await fireEvent.click(btn);
     expect(onsnooze).toHaveBeenCalledTimes(1);
     const ts = onsnooze.mock.calls[0][0];
@@ -62,7 +64,7 @@ describe("SnoozePopover", () => {
 
   it("fires onclose on backdrop click", async () => {
     render(SnoozePopover, { props: { onsnooze, onclose } });
-    const backdrop = document.querySelector(".snooze-backdrop");
+    const backdrop = /** @type {Element} */ (document.querySelector(".snooze-backdrop"));
     await fireEvent.click(backdrop);
     expect(onclose).toHaveBeenCalledTimes(1);
   });
@@ -73,7 +75,7 @@ describe("SnoozePopover", () => {
     vi.setSystemTime(mockDate);
 
     render(SnoozePopover, { props: { onsnooze, onclose } });
-    const btn = screen.getByText("Later Today").closest("button");
+    const btn = /** @type {HTMLButtonElement} */ (screen.getByText("Later Today").closest("button"));
     await fireEvent.click(btn);
 
     const ts = onsnooze.mock.calls[0][0];
@@ -87,7 +89,7 @@ describe("SnoozePopover", () => {
     vi.setSystemTime(mockDate);
 
     render(SnoozePopover, { props: { onsnooze, onclose } });
-    const btn = screen.getByText("Later Today").closest("button");
+    const btn = /** @type {HTMLButtonElement} */ (screen.getByText("Later Today").closest("button"));
     await fireEvent.click(btn);
 
     const ts = onsnooze.mock.calls[0][0];
@@ -101,7 +103,7 @@ describe("SnoozePopover", () => {
     vi.setSystemTime(mockDate);
 
     render(SnoozePopover, { props: { onsnooze, onclose } });
-    const btn = screen.getByText("Later Today").closest("button");
+    const btn = /** @type {HTMLButtonElement} */ (screen.getByText("Later Today").closest("button"));
     await fireEvent.click(btn);
 
     const ts = onsnooze.mock.calls[0][0];
@@ -115,7 +117,7 @@ describe("SnoozePopover", () => {
     vi.setSystemTime(mockDate);
 
     render(SnoozePopover, { props: { onsnooze, onclose } });
-    const btn = screen.getByText("Tomorrow Morning").closest("button");
+    const btn = /** @type {HTMLButtonElement} */ (screen.getByText("Tomorrow Morning").closest("button"));
     await fireEvent.click(btn);
 
     const ts = onsnooze.mock.calls[0][0];
@@ -129,7 +131,7 @@ describe("SnoozePopover", () => {
     vi.setSystemTime(mockDate);
 
     render(SnoozePopover, { props: { onsnooze, onclose } });
-    const btn = screen.getByText("Next Week").closest("button");
+    const btn = /** @type {HTMLButtonElement} */ (screen.getByText("Next Week").closest("button"));
     await fireEvent.click(btn);
 
     const ts = onsnooze.mock.calls[0][0];
@@ -143,7 +145,7 @@ describe("SnoozePopover", () => {
     vi.setSystemTime(mockDate);
 
     render(SnoozePopover, { props: { onsnooze, onclose } });
-    const btn = screen.getByText("Next Week").closest("button");
+    const btn = /** @type {HTMLButtonElement} */ (screen.getByText("Next Week").closest("button"));
     await fireEvent.click(btn);
 
     const ts = onsnooze.mock.calls[0][0];
@@ -157,7 +159,7 @@ describe("SnoozePopover", () => {
     vi.setSystemTime(mockDate);
 
     render(SnoozePopover, { props: { onsnooze, onclose } });
-    const btn = screen.getByText("Next Week").closest("button");
+    const btn = /** @type {HTMLButtonElement} */ (screen.getByText("Next Week").closest("button"));
     await fireEvent.click(btn);
 
     const ts = onsnooze.mock.calls[0][0];
@@ -192,7 +194,7 @@ describe("SnoozePopover", () => {
     const previews = document.querySelectorAll(".snooze-preview");
     expect(previews.length).toBe(3);
     previews.forEach(p => {
-      expect(p.textContent.trim().length).toBeGreaterThan(0);
+      expect(p.textContent?.trim().length).toBeGreaterThan(0);
     });
   });
 });

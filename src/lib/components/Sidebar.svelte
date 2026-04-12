@@ -10,6 +10,7 @@
     iconSettings,
     iconCalendar,
     iconSnooze,
+    iconSubscriptions,
   } from "$lib/components/icons";
   import { isSyncing, lastSyncError } from "$lib/stores/threads";
   import { buildLabelTree, type LabelTreeNode } from "$lib/utils/labelTree";
@@ -47,6 +48,7 @@
     onsync: () => void;
     onthemecycle: () => void;
     ontogglecalendar: () => void;
+    ontogglesubscriptions: () => void;
     onsettings: () => void;
     ontogglecollapse: () => void;
     onselectlabel: (labelId: string) => void;
@@ -71,6 +73,7 @@
     onsync,
     onthemecycle,
     ontogglecalendar,
+    ontogglesubscriptions,
     onsettings,
     ontogglecollapse,
     onselectlabel,
@@ -170,6 +173,13 @@
       title="Toggle Calendar"
     >
       {@html iconCalendar}
+    </button>
+    <button
+      class="btn-sidebar sidebar-subscriptions-btn"
+      onclick={ontogglesubscriptions}
+      title="Toggle Subscriptions"
+    >
+      {@html iconSubscriptions}
     </button>
   </div>
 
@@ -722,6 +732,15 @@
     opacity: 0.9;
   }
   .sidebar-calendar-btn {
+    width: 36px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-view);
+    border: 1px solid var(--border-color);
+  }
+  .sidebar-subscriptions-btn {
     width: 36px;
     padding: 0;
     display: flex;
