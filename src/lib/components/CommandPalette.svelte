@@ -89,17 +89,22 @@
 </script>
 
 {#if show}
-  <div 
-    class="palette-backdrop" 
-    transition:fade={{ duration: 150 }} 
+  <div
+    class="palette-backdrop"
+    transition:fade={{ duration: 150 }}
     onclick={onClose}
+    onkeydown={(e) => e.key === "Escape" && onClose()}
     role="dialog"
+    tabindex="-1"
   >
-    <div 
-      class="palette-modal" 
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div
+      class="palette-modal"
       transition:fly={{ y: -10, duration: 200 }}
       onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.key === "Escape" && onClose()}
       role="document"
+      tabindex="-1"
     >
       <div class="search-header">
         <span class="search-icon">{@html iconSearch}</span>
@@ -118,11 +123,13 @@
         <div class="actions-list">
           {#each filteredActions as action, i}
             <!-- svelte-ignore a11y_mouse_events_have_key_events -->
-            <div 
-              class="action-item" 
+            <div
+              class="action-item"
               class:selected={i === activeIndex}
               onmouseover={() => activeIndex = i}
+              onfocus={() => activeIndex = i}
               onclick={() => execute(action.id)}
+              onkeydown={(e) => (e.key === "Enter" || e.key === " ") && execute(action.id)}
               role="button"
               tabindex="0"
             >

@@ -14,15 +14,31 @@
   let isSaving = $state(false);
   let isDeleting = $state(false);
 
-  let title = $state(event?.summary || "");
-  let location = $state(event?.location || "");
-  let description = $state(event?.description || "");
+  let title = $state("");
+  let location = $state("");
+  let description = $state("");
+  let isEditMode = $state(true);
+
+  function updateState() {
+    if (event) {
+      title = event.summary || "";
+      location = event.location || "";
+      description = event.description || "";
+    } else {
+      title = "";
+      location = "";
+      description = "";
+    }
+    isEditMode = !event;
+  }
+
+  $effect(() => {
+    updateState();
+  });
 
   const iconLocation = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>`;
   const iconVideo = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>`;
   const iconCalendar = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>`;
-
-  let isEditMode = $state(!event);
 
   function openExternalDirect(url: string) {
     invoke("open_external_url", { url });
@@ -61,7 +77,7 @@
     return formatted.replace(/\n/g, '<br>');
   }
 
-  function handleHtmlClick(e: MouseEvent) {
+  function handleHtmlClick(e: Event) {
     const target = e.target as HTMLElement;
     const anchor = target.closest('a');
     if (anchor && anchor.href) {
@@ -83,39 +99,36 @@
     return `${hh}:${min}`;
   }
 
-  // Initialize start/end
-  let defaultStart = new Date();
-  let defaultEnd = new Date();
-  if (selectedDate) {
-    defaultStart = new Date(selectedDate);
-    defaultStart.setHours(9, 0, 0, 0);
-    defaultEnd = new Date(selectedDate);
-    defaultEnd.setHours(10, 0, 0, 0);
+  // Initialize start/end with default values, sync from props in effects
+  let startDate = $state(formatDateForInput(new Date()));
+  let startTime = $state(formatTimeForInput(new Date()));
+
+  let endDate = $state(formatDateForInput(new Date()));
+  let endTime = $state(formatTimeForInput(new Date()));
+
+  let isAllDay = $state(false);
+
+  function updateFromEvent() {
+    if (event) {
+      const startDt = event.start?.dateTime || event.start?.date || new Date();
+      const endDt = event.end?.dateTime || event.end?.date || new Date();
+      startDate = formatDateForInput(new Date(startDt));
+      startTime = formatTimeForInput(new Date(startDt));
+      endDate = formatDateForInput(new Date(endDt));
+      endTime = formatTimeForInput(new Date(endDt));
+      isAllDay = !!event.start?.date && !event.start?.dateTime;
+    } else {
+      startDate = formatDateForInput(selectedDate || new Date());
+      startTime = formatTimeForInput(selectedDate || new Date());
+      endDate = formatDateForInput(selectedDate || new Date());
+      endTime = formatTimeForInput(selectedDate || new Date());
+      isAllDay = false;
+    }
   }
 
-  let startDate = $state(
-    event
-      ? formatDateForInput(new Date(event.start?.dateTime || event.start?.date))
-      : formatDateForInput(defaultStart)
-  );
-  let startTime = $state(
-    event
-      ? formatTimeForInput(new Date(event.start?.dateTime || defaultStart))
-      : formatTimeForInput(defaultStart)
-  );
-
-  let endDate = $state(
-    event
-      ? formatDateForInput(new Date(event.end?.dateTime || event.end?.date || defaultEnd))
-      : formatDateForInput(defaultEnd)
-  );
-  let endTime = $state(
-    event
-      ? formatTimeForInput(new Date(event.end?.dateTime || defaultEnd))
-      : formatTimeForInput(defaultEnd)
-  );
-
-  let isAllDay = $state(event ? !!event.start?.date && !event.start?.dateTime : false);
+  $effect(() => {
+    updateFromEvent();
+  });
 
   async function handleSave() {
     if (!title.trim()) {
@@ -185,10 +198,10 @@
   }
 </script>
 
-<div class="modal-backdrop" onclick={onClose}>
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+<div class="modal-backdrop" onclick={onClose} onkeydown={(e) => e.key === 'Enter' && onClose()} role="button" tabindex="0"></div>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="modal-content" onclick={(e) => e.stopPropagation()}>
+  <div class="modal-content" onpointerdown={(e) => e.stopPropagation()}>
     <div class="modal-header">
       <h2>{!event ? "New Event" : (isEditMode ? "Edit Event" : "Event Details")}</h2>
       <button class="close-btn" onclick={onClose}>✕</button>
@@ -197,12 +210,13 @@
     {#if isEditMode}
       <div class="modal-body">
       <div class="form-group title-group">
+        <label for="event-title">Title</label>
         <input
+          id="event-title"
           type="text"
           placeholder="Add title"
           bind:value={title}
           class="title-input"
-          autofocus
         />
       </div>
 
@@ -229,13 +243,14 @@
       </div>
 
       <div class="form-group">
-        <label>Location</label>
-        <input type="text" placeholder="Add location" bind:value={location} />
+        <label for="event-location">Location</label>
+        <input id="event-location" type="text" placeholder="Add location" bind:value={location} />
       </div>
 
       <div class="form-group">
-        <label>Description</label>
+        <label for="event-description">Description</label>
         <textarea
+          id="event-description"
           placeholder="Add description"
           bind:value={description}
           rows="4"
@@ -266,7 +281,7 @@
         
         {#if event.location}
           <div class="read-section">
-             <button class="location-btn link-style" onclick={() => openExternalDirect(getMapUrl(event.location))} title="Open Map">
+             <button class="location-btn link-style" onclick={() => openExternalDirect(getMapUrl(event.location))} onkeydown={(e) => e.key === "Enter" && openExternalDirect(getMapUrl(event.location))} title="Open Map">
                 <span class="icon">{@html iconLocation}</span> <span class="loc-text">{event.location}</span>
              </button>
           </div>
@@ -274,7 +289,7 @@
 
         {#if extractMeetingLink(event)}
           <div class="read-section">
-             <button class="join-btn" onclick={() => openUrl(extractMeetingLink(event) || '')}>
+             <button class="join-btn" onclick={() => openUrl(extractMeetingLink(event) || '')} onkeydown={(e) => e.key === "Enter" && openUrl(extractMeetingLink(event) || '')}>
                <span class="icon">{@html iconVideo}</span> Join Video Call
              </button>
           </div>
@@ -282,9 +297,7 @@
 
         {#if event.description}
           <div class="read-desc section-block">
-             <!-- svelte-ignore a11y_click_events_have_key_events -->
-             <!-- svelte-ignore a11y_no_static_element_interactions -->
-             <div class="html-content" onclick={handleHtmlClick}>
+             <div class="html-content" onclick={handleHtmlClick} onkeydown={(e) => e.key === "Enter" && handleHtmlClick(e)}>
                {@html formatDescription(event.description)}
              </div>
           </div>
@@ -301,7 +314,6 @@
       </div>
     {/if}
   </div>
-</div>
 
 <style>
   .modal-backdrop {

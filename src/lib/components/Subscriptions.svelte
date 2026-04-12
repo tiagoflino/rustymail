@@ -237,52 +237,49 @@
         <span>No subscriptions found</span>
       </div>
     {:else}
-      <div class="subscriptions-table">
-        <div class="table-header">
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div class="col-sender sortable" class:sorted={sortKey === "sender"} onclick={() => toggleSort("sender")}>Sender {sortKey === "sender" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}</div>
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div class="col-count sortable" class:sorted={sortKey === "count"} onclick={() => toggleSort("count")}>Messages {sortKey === "count" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}</div>
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div class="col-frequency sortable" class:sorted={sortKey === "frequency"} onclick={() => toggleSort("frequency")}>Frequency {sortKey === "frequency" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}</div>
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div class="col-lastseen sortable" class:sorted={sortKey === "lastseen"} onclick={() => toggleSort("lastseen")}>Last Seen {sortKey === "lastseen" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}</div>
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div class="col-method sortable" class:sorted={sortKey === "method"} onclick={() => toggleSort("method")}>Method {sortKey === "method" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}</div>
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div class="col-status sortable" class:sorted={sortKey === "status"} onclick={() => toggleSort("status")}>Status {sortKey === "status" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}</div>
-          <div class="col-actions"></div>
-        </div>
+      <table class="subscriptions-table">
+        <thead>
+          <tr class="table-header">
+            <th><button type="button" class="col-sender sortable sorted-col" class:sorted={sortKey === "sender"} onclick={() => toggleSort("sender")} onkeydown={(e) => e.key === "Enter" && toggleSort("sender")}>Sender {sortKey === "sender" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}</button></th>
+            <th><button type="button" class="col-count sortable sorted-col" class:sorted={sortKey === "count"} onclick={() => toggleSort("count")} onkeydown={(e) => e.key === "Enter" && toggleSort("count")}>Messages {sortKey === "count" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}</button></th>
+            <th><button type="button" class="col-frequency sortable sorted-col" class:sorted={sortKey === "frequency"} onclick={() => toggleSort("frequency")} onkeydown={(e) => e.key === "Enter" && toggleSort("frequency")}>Frequency {sortKey === "frequency" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}</button></th>
+            <th><button type="button" class="col-lastseen sortable sorted-col" class:sorted={sortKey === "lastseen"} onclick={() => toggleSort("lastseen")} onkeydown={(e) => e.key === "Enter" && toggleSort("lastseen")}>Last Seen {sortKey === "lastseen" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}</button></th>
+            <th><button type="button" class="col-method sortable sorted-col" class:sorted={sortKey === "method"} onclick={() => toggleSort("method")} onkeydown={(e) => e.key === "Enter" && toggleSort("method")}>Method {sortKey === "method" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}</button></th>
+            <th><button type="button" class="col-status sortable sorted-col" class:sorted={sortKey === "status"} onclick={() => toggleSort("status")} onkeydown={(e) => e.key === "Enter" && toggleSort("status")}>Status {sortKey === "status" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}</button></th>
+            <th><div class="col-actions"></div></th>
+          </tr>
+        </thead>
+        <tbody>
         {#each filteredSubscriptions() as sub}
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div class="table-row row-clickable" onclick={() => onselectsubscription?.(sub.sender_email)}>
-            <div class="col-sender">
+          <tr class="table-row row-clickable" tabindex="0" onkeydown={(e) => e.key === "Enter" && onselectsubscription?.(sub.sender_email)} onclick={() => onselectsubscription?.(sub.sender_email)}>
+            <td class="col-sender">
               <div class="sender-info">
                 <span class="sender-name">{sub.sender_name || "Unknown"}</span>
                 <span class="sender-email">{sub.sender_email}</span>
               </div>
-            </div>
-            <div class="col-count">{sub.message_count}</div>
-            <div class="col-frequency">{formatFrequency(sub.avg_frequency_days)}</div>
-            <div class="col-lastseen">{formatRelativeTime(sub.last_seen)}</div>
-            <div class="col-method" title="Detected via {sub.detection_method}">
+            </td>
+            <td class="col-count">{sub.message_count}</td>
+            <td class="col-frequency">{formatFrequency(sub.avg_frequency_days)}</td>
+            <td class="col-lastseen">{formatRelativeTime(sub.last_seen)}</td>
+            <td class="col-method" title="Detected via {sub.detection_method}">
               <span class="method-pill method-pill-{getUnsubMethod(sub)}">
                 {#if getUnsubMethod(sub) === "one_click"}One-Click{:else if getUnsubMethod(sub) === "link"}Link{:else if getUnsubMethod(sub) === "email"}Email{:else}Manual{/if}
               </span>
-            </div>
-            <div class="col-status">
+            </td>
+            <td class="col-status">
               <span class="status-badge status-{sub.status}">{sub.status}</span>
-            </div>
-            <div class="col-actions" onclick={(e) => e.stopPropagation()}>
+            </td>
+            <td class="col-actions" onclick={(e) => e.stopPropagation()}>
               {#if sub.status === "active"}
-                <button class="action-btn unsubscribe-btn" title="Unsubscribe" onclick={() => showUnsubscribeDialog(sub)}>{@html iconBellOff}</button>
+                <button type="button" class="action-btn unsubscribe-btn" title="Unsubscribe" onclick={() => showUnsubscribeDialog(sub)}>{@html iconBellOff}</button>
               {/if}
-              <button class="action-btn correct-btn" title="Not a subscription" onclick={() => handleCorrectSubscription(sub)}>{@html iconXCircle}</button>
-              <button class="action-btn delete-btn" title="Delete" onclick={() => handleDelete(sub)}>{@html iconTrash}</button>
-            </div>
-          </div>
+              <button type="button" class="action-btn correct-btn" title="Not a subscription" onclick={() => handleCorrectSubscription(sub)}>{@html iconXCircle}</button>
+              <button type="button" class="action-btn delete-btn" title="Delete" onclick={() => handleDelete(sub)}>{@html iconTrash}</button>
+            </td>
+          </tr>
         {/each}
-      </div>
+        </tbody>
+      </table>
     {/if}
   </div>
 </div>

@@ -411,9 +411,7 @@
       </div>
       <div class="days-matrix list-layout">
         {#each weekDays as day}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div class="day-cell list-cell {isToday(day) ? 'today-bg' : ''}" onclick={() => handleDayClick(day)}>
+          <div class="day-cell list-cell {isToday(day) ? 'today-bg' : ''}" onclick={() => handleDayClick(day)} onkeydown={(e) => e.key === "Enter" && handleDayClick(day)} tabindex="0" role="button">
             <div class="events-container pad">
               {#each getEventsForDay(day) as ev}
                 <button class="event-chip list-chip" onclick={(e) => handleEventClick(e, ev)} onmouseenter={(e) => handleMouseEnter(e, ev)} onmouseleave={handleMouseLeave}>
@@ -431,7 +429,7 @@
     
     <!-- DAY VIEW -->
     {:else if viewType === 'day'}
-      <div class="day-view-container" onclick={() => handleDayClick(currentDate)}>
+      <div class="day-view-container" onclick={() => handleDayClick(currentDate)} onkeydown={(e) => e.key === "Enter" && handleDayClick(currentDate)} role="button" tabindex="0">
          <div class="day-view-header {isToday(currentDate) ? 'today-text' : ''}">
             <span class="day-view-number {isToday(currentDate) ? 'today-badge' : ''}">{currentDate.getDate()}</span>
             <span class="day-view-name">{WEEKDAYS[currentDate.getDay()]}</span>
@@ -440,25 +438,24 @@
             <!-- pure list rendering -->
             <div class="day-events-list">
               {#each getEventsForDay(currentDate) as ev}
-                <button class="event-card" onclick={(e) => handleEventClick(e, ev)}>
+                <button class="event-card" onclick={(e: MouseEvent) => handleEventClick(e, ev)} onkeydown={(e: KeyboardEvent) => { if (e.key === "Enter") handleEventClick(new MouseEvent('click'), ev); }}>
                     <div class="event-card-stripe"></div>
                     <div class="event-card-content">
                         <span class="event-card-title">{ev.summary}</span>
                         <span class="event-card-time">{formatEventTime(ev)}</span>
                         {#if ev.location}
-                          <button class="event-card-location link-style" onclick={(e) => openExternalDirect(e, getMapUrl(ev.location))} title="Open map/link">
+                          <a href={getMapUrl(ev.location)} target="_blank" rel="noopener noreferrer" title="Open map/link">
                             <span class="icon">{@html iconLocation}</span> <span class="loc-text">{ev.location}</span>
-                          </button>
+                          </a>
                         {/if}
                         {#if extractMeetingLink(ev)}
-                           <button class="join-btn" onclick={(e) => openUrl(e, extractMeetingLink(ev) || '')}>
+                           <a href={extractMeetingLink(ev) || ''} target="_blank" rel="noopener noreferrer">
                              <span class="icon">{@html iconVideo}</span> Join Meeting
-                           </button>
+                           </a>
                         {/if}
                         {#if ev.description}
-                          <!-- svelte-ignore a11y_click_events_have_key_events -->
                           <!-- svelte-ignore a11y_no_static_element_interactions -->
-                          <div class="event-card-desc html-content" onclick={handleHtmlClick}>{@html formatDescription(ev.description)}</div>
+                          <div class="event-card-desc html-content" onclick={handleHtmlClick} onkeydown={(e: KeyboardEvent) => e.key === "Enter" && handleHtmlClick(e as any)}>{@html formatDescription(ev.description)}</div>
                         {/if}
                     </div>
                 </button>
@@ -648,7 +645,7 @@
   .link-style:hover .loc-text { text-decoration: underline; }
   .link-style .icon { display: flex; align-items: center; margin-top: 1px; flex-shrink: 0; opacity: 0.8;}
   .loc-text { padding-top: 1px; }
-  .event-card-location { font-size: 13px; color: var(--text-secondary); }
+
   
   .join-btn { background: var(--bg-view); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 6px; padding: 6px 10px; font-size: 12px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; transition: background 0.1s, border-color 0.1s; align-self: flex-start; margin-top: 4px;}
   .join-btn:hover { background: var(--sidebar-hover); border-color: var(--accent-blue); }
