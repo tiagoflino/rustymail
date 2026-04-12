@@ -1301,6 +1301,20 @@ pub async fn modify_thread(
             .map_err(|e| e.to_string())?;
     }
 
+    if remove_labels.contains(&"INBOX".to_string()) {
+        sqlx::query("DELETE FROM thread_labels WHERE thread_id = ? AND label_id = 'INBOX'")
+            .bind(thread_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+    } else if add_labels.contains(&"INBOX".to_string()) {
+        sqlx::query("INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?, 'INBOX')")
+            .bind(thread_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
     if remove_labels.contains(&"STARRED".to_string()) {
         sqlx::query("DELETE FROM thread_labels WHERE thread_id = ? AND label_id = 'STARRED'")
             .bind(thread_id)

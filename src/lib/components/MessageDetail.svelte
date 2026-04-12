@@ -11,7 +11,9 @@
     iconReplyAll,
     iconForward,
     iconDraft,
+    iconSnooze,
   } from "$lib/components/icons";
+  import SnoozePopover from "./SnoozePopover.svelte";
   import {
     selectedThreadId,
     currentMessages,
@@ -76,6 +78,11 @@
     }
   });
 
+  $effect(() => {
+    $selectedThreadId;
+    showSnoozePopover = false;
+  });
+
   function toggleMessage(id: string) {
     const next = new Set(expandedMessages);
     if (next.has(id)) {
@@ -123,6 +130,8 @@
   interface Props {
     isMacOS: boolean;
     isTrashView: boolean;
+    isSnoozedView?: boolean;
+    showSnoozePopover?: boolean;
     onaction: (action: string) => void;
     onreply: (msg: LocalMessage) => void;
     onreplyall: (msg: LocalMessage) => void;
@@ -134,6 +143,8 @@
   let {
     isMacOS,
     isTrashView,
+    isSnoozedView = false,
+    showSnoozePopover = $bindable(false),
     onaction,
     onreply,
     onreplyall,
@@ -275,6 +286,38 @@
           >Archive</span
         >
       </button>
+      {#if isSnoozedView}
+        <button
+          onclick={() => onaction("unsnooze")}
+          class="toolbar-btn"
+          title="Unsnooze"
+        >
+          <span class="toolbar-icon">{@html iconSnooze}</span><span>Unsnooze</span>
+        </button>
+      {:else}
+        <button
+          onclick={() => showSnoozePopover = !showSnoozePopover}
+          class="toolbar-btn"
+          title="Snooze (H)"
+          aria-expanded={showSnoozePopover}
+          aria-haspopup="menu"
+        >
+          <span class="toolbar-icon">{@html iconSnooze}</span><span>Snooze</span>
+        </button>
+        {#if showSnoozePopover}
+          <div class="snooze-popover-anchor">
+            <div class="snooze-popover-position">
+              <SnoozePopover
+                onsnooze={(until) => {
+                  showSnoozePopover = false;
+                  onaction("snooze:" + until);
+                }}
+                onclose={() => showSnoozePopover = false}
+              />
+            </div>
+          </div>
+        {/if}
+      {/if}
       {#if isTrashView}
         <button
           onclick={() => onaction("untrash")}
@@ -1037,5 +1080,15 @@
     line-height: 14px;
     color: var(--text-secondary);
     white-space: nowrap;
+  }
+  .snooze-popover-anchor {
+    position: relative;
+    width: 0;
+    height: 0;
+  }
+  .snooze-popover-position {
+    position: absolute;
+    top: 8px;
+    right: 0;
   }
 </style>

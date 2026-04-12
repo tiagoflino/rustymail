@@ -3,7 +3,7 @@ use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
 use std::str::FromStr;
 use tauri::Manager;
 
-const CURRENT_SCHEMA_VERSION: &str = "2";
+const CURRENT_SCHEMA_VERSION: &str = "3";
 
 pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
     let schema = r#"
@@ -124,6 +124,14 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         applied_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS snoozed_threads (
+        thread_id TEXT NOT NULL,
+        account_id TEXT NOT NULL,
+        snoozed_until INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (thread_id, account_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_thread_labels_thread ON thread_labels(thread_id);
     CREATE INDEX IF NOT EXISTS idx_thread_labels_label ON thread_labels(label_id);
     CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
@@ -132,6 +140,7 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
     CREATE INDEX IF NOT EXISTS idx_message_labels_label ON message_labels(label_id);
     CREATE INDEX IF NOT EXISTS idx_threads_account ON threads(account_id);
     CREATE INDEX IF NOT EXISTS idx_labels_account ON labels(account_id);
+    CREATE INDEX IF NOT EXISTS idx_snoozed_account_until ON snoozed_threads(account_id, snoozed_until);
     CREATE INDEX IF NOT EXISTS idx_subscriptions_account ON subscriptions(account_id);
     CREATE INDEX IF NOT EXISTS idx_subscriptions_sender ON subscriptions(sender_email);
     CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions(account_id, status);
@@ -277,6 +286,16 @@ async fn m005_add_label_colors(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+async fn has_table(pool: &SqlitePool, table: &str) -> bool {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?"
+    )
+    .bind(table)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0) > 0
+}
+
 async fn m006_create_subscriptions_table(pool: &SqlitePool) -> Result<()> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS subscriptions (
@@ -315,6 +334,26 @@ async fn m006_create_subscriptions_table(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+async fn m007_create_snoozed_threads(pool: &SqlitePool) -> Result<()> {
+    if !has_table(pool, "snoozed_threads").await {
+        sqlx::query(
+            "CREATE TABLE snoozed_threads (
+                thread_id TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                snoozed_until INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (thread_id, account_id)
+            )"
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_snoozed_account_until ON snoozed_threads(account_id, snoozed_until)")
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
 async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     let applied: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
         .fetch_all(pool)
@@ -336,6 +375,13 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
                     .await;
             }
         }
+        // Bootstrap: mark m006 if snoozed_threads table already exists
+        if has_table(pool, "snoozed_threads").await {
+            let _ = sqlx::query("INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)")
+                .bind(6i64)
+                .execute(pool)
+                .await;
+        }
         let applied_after: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
             .fetch_all(pool)
             .await
@@ -347,7 +393,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 }
 
 async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()> {
-    for version in 1..=6i64 {
+    for version in 1..=7i64 {
         if !applied.contains(&version) {
             println!("[Migration] Running v{}...", version);
             match version {
@@ -357,6 +403,7 @@ async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()
                 4 => m004_backfill_thread_metadata(pool).await?,
                 5 => m005_add_label_colors(pool).await?,
                 6 => m006_create_subscriptions_table(pool).await?,
+                7 => m007_create_snoozed_threads(pool).await?,
                 _ => {}
             }
             sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
@@ -394,7 +441,7 @@ mod tests {
         for expected in &[
             "accounts", "attachments", "drafts", "history_state", "labels",
             "message_labels", "messages", "messages_fts", "schema_migrations",
-            "settings", "subscriptions", "thread_labels", "threads",
+            "settings", "snoozed_threads", "subscriptions", "thread_labels", "threads",
         ] {
             assert!(names.contains(expected), "Missing table: {expected}");
         }
@@ -413,6 +460,7 @@ mod tests {
         for expected in &[
             "idx_labels_account", "idx_message_labels_label",
             "idx_messages_account", "idx_messages_internal_date", "idx_messages_thread",
+            "idx_snoozed_account_until",
             "idx_thread_labels_label", "idx_thread_labels_thread", "idx_threads_account",
         ] {
             assert!(names.contains(expected), "Missing index: {expected}");
@@ -549,7 +597,7 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
             .fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 6);
+        assert_eq!(count, 7);
     }
 
     #[tokio::test]

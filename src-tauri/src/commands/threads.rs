@@ -1,6 +1,8 @@
 use super::accounts::get_active_account;
 use tauri::Manager;
 
+const SNOOZED_EXCLUSION: &str = "AND NOT EXISTS (SELECT 1 FROM snoozed_threads st WHERE st.thread_id = t.id AND st.account_id = t.account_id)";
+
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct LocalThread {
     pub id: String,
@@ -103,6 +105,7 @@ pub(crate) async fn get_threads_inner(
                         LEFT JOIN thread_labels tl_promo ON t.id = tl_promo.thread_id AND tl_promo.label_id = 'CATEGORY_PROMOTIONS'
                         WHERE t.account_id = ? AND {hf}
                           AND tl_social.thread_id IS NULL AND tl_promo.thread_id IS NULL
+                          {SNOOZED_EXCLUSION}
                         ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
                         LIMIT ? OFFSET ?", base_select);
                     (sql, vec![account_id.to_string()])
@@ -112,6 +115,7 @@ pub(crate) async fn get_threads_inner(
                         "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_SOCIAL'
                         INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
                         WHERE t.account_id = ? AND {hf}
+                        {SNOOZED_EXCLUSION}
                         ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
                         LIMIT ? OFFSET ?", base_select);
                     (sql, vec![account_id.to_string()])
@@ -121,6 +125,7 @@ pub(crate) async fn get_threads_inner(
                         "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_PROMOTIONS'
                         INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
                         WHERE t.account_id = ? AND {hf}
+                        {SNOOZED_EXCLUSION}
                         ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
                         LIMIT ? OFFSET ?", base_select);
                     (sql, vec![account_id.to_string()])
@@ -136,9 +141,11 @@ pub(crate) async fn get_threads_inner(
             }
         },
         (Some(lid), None) => {
+            let snooze_filter = if lid == "INBOX" { SNOOZED_EXCLUSION } else { "" };
             let sql = format!(
                 "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = ?
                 WHERE t.account_id = ? AND {hf}
+                {snooze_filter}
                 ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
                 LIMIT ? OFFSET ?", base_select);
             (sql, vec![lid.to_string(), account_id.to_string()])
@@ -152,6 +159,7 @@ pub(crate) async fn get_threads_inner(
                         LEFT JOIN thread_labels tl_promo ON t.id = tl_promo.thread_id AND tl_promo.label_id = 'CATEGORY_PROMOTIONS'
                         WHERE t.account_id = ? AND {hf}
                           AND tl_social.thread_id IS NULL AND tl_promo.thread_id IS NULL
+                          {SNOOZED_EXCLUSION}
                         ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
                         LIMIT ? OFFSET ?", base_select);
                     (sql, vec![account_id.to_string()])
@@ -161,6 +169,7 @@ pub(crate) async fn get_threads_inner(
                         "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_SOCIAL'
                         INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
                         WHERE t.account_id = ? AND {hf}
+                        {SNOOZED_EXCLUSION}
                         ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
                         LIMIT ? OFFSET ?", base_select);
                     (sql, vec![account_id.to_string()])
@@ -170,6 +179,7 @@ pub(crate) async fn get_threads_inner(
                         "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_PROMOTIONS'
                         INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
                         WHERE t.account_id = ? AND {hf}
+                        {SNOOZED_EXCLUSION}
                         ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
                         LIMIT ? OFFSET ?", base_select);
                     (sql, vec![account_id.to_string()])
@@ -246,21 +256,24 @@ pub(crate) async fn get_thread_count_inner(
                         LEFT JOIN thread_labels tl_social ON t.id = tl_social.thread_id AND tl_social.label_id = 'CATEGORY_SOCIAL'
                         LEFT JOIN thread_labels tl_promo ON t.id = tl_promo.thread_id AND tl_promo.label_id = 'CATEGORY_PROMOTIONS'
                         WHERE t.account_id = ? AND {hf}
-                          AND tl_social.thread_id IS NULL AND tl_promo.thread_id IS NULL", base_select);
+                          AND tl_social.thread_id IS NULL AND tl_promo.thread_id IS NULL
+                          {SNOOZED_EXCLUSION}", base_select);
                     (sql, vec![account_id.to_string()])
                 },
                 ThreadCategory::Social => {
                     let sql = format!(
                         "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_SOCIAL'
                         INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
-                        WHERE t.account_id = ? AND {hf}", base_select);
+                        WHERE t.account_id = ? AND {hf}
+                        {SNOOZED_EXCLUSION}", base_select);
                     (sql, vec![account_id.to_string()])
                 },
                 ThreadCategory::Promotions => {
                     let sql = format!(
                         "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_PROMOTIONS'
                         INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
-                        WHERE t.account_id = ? AND {hf}", base_select);
+                        WHERE t.account_id = ? AND {hf}
+                        {SNOOZED_EXCLUSION}", base_select);
                     (sql, vec![account_id.to_string()])
                 },
                 ThreadCategory::Important => {
@@ -272,9 +285,11 @@ pub(crate) async fn get_thread_count_inner(
             }
         },
         (Some(lid), None) => {
+            let snooze_filter = if lid == "INBOX" { SNOOZED_EXCLUSION } else { "" };
             let sql = format!(
                 "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = ?
-                WHERE t.account_id = ? AND {hf}", base_select);
+                WHERE t.account_id = ? AND {hf}
+                {snooze_filter}", base_select);
             (sql, vec![lid.to_string(), account_id.to_string()])
         },
         (None, Some(cat)) => {
@@ -285,21 +300,24 @@ pub(crate) async fn get_thread_count_inner(
                         LEFT JOIN thread_labels tl_social ON t.id = tl_social.thread_id AND tl_social.label_id = 'CATEGORY_SOCIAL'
                         LEFT JOIN thread_labels tl_promo ON t.id = tl_promo.thread_id AND tl_promo.label_id = 'CATEGORY_PROMOTIONS'
                         WHERE t.account_id = ? AND {hf}
-                          AND tl_social.thread_id IS NULL AND tl_promo.thread_id IS NULL", base_select);
+                          AND tl_social.thread_id IS NULL AND tl_promo.thread_id IS NULL
+                          {SNOOZED_EXCLUSION}", base_select);
                     (sql, vec![account_id.to_string()])
                 },
                 ThreadCategory::Social => {
                     let sql = format!(
                         "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_SOCIAL'
                         INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
-                        WHERE t.account_id = ? AND {hf}", base_select);
+                        WHERE t.account_id = ? AND {hf}
+                        {SNOOZED_EXCLUSION}", base_select);
                     (sql, vec![account_id.to_string()])
                 },
                 ThreadCategory::Promotions => {
                     let sql = format!(
                         "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_PROMOTIONS'
                         INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
-                        WHERE t.account_id = ? AND {hf}", base_select);
+                        WHERE t.account_id = ? AND {hf}
+                        {SNOOZED_EXCLUSION}", base_select);
                     (sql, vec![account_id.to_string()])
                 },
                 ThreadCategory::Important => {
@@ -431,6 +449,7 @@ pub(crate) async fn get_unified_threads_inner(
                         LEFT JOIN thread_labels tl_promo ON t.id = tl_promo.thread_id AND tl_promo.label_id = 'CATEGORY_PROMOTIONS'
                         WHERE t.account_id IN ({}) AND {}
                           AND tl_social.thread_id IS NULL AND tl_promo.thread_id IS NULL
+                          {SNOOZED_EXCLUSION}
                         ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
                         LIMIT ? OFFSET ?", base_select, placeholders, hf);
                     (sql, account_ids.to_vec())
@@ -440,6 +459,7 @@ pub(crate) async fn get_unified_threads_inner(
                         "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_SOCIAL'
                         INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
                         WHERE t.account_id IN ({}) AND {}
+                        {SNOOZED_EXCLUSION}
                         ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
                         LIMIT ? OFFSET ?", base_select, placeholders, hf);
                     (sql, account_ids.to_vec())
@@ -449,6 +469,7 @@ pub(crate) async fn get_unified_threads_inner(
                         "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_PROMOTIONS'
                         INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
                         WHERE t.account_id IN ({}) AND {}
+                        {SNOOZED_EXCLUSION}
                         ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
                         LIMIT ? OFFSET ?", base_select, placeholders, hf);
                     (sql, account_ids.to_vec())
@@ -464,11 +485,13 @@ pub(crate) async fn get_unified_threads_inner(
             }
         },
         (Some(lid), None) => {
+            let snooze_filter = if lid == "INBOX" { SNOOZED_EXCLUSION } else { "" };
             let sql = format!(
                 "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = ?
                 WHERE t.account_id IN ({}) AND {}
+                {}
                 ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
-                LIMIT ? OFFSET ?", base_select, placeholders, hf);
+                LIMIT ? OFFSET ?", base_select, placeholders, hf, snooze_filter);
             let mut b = vec![lid.to_string()];
             b.extend(account_ids.to_vec());
             (sql, b)
@@ -482,6 +505,7 @@ pub(crate) async fn get_unified_threads_inner(
                         LEFT JOIN thread_labels tl_promo ON t.id = tl_promo.thread_id AND tl_promo.label_id = 'CATEGORY_PROMOTIONS'
                         WHERE t.account_id IN ({}) AND {}
                           AND tl_social.thread_id IS NULL AND tl_promo.thread_id IS NULL
+                          {SNOOZED_EXCLUSION}
                         ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
                         LIMIT ? OFFSET ?", base_select, placeholders, hf);
                     (sql, account_ids.to_vec())
@@ -491,6 +515,7 @@ pub(crate) async fn get_unified_threads_inner(
                         "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_SOCIAL'
                         INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
                         WHERE t.account_id IN ({}) AND {}
+                        {SNOOZED_EXCLUSION}
                         ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
                         LIMIT ? OFFSET ?", base_select, placeholders, hf);
                     (sql, account_ids.to_vec())
@@ -500,6 +525,7 @@ pub(crate) async fn get_unified_threads_inner(
                         "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_PROMOTIONS'
                         INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
                         WHERE t.account_id IN ({}) AND {}
+                        {SNOOZED_EXCLUSION}
                         ORDER BY COALESCE(t.latest_date, 0) DESC, t.rowid DESC
                         LIMIT ? OFFSET ?", base_select, placeholders, hf);
                     (sql, account_ids.to_vec())
@@ -591,21 +617,24 @@ pub(crate) async fn get_unified_thread_count_inner(
                         LEFT JOIN thread_labels tl_social ON t.id = tl_social.thread_id AND tl_social.label_id = 'CATEGORY_SOCIAL'
                         LEFT JOIN thread_labels tl_promo ON t.id = tl_promo.thread_id AND tl_promo.label_id = 'CATEGORY_PROMOTIONS'
                         WHERE t.account_id IN ({}) AND {}
-                          AND tl_social.thread_id IS NULL AND tl_promo.thread_id IS NULL", base_select, placeholders, hf);
+                          AND tl_social.thread_id IS NULL AND tl_promo.thread_id IS NULL
+                          {SNOOZED_EXCLUSION}", base_select, placeholders, hf);
                     (sql, account_ids.to_vec())
                 },
                 ThreadCategory::Social => {
                     let sql = format!(
                         "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_SOCIAL'
                         INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
-                        WHERE t.account_id IN ({}) AND {}", base_select, placeholders, hf);
+                        WHERE t.account_id IN ({}) AND {}
+                        {SNOOZED_EXCLUSION}", base_select, placeholders, hf);
                     (sql, account_ids.to_vec())
                 },
                 ThreadCategory::Promotions => {
                     let sql = format!(
                         "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_PROMOTIONS'
                         INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
-                        WHERE t.account_id IN ({}) AND {}", base_select, placeholders, hf);
+                        WHERE t.account_id IN ({}) AND {}
+                        {SNOOZED_EXCLUSION}", base_select, placeholders, hf);
                     (sql, account_ids.to_vec())
                 },
                 ThreadCategory::Important => {
@@ -617,9 +646,11 @@ pub(crate) async fn get_unified_thread_count_inner(
             }
         },
         (Some(lid), None) => {
+            let snooze_filter = if lid == "INBOX" { SNOOZED_EXCLUSION } else { "" };
             let sql = format!(
                 "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = ?
-                WHERE t.account_id IN ({}) AND {}", base_select, placeholders, hf);
+                WHERE t.account_id IN ({}) AND {}
+                {}", base_select, placeholders, hf, snooze_filter);
             let mut b = vec![lid.to_string()];
             b.extend(account_ids.to_vec());
             (sql, b)
@@ -632,21 +663,24 @@ pub(crate) async fn get_unified_thread_count_inner(
                         LEFT JOIN thread_labels tl_social ON t.id = tl_social.thread_id AND tl_social.label_id = 'CATEGORY_SOCIAL'
                         LEFT JOIN thread_labels tl_promo ON t.id = tl_promo.thread_id AND tl_promo.label_id = 'CATEGORY_PROMOTIONS'
                         WHERE t.account_id IN ({}) AND {}
-                          AND tl_social.thread_id IS NULL AND tl_promo.thread_id IS NULL", base_select, placeholders, hf);
+                          AND tl_social.thread_id IS NULL AND tl_promo.thread_id IS NULL
+                          {SNOOZED_EXCLUSION}", base_select, placeholders, hf);
                     (sql, account_ids.to_vec())
                 },
                 ThreadCategory::Social => {
                     let sql = format!(
                         "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_SOCIAL'
                         INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
-                        WHERE t.account_id IN ({}) AND {}", base_select, placeholders, hf);
+                        WHERE t.account_id IN ({}) AND {}
+                        {SNOOZED_EXCLUSION}", base_select, placeholders, hf);
                     (sql, account_ids.to_vec())
                 },
                 ThreadCategory::Promotions => {
                     let sql = format!(
                         "{} INNER JOIN thread_labels tl ON t.id = tl.thread_id AND tl.label_id = 'CATEGORY_PROMOTIONS'
                         INNER JOIN thread_labels tl_inbox ON t.id = tl_inbox.thread_id AND tl_inbox.label_id = 'INBOX'
-                        WHERE t.account_id IN ({}) AND {}", base_select, placeholders, hf);
+                        WHERE t.account_id IN ({}) AND {}
+                        {SNOOZED_EXCLUSION}", base_select, placeholders, hf);
                     (sql, account_ids.to_vec())
                 },
                 ThreadCategory::Important => {
