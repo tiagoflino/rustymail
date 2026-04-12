@@ -18,10 +18,9 @@
   const iconUpdate = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12A9 9 0 0 0 6 5.3L3 8"/><path d="M21 3v5h-5"/><path d="M3 12a9 9 0 0 0 15 6.7l3-2.7"/><path d="M3 21v-5h5"/></svg>`;
 </script>
 
-<div class="modal-backdrop" onclick={onClose}>
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
+<div class="modal-backdrop" onclick={onClose} onkeydown={(e) => e.key === "Escape" && onClose()} role="dialog" tabindex="-1">
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="modal-content" onclick={(e) => e.stopPropagation()}>
+  <div class="modal-content" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === "Escape" && onClose()}>
     <div class="modal-header">
       <div class="header-title">
         <span class="icon">{@html iconUpdate}</span>
