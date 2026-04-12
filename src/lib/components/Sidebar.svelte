@@ -9,6 +9,7 @@
     iconRefresh,
     iconSettings,
     iconCalendar,
+    iconSnooze,
     iconSubscriptions,
   } from "$lib/components/icons";
   import { isSyncing, lastSyncError } from "$lib/stores/threads";
@@ -42,6 +43,7 @@
     isUnifiedEnabled: boolean;
     labels: Writable<LocalLabel[]>;
     selectedLabelId: Writable<string>;
+    snoozedCount?: number;
     oncompose: () => void;
     onsync: () => void;
     onthemecycle: () => void;
@@ -66,6 +68,7 @@
     isUnifiedEnabled,
     labels,
     selectedLabelId,
+    snoozedCount = 0,
     oncompose,
     onsync,
     onthemecycle,
@@ -189,7 +192,8 @@
             { id: 'UNIFIED_INBOX', icon: 'UNIFIED_INBOX', name: 'INBOX', display: 'Inbox' },
             { id: 'UNIFIED_SENT', name: 'SENT', display: 'Sent' },
             { id: 'UNIFIED_DRAFT', name: 'DRAFT', display: 'Drafts' },
-            { id: 'UNIFIED_TRASH', name: 'TRASH', display: 'Trash' }
+            { id: 'UNIFIED_TRASH', name: 'TRASH', display: 'Trash' },
+            { id: 'UNIFIED_SNOOZED', name: 'SNOOZED', display: 'Snoozed' }
           ] as uLabel}
             <li>
               <div
@@ -232,6 +236,21 @@
           </div>
         </li>
       {/each}
+      <li>
+        <div
+          class="sidebar-item {$selectedLabelId === 'SNOOZED' ? 'active' : ''}"
+          role="button"
+          tabindex="0"
+          onclick={() => onselectlabel("SNOOZED")}
+          onkeydown={(e) => {
+            if (e.key === "Enter" || e.key === " ") onselectlabel("SNOOZED");
+          }}
+        >
+          <span class="icon">{@html iconSnooze}</span>
+          <span class="label-text">Snoozed</span>
+          {#if snoozedCount > 0}<span class="badge">{snoozedCount}</span>{/if}
+        </div>
+      </li>
     </ul>
 
     {#snippet labelTreeNode(nodes: LabelTreeNode[], depth: number)}
