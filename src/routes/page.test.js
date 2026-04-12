@@ -22,6 +22,9 @@ vi.mock('$lib/components/Toasts.svelte', () => ({
 vi.mock('$lib/components/LinkSafetyDialog.svelte', () => ({
     default: vi.fn(() => ({ type: 'LinkSafetyDialog' }))
 }));
+vi.mock('$lib/components/Subscriptions.svelte', () => ({
+    default: vi.fn(() => ({ type: 'Subscriptions' }))
+}));
 
 describe('+page.svelte', () => {
     beforeEach(() => {

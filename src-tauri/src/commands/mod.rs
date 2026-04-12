@@ -9,6 +9,7 @@ pub mod settings;
 pub mod snooze;
 pub mod sync;
 pub mod threads;
+pub mod subscriptions;
 
 #[cfg(test)]
 pub(crate) mod test_helpers;

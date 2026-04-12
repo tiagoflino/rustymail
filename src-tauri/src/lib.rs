@@ -4,6 +4,7 @@ mod credentials;
 mod db;
 mod gmail_api;
 mod page_token_store;
+mod subscription_detector;
 mod tray;
 
 use tauri::Manager;
@@ -95,6 +96,12 @@ pub fn run() {
             commands::misc::open_external_url,
             commands::misc::get_upcoming_events,
             commands::misc::get_file_size,
+            commands::subscriptions::get_subscriptions,
+            commands::subscriptions::correct_subscription,
+            commands::subscriptions::delete_subscription,
+            commands::subscriptions::unsubscribe,
+            commands::subscriptions::scan_subscriptions,
+            commands::subscriptions::mark_unsubscribed,
             tray::update_tray_unread,
         ])
         .run(tauri::generate_context!())

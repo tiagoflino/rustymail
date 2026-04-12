@@ -737,11 +737,6 @@
     background: var(--sidebar-hover);
     color: var(--text-primary);
   }
-  .thread-list {
-    flex: 1;
-    overflow-y: auto;
-    position: relative;
-  }
   .thread-item {
     display: flex;
     padding: 12px 12px;
