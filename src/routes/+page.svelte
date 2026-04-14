@@ -1598,9 +1598,9 @@
         oniframeload={handleIframeLoad}
       />
     {:else if viewMode === "calendar"}
-      <FullCalendar />
+      <FullCalendar {isMacOS} />
     {:else if viewMode === "subscriptions"}
-      <Subscriptions accountId={activeAccount?.id ?? ""} onselectsubscription={handleSelectSubscription} />
+      <Subscriptions accountId={activeAccount?.id ?? ""} {isMacOS} onselectsubscription={handleSelectSubscription} />
     {/if}
   </div>
 

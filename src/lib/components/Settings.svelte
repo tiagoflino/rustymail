@@ -783,7 +783,8 @@
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.45);
-    backdrop-filter: blur(6px);
+    backdrop-filter: blur(var(--blur-dialog));
+    -webkit-backdrop-filter: blur(var(--blur-dialog));
     display: flex;
     align-items: center;
     justify-content: center;
@@ -802,7 +803,7 @@
   .settings-modal {
     position: relative;
     background: var(--bg-view);
-    border-radius: 14px;
+    border-radius: var(--radius-modal);
     width: 740px;
     max-height: 540px;
     box-shadow:
@@ -868,8 +869,8 @@
     border: none;
     padding: 7px 10px;
     text-align: left;
-    font-size: 13px;
-    border-radius: 8px;
+    font-size: var(--font-size-base);
+    border-radius: var(--radius-standard);
     cursor: pointer;
     color: var(--text-primary);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -904,7 +905,7 @@
   }
 
   .section-title {
-    font-size: 16px;
+    font-size: var(--font-size-title);
     font-weight: 600;
     color: var(--text-primary);
     margin-bottom: 4px;
@@ -912,7 +913,7 @@
   }
 
   .section-desc {
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     color: var(--text-secondary);
     margin-bottom: 16px;
     line-height: 1.4;
@@ -945,13 +946,13 @@
     gap: 2px;
   }
   .setting-name {
-    font-size: 13px;
+    font-size: var(--font-size-base);
     font-weight: 500;
     color: var(--text-primary);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
   .setting-hint {
-    font-size: 11px;
+    font-size: var(--font-size-small);
     color: var(--text-secondary);
   }
 
@@ -959,7 +960,7 @@
   .option-group {
     display: inline-flex;
     background: var(--border-color, rgba(0, 0, 0, 0.06));
-    border-radius: 8px;
+    border-radius: var(--radius-standard);
     padding: 2px;
     gap: 1px;
     flex-shrink: 0;
@@ -969,9 +970,9 @@
     flex: 1;
     padding: 5px 14px;
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius-standard);
     background: transparent;
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     color: var(--text-secondary);
     cursor: pointer;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -995,7 +996,7 @@
     margin-top: 8px;
   }
   .slider-value {
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     font-weight: 600;
     color: var(--accent-blue);
     min-width: 70px;
@@ -1048,9 +1049,9 @@
     min-height: 80px;
     background: var(--bg-view, white);
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: var(--radius-standard);
     padding: 10px;
-    font-size: 13px;
+    font-size: var(--font-size-base);
     color: var(--text-primary);
     font-family: inherit;
     resize: vertical;
@@ -1159,11 +1160,11 @@
     overflow: hidden;
   }
   .account-name {
-    font-size: 13px;
+    font-size: var(--font-size-base);
     font-weight: 500;
   }
   .account-email {
-    font-size: 11px;
+    font-size: var(--font-size-small);
     color: var(--text-secondary);
   }
   .account-actions {
@@ -1176,16 +1177,16 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    font-size: 11px;
+    font-size: var(--font-size-small);
     color: #34c759;
     font-weight: 500;
   }
 
   .btn-sm {
     padding: 4px 10px;
-    font-size: 11px;
+    font-size: var(--font-size-small);
     border: 1px solid var(--border-color);
-    border-radius: 5px;
+    border-radius: var(--radius-standard);
     background: transparent;
     color: var(--text-primary);
     cursor: pointer;
@@ -1237,13 +1238,13 @@
   }
   .shortcut-action {
     color: var(--text-secondary);
-    font-size: 13px;
+    font-size: var(--font-size-base);
   }
   kbd {
     background: var(--bg-view, white);
     padding: 3px 10px;
     border-radius: 5px;
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     font-family: -apple-system, monospace;
     border: 1px solid var(--border-color);
     min-width: 36px;
@@ -1273,13 +1274,13 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
   .about-version {
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     color: var(--text-tertiary, var(--text-secondary));
     margin-top: 4px;
     opacity: 0.6;
   }
   .about-desc {
-    font-size: 13px;
+    font-size: var(--font-size-base);
     color: var(--text-secondary);
     margin-top: 20px;
     max-width: 320px;
@@ -1289,7 +1290,7 @@
     margin-top: 32px;
   }
   .about-link {
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     color: var(--text-secondary);
     opacity: 0.6;
   }
@@ -1301,7 +1302,7 @@
     background: transparent;
     color: var(--accent-blue, #0a84ff);
     cursor: pointer;
-    font-size: 13px;
+    font-size: var(--font-size-base);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     transition: opacity 0.15s;
   }
@@ -1319,10 +1320,10 @@
     flex: 1;
     padding: 6px 10px;
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: var(--radius-standard);
     background: var(--bg-sidebar, transparent);
     color: var(--text-primary);
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     outline: none;
     transition: border-color 0.15s;
@@ -1336,10 +1337,10 @@
   .folder-browse-btn {
     padding: 6px 14px;
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: var(--radius-standard);
     background: transparent;
     color: var(--text-primary);
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     cursor: pointer;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     transition: background 0.15s;

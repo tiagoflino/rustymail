@@ -714,7 +714,7 @@
     width: 500px;
     height: 550px;
     background: var(--bg-view, #ffffff);
-    border-radius: 12px 12px 0 0;
+    border-radius: var(--radius-modal) var(--radius-modal) 0 0;
     box-shadow:
       0 8px 30px rgba(0, 0, 0, 0.15),
       0 0 1px rgba(0, 0, 0, 0.2);
@@ -744,11 +744,11 @@
     height: 80vh;
     right: 10vw;
     bottom: 10vh;
-    border-radius: 12px;
+    border-radius: var(--radius-modal);
   }
 
   .compose-header {
-    height: 40px;
+    height: var(--toolbar-height);
     background: var(--bg-panel);
     display: flex;
     align-items: center;
@@ -759,7 +759,7 @@
   }
 
   .compose-header .title {
-    font-size: 14px;
+    font-size: var(--font-size-detail);
     font-weight: 500;
   }
 
@@ -822,7 +822,7 @@
 
   .field-label {
     color: var(--text-secondary);
-    font-size: 14px;
+    font-size: var(--font-size-detail);
     width: 40px;
     flex-shrink: 0;
   }
@@ -831,7 +831,7 @@
     flex: 1;
     border: none;
     background: transparent;
-    font-size: 14px;
+    font-size: var(--font-size-detail);
     color: var(--text-primary);
     outline: none;
     padding: 8px 0;
@@ -887,13 +887,13 @@
   }
 
   .s-name {
-    font-size: 13px;
+    font-size: var(--font-size-base);
     font-weight: 500;
     color: var(--text-primary);
   }
 
   .s-email {
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     line-height: 15px;
     color: var(--text-secondary);
   }
@@ -912,7 +912,7 @@
     background: transparent;
     border: none;
     color: var(--text-secondary);
-    font-size: 13px;
+    font-size: var(--font-size-base);
     cursor: pointer;
     padding: 2px;
   }
@@ -929,7 +929,7 @@
   .rich-text-editor {
     min-height: 100%;
     outline: none;
-    font-size: 14px;
+    font-size: var(--font-size-detail);
     line-height: 1.5;
   }
 
@@ -953,9 +953,9 @@
     background: var(--accent-blue, #0a84ff);
     color: white;
     font-weight: 500;
-    font-size: 14px;
+    font-size: var(--font-size-detail);
     border: none;
-    border-radius: 16px;
+    border-radius: var(--radius-pill);
     padding: 0 20px;
     height: 32px;
     cursor: pointer;
@@ -989,10 +989,10 @@
     height: 28px;
     padding: 0 8px;
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: var(--radius-standard);
     background: transparent;
     color: var(--text-primary);
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -1033,7 +1033,7 @@
     border-radius: 4px;
     background: transparent;
     color: var(--text-primary);
-    font-size: 13px;
+    font-size: var(--font-size-base);
     line-height: 16px;
     text-align: left;
     cursor: pointer;
@@ -1051,7 +1051,7 @@
     height: 32px;
     background: transparent;
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius-standard);
     transition: background 0.15s, color 0.15s;
     display: flex;
     align-items: center;
@@ -1075,7 +1075,7 @@
     height: 32px;
     background: transparent;
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius-standard);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1126,7 +1126,7 @@
     gap: 4px;
     padding: 4px 8px;
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: var(--radius-standard);
     background: transparent;
     font-family: var(--font-family);
     max-width: 220px;
@@ -1136,7 +1136,7 @@
     flex-shrink: 0;
   }
   .att-name {
-    font-size: 11px;
+    font-size: var(--font-size-small);
     font-weight: 500;
     color: var(--text-primary);
     overflow: hidden;
@@ -1144,7 +1144,7 @@
     white-space: nowrap;
   }
   .att-size {
-    font-size: 10px;
+    font-size: var(--font-size-small);
     color: var(--text-secondary);
     white-space: nowrap;
     flex-shrink: 0;
@@ -1166,7 +1166,7 @@
     background: rgba(255, 59, 48, 0.08);
   }
   .att-total {
-    font-size: 10px;
+    font-size: var(--font-size-small);
     color: var(--text-secondary);
     margin-left: auto;
   }

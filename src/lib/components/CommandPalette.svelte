@@ -182,7 +182,7 @@
     width: 600px;
     max-width: 90vw;
     background: var(--bg-view, #ffffff);
-    border-radius: 12px;
+    border-radius: var(--radius-modal);
     box-shadow: 0 20px 40px rgba(0,0,0,0.3), 0 0 0 1px rgba(128,128,128,0.15);
     display: flex;
     flex-direction: column;
@@ -242,7 +242,7 @@
   .action-label {
     display: flex;
     align-items: center;
-    font-size: 14px;
+    font-size: var(--font-size-detail);
     font-weight: 500;
   }
 
@@ -255,11 +255,11 @@
 
   .action-shortcut {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     background: var(--sidebar-hover, rgba(0,0,0,0.06));
     border: 1px solid var(--border-color);
     padding: 2px 6px;
-    border-radius: 4px;
+    border-radius: var(--radius-standard);
     color: var(--text-secondary);
   }
 
@@ -273,6 +273,6 @@
     padding: 30px;
     text-align: center;
     color: var(--text-secondary);
-    font-size: 14px;
+    font-size: var(--font-size-detail);
   }
 </style>

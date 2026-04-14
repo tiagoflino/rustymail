@@ -60,12 +60,12 @@
     align-items: center;
     justify-content: center;
     z-index: 9999;
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(var(--blur-dialog));
+    -webkit-backdrop-filter: blur(var(--blur-dialog));
   }
   .link-dialog {
     background: var(--bg-view);
-    border-radius: 14px;
+    border-radius: var(--radius-modal);
     width: 280px;
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25), 0 0 0 0.5px rgba(0, 0, 0, 0.1);
     overflow: hidden;
@@ -88,14 +88,14 @@
   .link-shield-danger { background: rgba(255, 59, 48, 0.12); color: #ff3b30; }
   .link-dialog-title {
     margin: 0 0 4px;
-    font-size: 14px;
+    font-size: var(--font-size-detail);
     font-weight: 600;
     color: var(--text-primary);
     letter-spacing: -0.1px;
   }
   .link-dialog-subtitle {
     margin: 0 0 12px;
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     line-height: 15px;
     color: var(--text-secondary);
   }
@@ -106,7 +106,7 @@
     margin-bottom: 12px;
   }
   .link-url-text {
-    font-size: 11px;
+    font-size: var(--font-size-small);
     color: var(--text-secondary);
     word-break: break-all;
     line-height: 14px;
@@ -125,7 +125,7 @@
   .link-warning-danger { background: rgba(255, 59, 48, 0.08); }
   .link-warning-line {
     margin: 0;
-    font-size: 11px;
+    font-size: var(--font-size-small);
     line-height: 14px;
   }
   .link-warning-caution .link-warning-line { color: #c87e00; }
@@ -139,7 +139,7 @@
     padding: 11px 8px;
     background: none;
     border: none;
-    font-size: 14px;
+    font-size: var(--font-size-detail);
     cursor: pointer;
     color: #007aff;
     transition: background 0.1s;

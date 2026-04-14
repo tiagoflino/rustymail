@@ -576,7 +576,7 @@
     color: #fff;
   }
   .message-toolbar {
-    height: 44px;
+    height: var(--toolbar-height);
     display: flex;
     align-items: center;
     padding: 0 16px;
@@ -590,11 +590,11 @@
     gap: 6px;
     padding: 6px 10px;
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius-standard);
     background: transparent;
     color: var(--text-secondary);
     cursor: pointer;
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     line-height: 15px;
     transition: background 0.1s;
     font-family: var(--font-family);
@@ -679,7 +679,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     line-height: 15px;
     font-weight: 500;
     color: var(--text-secondary);
@@ -692,10 +692,10 @@
     gap: 4px;
     padding: 4px 10px;
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: var(--radius-standard);
     background: transparent;
     color: var(--text-secondary);
-    font-size: 11px;
+    font-size: var(--font-size-small);
     font-weight: 500;
     cursor: pointer;
     font-family: var(--font-family);
@@ -719,7 +719,7 @@
     background: none;
     border: none;
     color: var(--text-secondary);
-    font-size: 11px;
+    font-size: var(--font-size-small);
     line-height: 14px;
     cursor: pointer;
     padding: 4px 12px;
@@ -751,14 +751,14 @@
     background: var(--sidebar-hover);
   }
   .collapsed-sender {
-    font-size: 13px;
+    font-size: var(--font-size-base);
     line-height: 16px;
     font-weight: 500;
     white-space: nowrap;
     flex-shrink: 0;
   }
   .collapsed-snippet {
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     line-height: 15px;
     color: var(--text-secondary);
     white-space: nowrap;
@@ -768,7 +768,7 @@
     min-width: 0;
   }
   .collapsed-time {
-    font-size: 11px;
+    font-size: var(--font-size-small);
     line-height: 14px;
     color: var(--text-secondary);
     white-space: nowrap;
@@ -792,7 +792,7 @@
   .msg-collapse-btn .msg-sender {
     font-weight: 600;
     color: var(--text-primary);
-    font-size: 14px;
+    font-size: var(--font-size-detail);
     line-height: 18px;
     letter-spacing: -0.08px;
   }
@@ -831,7 +831,7 @@
     justify-content: space-between;
     align-items: center;
     margin-bottom: 10px;
-    font-size: 13px;
+    font-size: var(--font-size-base);
     line-height: 16px;
     letter-spacing: -0.08px;
   }
@@ -856,12 +856,12 @@
   }
   .msg-time {
     color: var(--text-secondary);
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     line-height: 15px;
     flex-shrink: 0;
   }
   .msg-subject {
-    font-size: 17px;
+    font-size: var(--font-size-heading);
     line-height: 22px;
     font-weight: 600;
     margin: 0 0 14px 0;
@@ -869,7 +869,7 @@
     color: var(--text-primary);
   }
   .message-body {
-    font-size: 14px;
+    font-size: var(--font-size-detail);
     line-height: 1.6;
     color: var(--text-primary);
     overflow-x: hidden;
@@ -877,7 +877,7 @@
   .plain-body {
     white-space: pre-wrap;
     font-family: inherit;
-    font-size: 13px;
+    font-size: var(--font-size-base);
     line-height: 16px;
     letter-spacing: -0.08px;
     margin: 0;
@@ -894,7 +894,7 @@
     border-radius: 4px;
     background: rgba(0, 0, 0, 0.06);
     color: var(--text-secondary);
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     border: none;
     line-height: 1;
     font-family: var(--font-family);
@@ -913,7 +913,7 @@
   .no-body {
     color: var(--text-secondary);
     font-style: italic;
-    font-size: 13px;
+    font-size: var(--font-size-base);
     line-height: 16px;
     letter-spacing: -0.08px;
   }
@@ -921,7 +921,7 @@
     padding: 2rem;
     text-align: center;
     color: var(--text-secondary);
-    font-size: 13px;
+    font-size: var(--font-size-base);
     line-height: 16px;
     letter-spacing: -0.08px;
     display: flex;
@@ -950,7 +950,7 @@
     height: 48px;
   }
   .empty-hint {
-    font-size: 11px;
+    font-size: var(--font-size-small);
     line-height: 14px;
     color: var(--text-secondary);
     opacity: 0.5;
@@ -1023,7 +1023,7 @@
     display: flex;
     align-items: center;
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: var(--radius-standard);
     background: transparent;
     font-family: var(--font-family);
     overflow: hidden;
@@ -1066,7 +1066,7 @@
     flex-shrink: 0;
   }
   .attachment-name {
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     line-height: 15px;
     color: var(--text-primary);
     font-weight: 500;
@@ -1076,7 +1076,7 @@
     white-space: nowrap;
   }
   .attachment-size {
-    font-size: 11px;
+    font-size: var(--font-size-small);
     line-height: 14px;
     color: var(--text-secondary);
     white-space: nowrap;
