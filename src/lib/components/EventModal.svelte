@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { fade, scale } from "svelte/transition";
   import { addToast } from "$lib/stores/toast";
 
   interface Props {
@@ -198,13 +199,13 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-<div class="modal-backdrop" onclick={onClose} onkeydown={(e) => e.key === 'Enter' && onClose()} role="button" tabindex="0"></div>
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="modal-content" onpointerdown={(e) => e.stopPropagation()}>
+<div class="modal-backdrop" transition:fade={{ duration: 150 }} onclick={onClose} onkeydown={(e) => e.key === 'Enter' && onClose()} role="button" tabindex="0">
+  <div class="modal-content" transition:scale={{ duration: 150, start: 0.95, opacity: 0 }} onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()} onpointerdown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1">
     <div class="modal-header">
-      <h2>{!event ? "New Event" : (isEditMode ? "Edit Event" : "Event Details")}</h2>
-      <button class="close-btn" onclick={onClose}>✕</button>
+      <h2 id="modal-title">{!event ? "New Event" : (isEditMode ? "Edit Event" : "Event Details")}</h2>
+      <button class="close-btn" onclick={onClose} aria-label="Close">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="1" y1="1" x2="11" y2="11"/><line x1="11" y1="1" x2="1" y2="11"/></svg>
+      </button>
     </div>
 
     {#if isEditMode}
@@ -297,7 +298,7 @@
 
         {#if event.description}
           <div class="read-desc section-block">
-             <div class="html-content" onclick={handleHtmlClick} onkeydown={(e) => e.key === "Enter" && handleHtmlClick(e)}>
+             <div class="html-content" role="presentation" onclick={handleHtmlClick} onkeydown={(e) => e.key === "Enter" && handleHtmlClick(e)}>
                {@html formatDescription(event.description)}
              </div>
           </div>
@@ -314,6 +315,7 @@
       </div>
     {/if}
   </div>
+</div>
 
 <style>
   .modal-backdrop {
@@ -322,61 +324,75 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.4);
-    backdrop-filter: blur(4px);
+    background: rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
     display: flex;
     align-items: center;
     justify-content: center;
     z-index: 1000;
   }
   .modal-content {
-    background: var(--bg-view, #ffffff);
+    position: relative;
+    z-index: 1;
+    background: var(--bg-view);
     width: 480px;
-    border-radius: 12px;
-    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.2);
+    max-width: calc(100vw - 40px);
+    max-height: calc(100vh - 80px);
+    border-radius: var(--radius-modal);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
     display: flex;
     flex-direction: column;
     color: var(--text-primary);
     overflow: hidden;
   }
+
+  :global([data-theme="dark"]) .modal-content {
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(255, 255, 255, 0.08);
+  }
   .modal-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color);
+    padding: 12px 16px;
   }
   .modal-header h2 {
     margin: 0;
-    font-size: 16px;
+    font-size: var(--font-size-title);
     font-weight: 600;
   }
   .close-btn {
     background: none;
     border: none;
-    font-size: 16px;
     color: var(--text-secondary);
     cursor: pointer;
-    line-height: 1;
+    padding: 4px;
+    border-radius: var(--radius-standard);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
   }
   .close-btn:hover {
+    background: var(--sidebar-hover);
     color: var(--text-primary);
   }
   .modal-body {
-    padding: 20px;
+    padding: 0 16px 16px;
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 12px;
   }
   .title-input {
     width: 100%;
-    font-size: 24px;
+    font-size: var(--font-size-heading);
     border: none;
     border-bottom: 2px solid transparent;
     padding: 4px 0;
     background: transparent;
     color: var(--text-primary);
     outline: none;
+    font-family: inherit;
   }
   .title-input:focus {
     border-bottom-color: var(--accent-blue);
@@ -387,28 +403,43 @@
   .form-group {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 2px;
+    position: relative;
   }
   .form-group label {
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-secondary);
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    border: 0;
   }
   .form-group input,
   .form-group textarea {
     width: 100%;
-    padding: 10px 12px;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    background: var(--bg-body);
+    padding: 8px 10px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-standard);
+    background: transparent;
     color: var(--text-primary);
-    font-size: 14px;
+    font-size: var(--font-size-detail);
+    font-family: inherit;
     outline: none;
     resize: vertical;
+    transition: border-color 0.15s, background 0.15s;
   }
+
+  .form-group input:hover,
+  .form-group textarea:hover {
+    background: var(--sidebar-hover);
+  }
+
   .form-group input:focus,
   .form-group textarea:focus {
     border-color: var(--accent-blue);
+    background: var(--sidebar-hover);
   }
   .form-row {
     display: flex;
@@ -417,11 +448,10 @@
   }
   .datetime-row {
     display: flex;
-    background: var(--bg-body);
-    padding: 8px 12px;
-    border-radius: 8px;
-    border: 1px solid var(--border-color);
-    justify-content: space-between;
+    align-items: center;
+    padding: 4px 0;
+    justify-content: flex-start;
+    gap: 8px;
   }
   .date-col {
     display: flex;
@@ -431,45 +461,52 @@
     border: none;
     background: transparent;
     color: var(--text-primary);
-    font-size: 14px;
+    font-size: var(--font-size-detail);
+    font-family: inherit;
     outline: none;
+    padding: 4px 6px;
+    border-radius: var(--radius-standard);
+    transition: background 0.15s;
+  }
+
+  .date-col input:hover {
+    background: var(--sidebar-hover);
   }
   .to-span {
     color: var(--text-secondary);
-    font-size: 14px;
+    font-size: var(--font-size-detail);
     font-weight: 500;
   }
   .toggle-label {
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 14px;
+    font-size: var(--font-size-detail);
     cursor: pointer;
   }
   .modal-footer {
-    padding: 16px 20px;
-    border-top: 1px solid var(--border-color);
+    padding: 12px 16px;
     display: flex;
     gap: 8px;
-    background: var(--bg-body);
   }
   .spacer {
     flex: 1;
   }
   .modal-footer button {
-    padding: 8px 16px;
-    border-radius: 6px;
-    font-size: 14px;
+    padding: 6px 14px;
+    border-radius: var(--radius-standard);
+    font-size: var(--font-size-base);
     font-weight: 500;
     cursor: pointer;
     border: none;
+    font-family: inherit;
   }
   .btn-save {
     background: var(--accent-blue);
     color: white;
   }
-  .btn-save:hover {
-    opacity: 0.9;
+  .btn-save:hover:not(:disabled) {
+    background: #0077ED;
   }
   .btn-save:disabled {
     opacity: 0.5;
@@ -478,38 +515,38 @@
   .btn-cancel {
     background: transparent;
     color: var(--text-secondary);
-    border: 1px solid var(--border-color) !important;
+    border: none;
   }
   .btn-cancel:hover {
-    background: var(--sidebar-hover);
+    color: var(--text-primary);
   }
   .btn-delete {
-    background: rgba(255, 69, 58, 0.1);
+    background: transparent;
     color: #ff453a;
   }
   .btn-delete:hover {
-    background: rgba(255, 69, 58, 0.2);
+    background: rgba(255, 69, 58, 0.1);
   }
 
   /* Read View Styles */
-  .read-view { gap: 16px; padding: 24px 32px; flex: 1; overflow-y: auto;}
-  .read-title { font-size: 24px; font-weight: 600; color: var(--text-primary); margin: 0; line-height: 1.3;}
-  .read-time { font-size: 15px; color: var(--accent-blue); font-weight: 500; display: flex; align-items: center; gap: 8px; }
+  .read-view { gap: 12px; padding: 16px 20px; flex: 1; overflow-y: auto;}
+  .read-title { font-size: var(--font-size-heading); font-weight: 600; color: var(--text-primary); margin: 0; line-height: 1.3;}
+  .read-time { font-size: var(--font-size-detail); color: var(--accent-blue); font-weight: 500; display: flex; align-items: center; gap: 8px; }
   .read-time .icon { display: flex; align-items: center; margin-top: -1px; }
   
   .read-section { margin-top: 4px; }
-  .link-style { background: transparent; border: none; padding: 0; cursor: pointer; text-align: left; transition: color 0.1s, opacity 0.2s; display: flex; align-items: flex-start; gap: 8px; font-family: inherit; font-size: 15px; color: var(--text-secondary); line-height: 1.4;}
+  .link-style { background: transparent; border: none; padding: 0; cursor: pointer; text-align: left; transition: color 0.1s, opacity 0.2s; display: flex; align-items: flex-start; gap: 8px; font-family: inherit; font-size: var(--font-size-detail); color: var(--text-secondary); line-height: 1.4;}
   .link-style:hover { color: var(--accent-blue) !important; }
   .link-style:hover .loc-text { text-decoration: underline; }
   .link-style .icon { display: flex; align-items: center; margin-top: 2px; flex-shrink: 0; opacity: 0.8; }
   .loc-text { padding-top: 1px; }
   
-  .join-btn { background: var(--bg-view); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px 14px; font-size: 14px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: background 0.1s, border-color 0.1s; margin-top: 4px;}
+  .join-btn { background: var(--bg-view); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px 14px; font-size: var(--font-size-detail); font-weight: 500; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: background 0.1s, border-color 0.1s; margin-top: 4px;}
   .join-btn:hover { background: var(--sidebar-hover); border-color: var(--accent-blue); }
   .join-btn .icon { display: flex; align-items: center; opacity: 0.8; }
 
-  .section-block { margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 16px; }
-  .read-desc { font-size: 14px; color: var(--text-secondary); line-height: 1.6; }
+  .section-block { margin-top: 12px; border-top: 1px solid var(--border-color); padding-top: 12px; }
+  .read-desc { font-size: var(--font-size-detail); color: var(--text-secondary); line-height: 1.6; }
   .html-content :global(a) { color: var(--accent-blue); text-decoration: none; }
   .html-content :global(a:hover) { text-decoration: underline; }
   .html-content :global(p) { margin-top: 0; margin-bottom: 1em; }

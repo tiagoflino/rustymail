@@ -1,17 +1,19 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { listen } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
   import { addToast } from "$lib/stores/toast";
-  import { iconBellOff, iconXCircle, iconTrash } from "$lib/components/icons";
+  import { iconBellOff, iconXCircle, iconTrash, iconSearch, iconClose } from "$lib/components/icons";
   import UnsubscribeDialog from "$lib/components/UnsubscribeDialog.svelte";
 
   interface Props {
     accountId: string;
+    isMacOS?: boolean;
     onselectsubscription?: (senderEmail: string) => void;
   }
 
-  let { accountId, onselectsubscription }: Props = $props();
+  let { accountId, isMacOS = false, onselectsubscription }: Props = $props();
 
   interface Subscription {
     id: number;
@@ -34,6 +36,7 @@
   let searchQuery = $state("");
   let scanning = $state(false);
   let scanProgress = $state("");
+
   let unsubscribeTarget = $state<Subscription | null>(null);
 
   type SortKey = "sender" | "count" | "frequency" | "lastseen" | "method" | "status";
@@ -194,7 +197,22 @@
 </script>
 
 <div class="subscriptions-panel">
-  <div class="subscriptions-header">
+  <div class="titlebar-spacer" data-tauri-drag-region>
+    {#if !isMacOS}
+      <div class="window-controls">
+        <button class="win-ctrl win-minimize" onclick={() => getCurrentWindow().minimize()} title="Minimize">
+          <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
+        </button>
+        <button class="win-ctrl win-maximize" onclick={() => getCurrentWindow().toggleMaximize()} title="Maximize">
+          <svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/></svg>
+        </button>
+        <button class="win-ctrl win-close" onclick={() => getCurrentWindow().close()} title="Close">
+          <svg width="10" height="10" viewBox="0 0 10 10"><line x1="0" y1="0" x2="10" y2="10" stroke="currentColor" stroke-width="1.2"/><line x1="10" y1="0" x2="0" y2="10" stroke="currentColor" stroke-width="1.2"/></svg>
+        </button>
+      </div>
+    {/if}
+  </div>
+  <div class="subscriptions-header" data-tauri-drag-region>
     <div class="header-title">
       <h2>Subscriptions</h2>
       <span class="count-badge">{subscriptions.length}</span>
@@ -212,12 +230,18 @@
       <button class="filter-tab" class:active={filter === "ignored"} onclick={() => filter = "ignored"}>Ignored</button>
     </div>
     <div class="search-input-wrapper">
-      <input 
-        type="text" 
-        placeholder="Filter by sender..." 
-        bind:value={searchQuery}
+      <span class="search-icon">{@html iconSearch}</span>
+      <input
+        type="text"
+        placeholder="Filter senders..."
         class="search-input"
+        bind:value={searchQuery}
       />
+      {#if searchQuery}
+        <button class="search-clear" onclick={() => searchQuery = ""}>
+          {@html iconClose}
+        </button>
+      {/if}
     </div>
   </div>
 
@@ -240,13 +264,31 @@
       <table class="subscriptions-table">
         <thead>
           <tr class="table-header">
-            <th><button type="button" class="col-sender sortable sorted-col" class:sorted={sortKey === "sender"} onclick={() => toggleSort("sender")} onkeydown={(e) => e.key === "Enter" && toggleSort("sender")}>Sender {sortKey === "sender" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}</button></th>
-            <th><button type="button" class="col-count sortable sorted-col" class:sorted={sortKey === "count"} onclick={() => toggleSort("count")} onkeydown={(e) => e.key === "Enter" && toggleSort("count")}>Messages {sortKey === "count" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}</button></th>
-            <th><button type="button" class="col-frequency sortable sorted-col" class:sorted={sortKey === "frequency"} onclick={() => toggleSort("frequency")} onkeydown={(e) => e.key === "Enter" && toggleSort("frequency")}>Frequency {sortKey === "frequency" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}</button></th>
-            <th><button type="button" class="col-lastseen sortable sorted-col" class:sorted={sortKey === "lastseen"} onclick={() => toggleSort("lastseen")} onkeydown={(e) => e.key === "Enter" && toggleSort("lastseen")}>Last Seen {sortKey === "lastseen" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}</button></th>
-            <th><button type="button" class="col-method sortable sorted-col" class:sorted={sortKey === "method"} onclick={() => toggleSort("method")} onkeydown={(e) => e.key === "Enter" && toggleSort("method")}>Method {sortKey === "method" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}</button></th>
-            <th><button type="button" class="col-status sortable sorted-col" class:sorted={sortKey === "status"} onclick={() => toggleSort("status")} onkeydown={(e) => e.key === "Enter" && toggleSort("status")}>Status {sortKey === "status" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}</button></th>
-            <th><div class="col-actions"></div></th>
+            <th class="col-sender" class:sorted={sortKey === "sender"} onclick={() => toggleSort("sender")}>
+              <span class="col-label">Sender</span>
+              {#if sortKey === "sender"}<span class="sort-arrow">{sortAsc ? "▴" : "▾"}</span>{/if}
+            </th>
+            <th class="col-count" class:sorted={sortKey === "count"} onclick={() => toggleSort("count")}>
+              <span class="col-label">Messages</span>
+              {#if sortKey === "count"}<span class="sort-arrow">{sortAsc ? "▴" : "▾"}</span>{/if}
+            </th>
+            <th class="col-frequency" class:sorted={sortKey === "frequency"} onclick={() => toggleSort("frequency")}>
+              <span class="col-label">Frequency</span>
+              {#if sortKey === "frequency"}<span class="sort-arrow">{sortAsc ? "▴" : "▾"}</span>{/if}
+            </th>
+            <th class="col-lastseen" class:sorted={sortKey === "lastseen"} onclick={() => toggleSort("lastseen")}>
+              <span class="col-label">Last Seen</span>
+              {#if sortKey === "lastseen"}<span class="sort-arrow">{sortAsc ? "▴" : "▾"}</span>{/if}
+            </th>
+            <th class="col-method" class:sorted={sortKey === "method"} onclick={() => toggleSort("method")}>
+              <span class="col-label">Method</span>
+              {#if sortKey === "method"}<span class="sort-arrow">{sortAsc ? "▴" : "▾"}</span>{/if}
+            </th>
+            <th class="col-status" class:sorted={sortKey === "status"} onclick={() => toggleSort("status")}>
+              <span class="col-label">Status</span>
+              {#if sortKey === "status"}<span class="sort-arrow">{sortAsc ? "▴" : "▾"}</span>{/if}
+            </th>
+            <th class="col-actions"></th>
           </tr>
         </thead>
         <tbody>
@@ -291,6 +333,40 @@
 />
 
 <style>
+  .titlebar-spacer {
+    height: 28px;
+    flex-shrink: 0;
+    -webkit-app-region: drag;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+  }
+  .window-controls {
+    display: flex;
+    align-items: center;
+    height: 100%;
+    -webkit-app-region: no-drag;
+  }
+  .win-ctrl {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 46px;
+    height: 100%;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .win-ctrl:hover {
+    background: var(--bg-hover, rgba(128, 128, 128, 0.2));
+  }
+  .win-close:hover {
+    background: #e81123;
+    color: #fff;
+  }
+
   .subscriptions-panel {
     display: flex;
     flex-direction: column;
@@ -308,9 +384,10 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 16px 20px;
+    height: 50px;
+    padding: 0 20px;
     border-bottom: 1px solid var(--border-color);
-    background: var(--bg-sidebar);
+    gap: var(--spacing-section);
   }
 
   .header-title {
@@ -321,30 +398,83 @@
 
   .header-title h2 {
     margin: 0;
-    font-size: 17px;
+    font-size: var(--font-size-heading);
+    font-weight: 600;
+  }
+
+  .filter-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border-color);
+    gap: var(--spacing-section);
+  }
+
+  .filter-tabs {
+    display: flex;
+    gap: 1px;
+    background: rgba(0, 0, 0, 0.08);
+    border-radius: 8px;
+    padding: 2px;
+  }
+
+  :global([data-theme="dark"]) .filter-tabs {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .filter-tab {
+    padding: 5px 14px;
+    border: none;
+    background: transparent;
+    border-radius: 6px;
+    font-size: var(--font-size-base);
+    font-family: inherit;
+    color: var(--text-primary);
+    cursor: pointer;
     font-weight: 400;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+  }
+
+  .filter-tab:hover:not(.active) {
+    background: rgba(0, 0, 0, 0.04);
+  }
+
+  :global([data-theme="dark"]) .filter-tab:hover:not(.active) {
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .filter-tab.active {
+    background: var(--bg-view);
+    font-weight: 500;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
   }
 
   .count-badge {
-    background: var(--accent-blue);
-    color: white;
+    background: rgba(0, 0, 0, 0.08);
+    color: var(--text-secondary);
     font-size: 11px;
     font-weight: 600;
     padding: 2px 8px;
     border-radius: 10px;
   }
 
+  :global([data-theme="dark"]) .count-badge {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
   .scan-btn {
-    padding: 6px 14px;
+    padding: 6px 12px;
     background: var(--accent-blue);
-    color: white;
     border: none;
-    border-radius: 6px;
-    font-size: 12px;
+    color: white;
+    border-radius: var(--radius-standard);
+    font-size: var(--font-size-toolbar);
     font-weight: 500;
     cursor: pointer;
     font-family: var(--font-family);
-    transition: opacity 0.15s;
+    transition: all 0.15s;
   }
 
   .scan-btn:hover:not(:disabled) {
@@ -356,76 +486,62 @@
     cursor: not-allowed;
   }
 
-  .filter-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px 20px;
-    border-bottom: 1px solid var(--border-color);
-    gap: 16px;
-    flex-wrap: wrap;
-  }
-
-  .filter-tabs {
-    display: flex;
-    gap: 1px;
-    background: rgba(0, 0, 0, 0.06);
-    border-radius: 7px;
-    padding: 2px;
-  }
-
-  :global([data-theme="dark"]) .filter-tabs {
-    background: rgba(255, 255, 255, 0.1);
-  }
-
-  .filter-tab {
-    padding: 4px 12px;
-    background: transparent;
-    border: none;
-    border-radius: 5px;
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-weight: 400;
-    cursor: pointer;
-    font-family: var(--font-family);
-    transition: all 0.2s;
-  }
-
-  .filter-tab:hover {
-    color: var(--text-primary);
-  }
-
-  .filter-tab.active {
-    background: var(--bg-view);
-    color: var(--text-primary);
-    font-weight: 500;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
-  }
-
   .search-input-wrapper {
+    position: relative;
     flex: 1;
     max-width: 280px;
     min-width: 180px;
+    display: flex;
+    align-items: center;
+  }
+
+  .search-icon {
+    position: absolute;
+    left: 8px;
+    display: flex;
+    align-items: center;
+    color: var(--text-secondary);
+    pointer-events: none;
   }
 
   .search-input {
     width: 100%;
-    padding: 6px 12px;
-    background: var(--bg-view);
+    padding: 6px 28px 6px 28px;
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: 8px;
+    font-size: var(--font-size-base);
+    font-family: inherit;
+    background: var(--bg-view);
     color: var(--text-primary);
-    font-size: 12px;
-    font-family: var(--font-family);
+    outline: none;
   }
 
   .search-input:focus {
-    outline: none;
     border-color: var(--accent-blue);
+    box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.3);
   }
 
   .search-input::placeholder {
     color: var(--text-secondary);
+    opacity: 0.6;
+  }
+
+  .search-clear {
+    position: absolute;
+    right: 6px;
+    display: flex;
+    align-items: center;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 2px;
+    border-radius: 50%;
+  }
+
+  .search-clear:hover {
+    color: var(--text-primary);
+    background: var(--sidebar-hover);
   }
 
   .subscriptions-content {
@@ -476,27 +592,53 @@
 
   .table-header {
     display: flex;
-    padding: 10px 20px;
+    padding: 0 20px;
+    height: 28px;
+    align-items: center;
     background: var(--bg-sidebar);
     border-bottom: 1px solid var(--border-color);
-    font-size: 11px;
+    font-size: var(--font-size-small);
     font-weight: 400;
     color: var(--text-secondary);
   }
 
-  .sortable {
+  .table-header th {
+    display: flex;
+    align-items: center;
+    gap: 2px;
     cursor: pointer;
     user-select: none;
-    transition: color 0.15s;
+    padding: 0 8px;
+    height: 100%;
+    border-right: 1px solid var(--border-color);
+    font-weight: inherit;
+    text-align: left;
   }
 
-  .sortable:hover {
+  .table-header th:last-child {
+    border-right: none;
+  }
+
+  .table-header th:first-child {
+    padding-left: 0;
+  }
+
+  .table-header th:hover {
     color: var(--text-primary);
   }
 
-  .sortable.sorted {
+  .table-header th.sorted {
     color: var(--text-primary);
-    font-weight: 500;
+  }
+
+  .col-label {
+    white-space: nowrap;
+  }
+
+  .sort-arrow {
+    font-size: 11px;
+    line-height: 1;
+    opacity: 0.7;
   }
 
   .table-row {
@@ -505,14 +647,6 @@
     border-bottom: 1px solid var(--border-color);
     align-items: center;
     transition: background 0.1s;
-  }
-
-  .table-row:nth-child(even) {
-    background: rgba(0, 0, 0, 0.02);
-  }
-
-  :global([data-theme="dark"]) .table-row:nth-child(even) {
-    background: rgba(255, 255, 255, 0.02);
   }
 
   .table-row:hover {
@@ -679,12 +813,8 @@
       padding: 12px 16px;
     }
 
-    .filter-bar {
-      padding: 10px 16px;
-    }
-
     .table-header {
-      padding: 8px 16px;
+      padding: 0 16px;
     }
 
     .table-row {
@@ -718,10 +848,7 @@
   @container (max-width: 550px) {
     .subscriptions-header {
       padding: 12px;
-    }
-
-    .header-title h2 {
-      font-size: 15px;
+      flex-wrap: wrap;
     }
 
     .filter-bar {
@@ -736,8 +863,8 @@
     }
 
     .search-input-wrapper {
+      flex: 1;
       max-width: none;
-      min-width: 0;
     }
 
     .table-header {
