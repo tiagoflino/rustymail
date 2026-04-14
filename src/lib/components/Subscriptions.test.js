@@ -124,13 +124,13 @@ describe('Subscriptions.svelte', () => {
         render(Subscriptions, { accountId: "test-account" });
 
         await waitFor(() => {
-            expect(screen.getByText('Active')).toBeInTheDocument();
+            expect(screen.getByText('Newsletter Co')).toBeInTheDocument();
         });
 
+        // Click the "Active" filter tab
         const activeTab = screen.getByText('Active');
         await fireEvent.click(activeTab);
 
-        const filtered = mockSubscriptions.filter(s => s.status === 'active');
         await waitFor(() => {
             expect(screen.getByText('Newsletter Co')).toBeInTheDocument();
         });
@@ -142,10 +142,10 @@ describe('Subscriptions.svelte', () => {
         render(Subscriptions, { accountId: "test-account" });
 
         await waitFor(() => {
-            expect(screen.getByPlaceholderText('Filter by sender...')).toBeInTheDocument();
+            expect(screen.getByPlaceholderText('Filter senders...')).toBeInTheDocument();
         });
 
-        const searchInput = screen.getByPlaceholderText('Filter by sender...');
+        const searchInput = screen.getByPlaceholderText('Filter senders...');
         await fireEvent.input(searchInput, { target: { value: 'digest' } });
 
         await waitFor(() => {

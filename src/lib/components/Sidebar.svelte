@@ -461,7 +461,7 @@
   .brand-name {
     display: block;
     font-weight: 600;
-    font-size: 13px;
+    font-size: var(--font-size-base);
     line-height: 16px;
     letter-spacing: -0.08px;
     white-space: nowrap;
@@ -470,7 +470,7 @@
   }
   .brand-email {
     display: block;
-    font-size: 10px;
+    font-size: var(--font-size-small);
     line-height: 13px;
     color: var(--text-secondary);
     white-space: nowrap;
@@ -493,7 +493,7 @@
     top: 100%;
     background: var(--bg-view);
     border: 1px solid var(--border-color);
-    border-radius: 10px;
+    border-radius: var(--radius-modal);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
     z-index: 100;
     overflow: hidden;
@@ -507,7 +507,7 @@
     background: none;
     border: none;
     cursor: pointer;
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     color: var(--text-primary);
     font-family: var(--font-family);
     text-align: left;
@@ -538,7 +538,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 10px;
+    font-size: var(--font-size-small);
     color: var(--text-secondary);
   }
   .dropdown-text {
@@ -548,12 +548,12 @@
   .dropdown-name {
     display: block;
     font-weight: 500;
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     line-height: 15px;
   }
   .dropdown-email {
     display: block;
-    font-size: 10px;
+    font-size: var(--font-size-small);
     line-height: 13px;
     color: var(--text-secondary);
   }
@@ -572,7 +572,7 @@
     padding: 12px;
   }
   .sidebar-heading {
-    font-size: 11px;
+    font-size: var(--font-size-small);
     line-height: 14px;
     text-transform: none;
     color: var(--text-secondary);
@@ -610,8 +610,8 @@
     align-items: center;
     padding: 6px 12px;
     margin: 2px 0;
-    border-radius: 8px;
-    font-size: 13px;
+    border-radius: var(--radius-standard);
+    font-size: var(--font-size-base);
     line-height: 16px;
     letter-spacing: -0.08px;
     color: var(--text-primary);
@@ -649,7 +649,7 @@
     font-weight: 400;
   }
   .sidebar-item .badge {
-    font-size: 11px;
+    font-size: var(--font-size-small);
     line-height: 14px;
     font-weight: 600;
     color: var(--text-secondary);
@@ -691,10 +691,10 @@
     padding: 6px 10px;
     background: transparent;
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: var(--radius-standard);
     color: var(--text-primary);
     cursor: pointer;
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     line-height: 15px;
     display: flex;
     align-items: center;
@@ -718,13 +718,13 @@
     gap: 8px;
   }
   .sidebar-compose-btn {
-    font-size: 13px;
+    font-size: var(--font-size-base);
     font-weight: 500;
     padding: 7px 14px;
     background: var(--accent-blue);
     color: white;
     border: none;
-    border-radius: 8px;
+    border-radius: var(--radius-standard);
     box-shadow: none;
   }
   .sidebar-compose-btn:hover {
@@ -761,20 +761,20 @@
   }
   .error {
     color: #ff453a;
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     line-height: 15px;
     font-weight: 300;
   }
   .sidebar-error {
     margin-top: 8px;
-    font-size: 11px;
+    font-size: var(--font-size-small);
     line-height: 14px;
     padding: 0 4px;
   }
   .tree-chevron {
     transition: transform 0.15s ease;
     transform: rotate(-90deg);
-    font-size: 10px;
+    font-size: var(--font-size-small);
   }
   .tree-chevron.expanded {
     transform: rotate(0deg);
