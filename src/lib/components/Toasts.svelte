@@ -64,7 +64,7 @@
     color: #f5f5f7;
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
     padding: 10px 16px;
-    border-radius: 12px;
+    border-radius: var(--radius-modal);
     box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2), 0 0 0 0.5px rgba(255, 255, 255, 0.08) inset;
     min-width: 240px;
     max-width: 420px;
@@ -89,7 +89,7 @@
 
   .toast-message {
     flex: 1;
-    font-size: 13px;
+    font-size: var(--font-size-base);
     font-weight: 500;
     line-height: 1.35;
     letter-spacing: -0.08px;
@@ -99,12 +99,12 @@
     background: rgba(255, 255, 255, 0.12);
     border: none;
     color: #0a84ff;
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     font-weight: 600;
     margin-left: 12px;
     padding: 5px 12px;
     cursor: pointer;
-    border-radius: 6px;
+    border-radius: var(--radius-standard);
     transition: background 0.15s;
     white-space: nowrap;
     font-family: inherit;
@@ -130,7 +130,7 @@
     cursor: pointer;
     display: flex;
     align-items: center;
-    border-radius: 6px;
+    border-radius: var(--radius-standard);
     transition: background 0.15s, color 0.15s;
   }
 

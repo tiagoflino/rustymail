@@ -492,7 +492,7 @@
     align-items: center;
     background: var(--bg-sidebar);
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: var(--radius-standard);
     padding: 0 10px;
     height: 34px;
     transition:
@@ -515,7 +515,7 @@
     border: none;
     background: transparent;
     outline: none;
-    font-size: 13px;
+    font-size: var(--font-size-base);
     line-height: 16px;
     letter-spacing: -0.08px;
     color: var(--text-primary);
@@ -554,7 +554,7 @@
     top: 48px;
     background: var(--bg-view);
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: var(--radius-standard);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
     z-index: 50;
     max-height: 240px;
@@ -562,7 +562,7 @@
   }
   .suggestion-section {
     padding: 6px 12px;
-    font-size: 10px;
+    font-size: var(--font-size-small);
     line-height: 13px;
     text-transform: uppercase;
     color: var(--text-secondary);
@@ -578,7 +578,7 @@
     background: none;
     border: none;
     cursor: pointer;
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     line-height: 15px;
     color: var(--text-primary);
     font-family: var(--font-family);
@@ -599,7 +599,7 @@
     font-weight: 500;
   }
   .suggestion-detail {
-    font-size: 11px;
+    font-size: var(--font-size-small);
     line-height: 14px;
     color: var(--text-secondary);
     max-width: 120px;
@@ -663,7 +663,7 @@
   }
   .list-header h3 {
     font-weight: 600;
-    font-size: 13px;
+    font-size: var(--font-size-base);
     line-height: 16px;
     letter-spacing: -0.08px;
     color: var(--text-primary);
@@ -679,7 +679,7 @@
     padding: 2rem;
     text-align: center;
     color: var(--text-secondary);
-    font-size: 13px;
+    font-size: var(--font-size-base);
     line-height: 16px;
     letter-spacing: -0.08px;
     display: flex;
@@ -711,7 +711,7 @@
     gap: 2px;
   }
   .pagination-range {
-    font-size: 11px;
+    font-size: var(--font-size-small);
     line-height: 14px;
     color: var(--text-secondary);
     font-weight: 400;
@@ -722,7 +722,7 @@
   .pagination-btn {
     background: none;
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius-standard);
     cursor: pointer;
     color: var(--text-secondary);
     display: flex;
@@ -850,7 +850,7 @@
   }
   .thread-sender {
     font-weight: 500;
-    font-size: 13px;
+    font-size: var(--font-size-base);
     line-height: 16px;
     letter-spacing: -0.08px;
     white-space: nowrap;
@@ -872,7 +872,7 @@
     opacity: 0.6;
   }
   .thread-time {
-    font-size: 11px;
+    font-size: var(--font-size-small);
     line-height: 14px;
     color: var(--text-secondary);
     white-space: nowrap;
@@ -880,7 +880,7 @@
     font-weight: 400;
   }
   .thread-subject {
-    font-size: 13px;
+    font-size: var(--font-size-base);
     line-height: 16px;
     letter-spacing: -0.08px;
     white-space: nowrap;
@@ -890,7 +890,7 @@
     font-weight: 400;
   }
   .thread-snippet {
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     line-height: 15px;
     color: var(--text-secondary);
     white-space: nowrap;
@@ -940,7 +940,7 @@
     width: 16px;
     height: 16px;
     border-radius: 50%;
-    font-size: 9px;
+    font-size: var(--font-size-small);
     font-weight: 700;
     color: #fff;
     vertical-align: middle;
@@ -963,7 +963,7 @@
     border-color: rgba(255, 255, 255, 0.12);
   }
   .unified-badge {
-    font-size: 10px;
+    font-size: var(--font-size-small);
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;

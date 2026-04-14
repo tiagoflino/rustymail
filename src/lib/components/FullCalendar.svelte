@@ -1,8 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { addToast } from "$lib/stores/toast";
   import EventModal from "./EventModal.svelte";
+
+  let { isMacOS = false }: { isMacOS?: boolean } = $props();
 
   const iconChevronLeft = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>';
   const iconChevronRight = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>';
@@ -336,8 +339,23 @@
 </script>
 
 <div class="calendar-wrapper">
+  <div class="titlebar-spacer" data-tauri-drag-region>
+    {#if !isMacOS}
+      <div class="window-controls">
+        <button class="win-ctrl win-minimize" onclick={() => getCurrentWindow().minimize()} title="Minimize">
+          <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
+        </button>
+        <button class="win-ctrl win-maximize" onclick={() => getCurrentWindow().toggleMaximize()} title="Maximize">
+          <svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/></svg>
+        </button>
+        <button class="win-ctrl win-close" onclick={() => getCurrentWindow().close()} title="Close">
+          <svg width="10" height="10" viewBox="0 0 10 10"><line x1="0" y1="0" x2="10" y2="10" stroke="currentColor" stroke-width="1.2"/><line x1="10" y1="0" x2="0" y2="10" stroke="currentColor" stroke-width="1.2"/></svg>
+        </button>
+      </div>
+    {/if}
+  </div>
   <!-- Header -->
-  <header class="calendar-header">
+  <header class="calendar-header" data-tauri-drag-region>
     <div class="header-left">
       <h1 class="month-title">{displayTitle}</h1>
       <div class="nav-controls">
@@ -536,31 +554,64 @@
 
 
 <style>
+  .titlebar-spacer {
+    height: 28px;
+    flex-shrink: 0;
+    -webkit-app-region: drag;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+  }
+  .window-controls {
+    display: flex;
+    align-items: center;
+    height: 100%;
+    -webkit-app-region: no-drag;
+  }
+  .win-ctrl {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 46px;
+    height: 100%;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .win-ctrl:hover {
+    background: var(--bg-hover, rgba(128, 128, 128, 0.2));
+  }
+  .win-close:hover {
+    background: #e81123;
+    color: #fff;
+  }
   .calendar-wrapper { display: flex; flex-direction: column; height: 100%; width: 100%; background: var(--bg-view); color: var(--text-primary); }
   .calendar-header { 
     display: flex; 
     justify-content: space-between; 
     align-items: center; 
-    padding: 0 32px; 
-    height: 80px; 
+    padding: 0 20px;
+    height: 50px; 
     border-bottom: 1px solid var(--border-color); 
     background: var(--bg-view);
     flex-shrink: 0;
   }
-  .header-left { display: flex; align-items: center; gap: 24px; }
-  .month-title { font-size: 24px; font-weight: 600; margin: 0; min-width: 200px; white-space: nowrap; }
+  .header-left { display: flex; align-items: center; gap: 16px; }
+  .month-title { font-size: var(--font-size-heading); font-weight: 600; margin: 0; min-width: 160px; white-space: nowrap; }
   .loading-container { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
   
-  .nav-controls { display: flex; align-items: center; background: var(--bg-body); border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden; }
-  .nav-btn { background: transparent; border: none; border-right: 1px solid var(--border-color); padding: 8px 12px; color: var(--text-primary); cursor: pointer; font-size: 14px; font-weight: 500; display: flex; align-items: center; transition: background 0.1s; }
+  .nav-controls { display: flex; align-items: center; background: var(--bg-control); border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden; }
+  .nav-btn { background: transparent; border: none; border-right: 1px solid var(--border-color); padding: 6px 10px; color: var(--text-primary); cursor: pointer; font-size: var(--font-size-base); font-weight: 500; display: flex; align-items: center; transition: background 0.1s; }
   .nav-btn:last-child { border-right: none; }
   .nav-btn:hover { background: var(--sidebar-hover); }
-  .btn-today { padding: 8px 16px; }
+  .btn-today { padding: 6px 12px; }
   
-  .segmented-control { display: flex; background: var(--bg-body); border: 1px solid var(--border-color); border-radius: 8px; padding: 2px; }
-  .segment { background: transparent; border: none; border-radius: 6px; padding: 6px 14px; font-size: 13px; font-weight: 500; color: var(--text-secondary); cursor: pointer; transition: all 0.2s; }
+  .segmented-control { display: flex; background: var(--bg-control); border: none; border-radius: 8px; padding: 2px; }
+  .segment { background: transparent; border: none; border-radius: var(--radius-standard); padding: 5px 12px; font-size: var(--font-size-base); font-weight: 500; color: var(--text-secondary); cursor: pointer; transition: all 0.2s; }
   .segment:hover { color: var(--text-primary); }
-  .segment.active { background: var(--bg-view); color: var(--text-primary); box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .segment.active { background: var(--bg-view); color: var(--text-primary); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.04); }
   
   .header-right { display: flex; align-items: center; }
   .btn-new-event { 
@@ -570,10 +621,10 @@
     background: var(--accent-blue); 
     color: white; 
     border: none; 
-    padding: 10px 16px; 
-    border-radius: 8px; 
-    font-weight: 500; 
-    font-size: 14px; 
+    padding: 6px 12px;
+    border-radius: var(--radius-standard);
+    font-weight: 500;
+    font-size: var(--font-size-toolbar); 
     cursor: pointer; 
     box-shadow: 0 2px 6px rgba(10, 132, 255, 0.2); 
     transition: opacity 0.1s; 
@@ -586,7 +637,7 @@
   
   /* Month/Week common */
   .weekdays-row { display: grid; grid-template-columns: repeat(7, 1fr); border-bottom: 1px solid var(--border-color); }
-  .weekday-cell { padding: 12px; text-align: center; font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
+  .weekday-cell { padding: 12px; text-align: center; font-size: var(--font-size-toolbar); font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
   .days-matrix { display: grid; grid-template-columns: repeat(7, 1fr); grid-auto-rows: 1fr; flex: 1; overflow-y: auto; }
   .day-cell { border-right: 1px solid var(--border-color); border-bottom: 1px solid var(--border-color); padding: 8px; min-height: 120px; display: flex; flex-direction: column; cursor: pointer; transition: background 0.1s; min-width: 0; }
   .day-cell:hover { background: var(--sidebar-hover); }
@@ -599,7 +650,7 @@
 
   /* Week specifics */
   .week-view-header .weekday-cell { display: flex; flex-direction: column; gap: 4px; padding: 16px 8px; align-items: center; }
-  .week-name { font-size: 11px; text-transform: uppercase; color: var(--text-secondary); }
+  .week-name { font-size: var(--font-size-small); text-transform: uppercase; color: var(--text-secondary); }
   .week-date { font-size: 22px; font-weight: 400; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--text-primary); }
   .today-text .week-name { color: var(--accent-blue); font-weight: 600;}
   .today-badge { background: var(--accent-blue) !important; color: white !important; font-weight: 500 !important; }
@@ -610,12 +661,12 @@
   .events-container::-webkit-scrollbar { display: none; }
   .events-container.pad { padding: 4px 0; gap: 6px; }
   
-  .event-chip { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 4px; background: var(--bg-body); border: 1px solid var(--border-color); font-size: 11px; text-align: left; cursor: pointer; width: 100%; color: var(--text-primary); transition: border-color 0.1s, box-shadow 0.1s; }
+  .event-chip { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 4px; background: var(--bg-control); border: 1px solid var(--border-color); font-size: var(--font-size-small); text-align: left; cursor: pointer; width: 100%; color: var(--text-primary); transition: border-color 0.1s, box-shadow 0.1s; }
   .event-chip:hover { border-color: var(--accent-blue); box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05); }
-  .list-chip { align-items: flex-start; padding: 8px; border-radius: 6px; }
+  .list-chip { align-items: flex-start; padding: 8px; border-radius: var(--radius-standard); }
   .event-info-col { display: flex; flex-direction: column; gap: 2px; overflow: hidden; }
-  .event-info-col .event-title { font-size: 12px; font-weight: 500; }
-  .event-info-col .event-time { font-size: 10px; opacity: 0.8; }
+  .event-info-col .event-title { font-size: var(--font-size-toolbar); font-weight: 500; }
+  .event-info-col .event-time { font-size: var(--font-size-small); opacity: 0.8; }
   .video-indicator { display: flex; align-items: center; color: var(--text-secondary); opacity: 0.7; }
   
   .chip-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-blue); flex-shrink: 0; }
@@ -627,18 +678,18 @@
   .day-view-container { display: flex; flex-direction: column; flex: 1; overflow-y: auto; position: relative; }
   .day-view-header { padding: 24px 32px; border-bottom: 1px solid var(--border-color); display: flex; align-items:baseline; gap: 12px; z-index: 10; position: sticky; top: 0; background: var(--bg-view); }
   .day-view-number { font-size: 32px; font-weight: 400; border-radius: 50%; width: 48px; height: 48px; display: flex; justify-content: center; align-items: center; }
-  .day-view-name { font-size: 18px; color: var(--text-secondary); }
+  .day-view-name { font-size: var(--font-size-heading); color: var(--text-secondary); }
   .day-view-body { padding: 24px 32px; max-width: 800px; z-index: 2; position: relative; }
   .day-view-backdrop { position: absolute; top:0; left:0; width:100%; height:100%; z-index: 1; cursor: pointer; }
   
   .day-events-list { display: flex; flex-direction: column; gap: 12px; }
   .no-events { color: var(--text-secondary); font-style: italic; padding: 20px 0; }
-  .event-card { display: flex; background: var(--bg-body); border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; text-align: left; cursor: pointer; transition: transform 0.1s, box-shadow 0.1s; width: 100%; box-shadow: 0 4px 12px rgba(0,0,0,0.03); }
+  .event-card { display: flex; background: var(--bg-control); border: 1px solid var(--border-color); border-radius: var(--radius-modal); overflow: hidden; text-align: left; cursor: pointer; transition: transform 0.1s, box-shadow 0.1s; width: 100%; box-shadow: 0 4px 12px rgba(0,0,0,0.03); }
   .event-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.08); border-color: var(--accent-blue); }
   .event-card-stripe { width: 6px; background: var(--accent-blue); flex-shrink: 0; }
   .event-card-content { display: flex; flex-direction: column; gap: 6px; padding: 16px 20px; flex: 1; overflow: hidden; }
-  .event-card-title { font-size: 16px; font-weight: 600; color: var(--text-primary); }
-  .event-card-time { font-size: 13px; color: var(--accent-blue); font-weight: 500; }
+  .event-card-title { font-size: var(--font-size-title); font-weight: 600; color: var(--text-primary); }
+  .event-card-time { font-size: var(--font-size-base); color: var(--accent-blue); font-weight: 500; }
 
   .link-style { background: transparent; border: none; padding: 0; cursor: pointer; text-align: left; transition: opacity 0.2s, color 0.1s; display: flex; align-items: flex-start; gap: 6px; font-family: inherit;}
   .link-style:hover { color: var(--accent-blue) !important; }
@@ -647,7 +698,7 @@
   .loc-text { padding-top: 1px; }
 
   
-  .join-btn { background: var(--bg-view); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 6px; padding: 6px 10px; font-size: 12px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; transition: background 0.1s, border-color 0.1s; align-self: flex-start; margin-top: 4px;}
+  .join-btn { background: var(--bg-view); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-standard); padding: 6px 10px; font-size: var(--font-size-toolbar); font-weight: 500; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; transition: background 0.1s, border-color 0.1s; align-self: flex-start; margin-top: 4px;}
   .join-btn:hover { background: var(--sidebar-hover); border-color: var(--accent-blue); }
   .join-btn .icon { display: flex; align-items: center; opacity: 0.8; }
   .popover-join { margin-top: 6px; font-size: 11px; padding: 4px 8px;}
@@ -655,13 +706,13 @@
   /* Year View */
   .year-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); padding: 32px; gap: 48px 32px; overflow-y: auto; flex: 1;}
   .mini-month { display: flex; flex-direction: column; }
-  .mini-month-title { font-size: 14px; margin: 0 0 12px 6px; color: var(--text-primary); font-weight: 600; }
+  .mini-month-title { font-size: var(--font-size-detail); margin: 0 0 12px 6px; color: var(--text-primary); font-weight: 600; }
   .mini-weekdays { display: grid; grid-template-columns: repeat(7, 1fr); margin-bottom: 8px; }
-  .mini-weekdays span { font-size: 10px; font-weight: 600; color: var(--text-secondary); text-align: center; }
+  .mini-weekdays span { font-size: var(--font-size-small); font-weight: 600; color: var(--text-secondary); text-align: center; }
   .mini-days { display: grid; grid-template-columns: repeat(7, 1fr); grid-auto-rows: 1fr; }
   .mini-day-wrap { aspect-ratio: 1; display: flex; padding: 2px; }
   .outside { visibility: hidden; }
-  .mini-day { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 12px; border-radius: 50%; color: var(--text-primary); cursor: pointer; transition: background 0.1s; position: relative;}
+  .mini-day { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: var(--font-size-toolbar); border-radius: 50%; color: var(--text-primary); cursor: pointer; transition: background 0.1s; position: relative;}
   .mini-day:hover { background: var(--sidebar-hover); }
   .mini-dot { width: 4px; height: 4px; background: var(--accent-blue); border-radius: 50%; position: absolute; bottom: 2px; }
 
@@ -669,7 +720,7 @@
     position: fixed;
     background: var(--bg-view);
     border: 1px solid var(--border-color);
-    border-radius: 12px;
+    border-radius: var(--radius-modal);
     padding: 16px;
     width: 280px;
     box-shadow: 0 12px 32px rgba(0,0,0,0.15);
@@ -680,15 +731,15 @@
     gap: 6px;
     color: var(--text-primary);
   }
-  .popover-title { font-size: 15px; font-weight: 600; margin: 0; line-height: 1.3; }
-  .popover-time { font-size: 12px; font-weight: 500; color: var(--accent-blue); }
-  .popover-location { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+  .popover-title { font-size: var(--font-size-detail); font-weight: 600; margin: 0; line-height: 1.3; }
+  .popover-time { font-size: var(--font-size-toolbar); font-weight: 500; color: var(--accent-blue); }
+  .popover-location { font-size: var(--font-size-toolbar); color: var(--text-secondary); margin-top: 4px; }
   .location-btn { color: var(--text-secondary); }
-  .popover-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.4; margin-top: 8px; max-height: 120px; overflow-y: auto; background: rgba(0,0,0,0.02); padding: 8px; border-radius: 6px; }
+  .popover-desc { font-size: var(--font-size-toolbar); color: var(--text-secondary); line-height: 1.4; margin-top: 8px; max-height: 120px; overflow-y: auto; background: rgba(0,0,0,0.02); padding: 8px; border-radius: var(--radius-standard); }
   .popover-desc :global(a) { color: var(--accent-blue); text-decoration: none; }
   .popover-desc :global(a:hover) { text-decoration: underline; }
 
-  .event-card-desc { font-size: 13px; color: var(--text-secondary); margin-top: 4px; line-height: 1.4; }
+  .event-card-desc { font-size: var(--font-size-base); color: var(--text-secondary); margin-top: 4px; line-height: 1.4; }
   .event-card-desc :global(a) { color: var(--accent-blue); text-decoration: none; }
   .event-card-desc :global(a:hover) { text-decoration: underline; }
 

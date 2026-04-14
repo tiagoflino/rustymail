@@ -221,13 +221,13 @@
     align-items: center;
     justify-content: center;
     z-index: 9999;
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(var(--blur-dialog));
+    -webkit-backdrop-filter: blur(var(--blur-dialog));
   }
 
   .unsub-dialog {
     background: var(--bg-view);
-    border-radius: 14px;
+    border-radius: var(--radius-modal);
     width: 300px;
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25), 0 0 0 0.5px rgba(0, 0, 0, 0.1);
     overflow: hidden;
@@ -274,14 +274,14 @@
 
   .unsub-dialog-title {
     margin: 0 0 4px;
-    font-size: 14px;
+    font-size: var(--font-size-detail);
     font-weight: 600;
     color: var(--text-primary);
   }
 
   .unsub-dialog-subtitle {
     margin: 0 0 12px;
-    font-size: 12px;
+    font-size: var(--font-size-toolbar);
     line-height: 16px;
     color: var(--text-secondary);
   }
@@ -294,7 +294,7 @@
   }
 
   .unsub-url-text {
-    font-size: 11px;
+    font-size: var(--font-size-small);
     color: var(--text-secondary);
     word-break: break-all;
     line-height: 14px;
@@ -320,7 +320,7 @@
     padding: 11px 8px;
     background: none;
     border: none;
-    font-size: 14px;
+    font-size: var(--font-size-detail);
     cursor: pointer;
     color: #007aff;
     font-family: var(--font-family);
