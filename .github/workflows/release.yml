@@ -31,7 +31,7 @@ jobs:
         with:
           fetch-depth: 0
           submodules: true
-          token: ${{ secrets.PREMIUM_PAT }}
+          ssh-key: ${{ secrets.PREMIUM_DEPLOY_KEY }}
 
       - uses: actions/setup-node@v4
         with:
