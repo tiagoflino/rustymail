@@ -103,16 +103,97 @@
     aiSummary = null;
   });
 
-  function formatAiSummary(text: string): string {
-    return text
-      .replace(/\*\*(.+?)\*\*/g, '<strong class="ai-heading">$1</strong>')
-      .replace(/^- (.+)$/gm, '<li>$1</li>')
-      .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
-      .replace(/\n{2,}/g, '</p><p>')
-      .replace(/\n/g, '<br>')
-      .replace(/^/, '<p>')
-      .replace(/$/, '</p>')
-      .replace(/<p><\/p>/g, '');
+  function formatAiSummary(raw: string): string {
+    let text = raw
+      .replace(/\*\*([^*]+)\*\*\s*\n\s*(?=\()/g, '**$1** ')
+      .replace(/:\n\s*(?=[A-Za-z'"])/g, ': ');
+
+    function fmt(s: string): string {
+      return s
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/__(.+?)__/g, '<strong>$1</strong>')
+        .replace(/(?<!\w)\*([^*]+?)\*(?!\w)/g, '<em>$1</em>')
+        .replace(/`([^`]+?)`/g, '<code>$1</code>');
+    }
+
+    // Parse lines into typed entries
+    type Entry = { type: 'header' | 'topic' | 'sub' | 'text'; content: string; raw: string };
+    const entries: Entry[] = [];
+
+    for (const rawLine of text.split('\n')) {
+      const trimmed = rawLine.trim();
+      if (!trimmed || trimmed === '-' || trimmed === '•' || trimmed === '*') continue;
+
+      const isBullet = /^(?:[-*•]|\d+[.)]) /.test(trimmed);
+      if (!isBullet) {
+        // Non-bullet: could be a section header (**Overview**) or plain text
+        entries.push({ type: /\*\*/.test(trimmed) ? 'header' : 'text', content: trimmed, raw: rawLine });
+      } else {
+        const content = trimmed.replace(/^(?:[-*•]|\d+[.)]) /, '');
+        if (!content.trim()) continue;
+        const hasBold = /\*\*/.test(content);
+        // Check raw indentation: 2+ leading spaces = explicitly nested
+        const indent = (rawLine.match(/^(\s*)/)?.[1].length || 0);
+        if (hasBold && indent < 2) {
+          entries.push({ type: 'topic', content, raw: rawLine });
+        } else {
+          entries.push({ type: 'sub', content, raw: rawLine });
+        }
+      }
+    }
+
+    // Render with context-based nesting
+    const out: string[] = [];
+    let nestDepth = 0;
+
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+
+      if (e.type === 'header' || e.type === 'text') {
+        while (nestDepth > 0) { out.push('</div>'); nestDepth--; }
+        out.push(`<div class="ai-line">${fmt(e.content)}</div>`);
+        continue;
+      }
+
+      if (e.type === 'topic') {
+        // Close previous nesting back to 0
+        while (nestDepth > 0) { out.push('</div>'); nestDepth--; }
+        out.push(`<div class="ai-topic">• ${fmt(e.content)}</div>`);
+        // Check if next entry is a sub-item → open nesting
+        if (i + 1 < entries.length && entries[i + 1].type === 'sub') {
+          out.push('<div class="ai-nest">');
+          nestDepth = 1;
+        }
+        continue;
+      }
+
+      if (e.type === 'sub') {
+        // Detect if this sub-item has bold (it's a sub-topic with its own children)
+        const hasBold = /\*\*/.test(e.content);
+        const nextIsSub = i + 1 < entries.length && entries[i + 1].type === 'sub';
+        const nextHasBold = nextIsSub && /\*\*/.test(entries[i + 1].content);
+
+        if (hasBold) {
+          // Sub-topic: render as topic-style with its own nest
+          out.push(`<div class="ai-topic">• ${fmt(e.content)}</div>`);
+          if (nextIsSub && !nextHasBold) {
+            out.push('<div class="ai-nest">');
+            nestDepth++;
+          }
+        } else {
+          out.push(`<div class="ai-subitem">• ${fmt(e.content)}</div>`);
+          // If next is a bold sub (new sub-topic) or a topic, close this nest level
+          if (nextIsSub && /\*\*/.test(entries[i + 1].content)) {
+            if (nestDepth > 1) { out.push('</div>'); nestDepth--; }
+          }
+        }
+        continue;
+      }
+    }
+
+    while (nestDepth > 0) { out.push('</div>'); nestDepth--; }
+    return out.join('');
   }
 
   async function pollAiStatus(): Promise<void> {
@@ -414,8 +495,7 @@
         >
       </button>
       {#if aiAvailable}
-        <div class="toolbar-spacer"></div>
-        <button onclick={handleSummarize} class="toolbar-btn ai-btn" title="Summarize with AI" disabled={aiSummaryLoading}>
+        <button onclick={handleSummarize} class="toolbar-btn" style="margin-left: auto;" title="Summarize" disabled={aiSummaryLoading}>
           {#if aiSummaryLoading}
             <span class="toolbar-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="30 70" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/></circle></svg></span>
           {:else}
@@ -425,27 +505,6 @@
         </button>
       {/if}
     </div>
-    {#if aiSummaryLoading && aiStatusMessage}
-      <div class="ai-progress-panel">
-        <span class="ai-progress-label">{aiStatusMessage}</span>
-        <div class="ai-progress-bar">
-          <div class="ai-progress-fill" class:indeterminate={!aiStatusMessage?.includes('%')}
-            style={aiStatusMessage?.includes('%') ? `width: ${aiStatusMessage.match(/(\d+)%/)?.[1] || 0}%` : ''}
-          ></div>
-        </div>
-      </div>
-    {/if}
-    {#if aiSummary}
-      <div class="ai-summary-panel">
-        <div class="ai-summary-header">
-          <span class="ai-summary-label">AI Summary</span>
-          <button class="ai-summary-close" onclick={() => { aiSummary = null; }} title="Dismiss">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
-        </div>
-        <div class="ai-summary-text">{@html formatAiSummary(aiSummary)}</div>
-      </div>
-    {/if}
     {#if $isMessagesLoading}
       <div class="message-scroll-area">
         {#each Array(2) as _}
@@ -468,6 +527,34 @@
       <div class="error-state">{$messagesError}</div>
     {:else if $currentMessages.length > 0}
       <div class="message-scroll-area">
+        {#if aiSummaryLoading}
+          <div class="ai-card loading">
+            <div class="ai-card-header">
+              <span class="ai-card-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
+              <span class="ai-card-title">{aiStatusMessage || 'Generating summary...'}</span>
+            </div>
+            <div class="ai-card-skeleton">
+              <div class="skeleton-line w80"></div>
+              <div class="skeleton-line w60"></div>
+              <div class="skeleton-line w70"></div>
+            </div>
+          </div>
+        {/if}
+        {#if aiSummary && !aiSummaryLoading}
+          <div class="ai-card">
+            <div class="ai-card-header">
+              <span class="ai-card-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 014 4c0 1.1-.4 2.1-1 2.8L12 12l-3-3.2A4 4 0 0112 2z"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 18h6"/><path d="M10 22h4"/></svg></span>
+              <span class="ai-card-title">Summary</span>
+              <button class="ai-card-action" onclick={() => { if (aiSummary) { navigator.clipboard.writeText(aiSummary); addToast("Summary copied", "info", 2000); } }} title="Copy">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+              </button>
+              <button class="ai-card-action" onclick={() => { aiSummary = null; }} title="Dismiss">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div class="ai-card-body">{@html formatAiSummary(aiSummary)}</div>
+          </div>
+        {/if}
         {#if $currentMessages.length > 2}
           <div class="expand-all-row">
             <button class="expand-all-btn" onclick={expandAll}>
@@ -1193,102 +1280,88 @@
     top: 8px;
     right: 0;
   }
-  .toolbar-spacer { flex: 1; }
-  .ai-btn { margin-left: auto; }
-  .ai-btn:not(:disabled):hover { color: #8B5CF6; }
-  .ai-summary-panel {
-    padding: 12px 16px;
-    border-bottom: 1px solid var(--border-color);
-    background: rgba(139, 92, 246, 0.04);
+  .ai-card {
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+    background: var(--bg-view);
   }
-  :global([data-theme="dark"]) .ai-summary-panel {
-    background: rgba(139, 92, 246, 0.08);
+  .ai-card.loading {
+    opacity: 0.8;
   }
-  .ai-summary-header {
+  .ai-card-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    margin-bottom: 6px;
+    gap: 6px;
+    margin-bottom: 10px;
   }
-  .ai-summary-label {
+  .ai-card-icon {
+    display: flex;
+    align-items: center;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+  .ai-card-title {
     font-size: var(--font-size-small);
     font-weight: 600;
-    color: #8B5CF6;
+    color: var(--text-secondary);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.3px;
+    flex: 1;
   }
-  .ai-summary-close {
+  .ai-card-action {
     background: none;
     border: none;
     cursor: pointer;
     color: var(--text-secondary);
-    padding: 2px;
-    border-radius: 4px;
+    padding: 4px;
+    border-radius: var(--radius-standard);
     display: flex;
     align-items: center;
+    opacity: 0;
+    transition: opacity 0.15s, background 0.1s;
   }
-  .ai-summary-close:hover { color: var(--text-primary); background: var(--sidebar-hover); }
-  .ai-summary-text {
+  .ai-card:hover .ai-card-action { opacity: 1; }
+  .ai-card-action:hover { background: var(--sidebar-hover); color: var(--text-primary); }
+  .ai-card-body {
     font-size: var(--font-size-detail);
     color: var(--text-primary);
     line-height: 1.6;
-    margin: 0;
   }
-  .ai-summary-text :global(p) { margin: 0 0 8px 0; }
-  .ai-summary-text :global(p:last-child) { margin-bottom: 0; }
-  .ai-summary-text :global(.ai-heading) {
-    display: block;
-    font-size: var(--font-size-detail);
-    font-weight: 700;
-    color: #8B5CF6;
-    margin-top: 10px;
-    margin-bottom: 4px;
+  .ai-card-body :global(strong) { font-weight: 600; }
+  .ai-card-body :global(em) { font-style: italic; color: var(--text-secondary); }
+  .ai-card-body :global(code) {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.9em;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: var(--sidebar-hover);
   }
-  .ai-summary-text :global(.ai-heading:first-child) { margin-top: 0; }
-  .ai-summary-text :global(ul) {
-    margin: 4px 0 8px 0;
-    padding-left: 18px;
-    list-style: disc;
-  }
-  .ai-summary-text :global(li) {
-    margin-bottom: 3px;
+  .ai-card-body :global(.ai-line) { margin-bottom: 6px; }
+  .ai-card-body :global(.ai-topic) { margin-top: 8px; margin-bottom: 2px; }
+  .ai-card-body :global(.ai-topic:first-child) { margin-top: 0; }
+  .ai-card-body :global(.ai-nest) { padding-left: 14px; margin-bottom: 4px; }
+  .ai-card-body :global(.ai-subitem) {
+    color: var(--text-secondary);
+    font-size: var(--font-size-base);
     line-height: 1.5;
+    margin-bottom: 1px;
   }
-  .ai-progress-panel {
-    padding: 10px 16px;
-    border-bottom: 1px solid var(--border-color);
-    background: rgba(139, 92, 246, 0.04);
+  .ai-card-body :global(.ai-nest .ai-nest) { padding-left: 14px; }
+  .ai-card-body :global(.ai-nest .ai-nest .ai-subitem) { font-size: var(--font-size-small); }
+  .ai-card-skeleton {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
   }
-  :global([data-theme="dark"]) .ai-progress-panel {
-    background: rgba(139, 92, 246, 0.08);
-  }
-  .ai-progress-label {
-    font-size: var(--font-size-small);
-    font-weight: 500;
-    color: #8B5CF6;
-    display: block;
-    margin-bottom: 6px;
-  }
-  .ai-progress-bar {
-    width: 100%;
-    height: 4px;
+  .ai-card-skeleton .skeleton-line {
+    height: 10px;
+    border-radius: 4px;
     background: var(--border-color);
-    border-radius: 2px;
-    overflow: hidden;
+    animation: shimmer 1.5s infinite;
   }
-  .ai-progress-fill {
-    height: 100%;
-    background: #8B5CF6;
-    border-radius: 2px;
-    transition: width 0.3s ease;
-  }
-  .ai-progress-fill.indeterminate {
-    width: 30% !important;
-    animation: ai-progress-slide 1.2s ease-in-out infinite;
-  }
-  @keyframes ai-progress-slide {
-    0% { margin-left: 0; }
-    50% { margin-left: 70%; }
-    100% { margin-left: 0; }
-  }
+  .ai-card-skeleton .w60 { width: 60%; }
+  .ai-card-skeleton .w70 { width: 70%; }
+  .ai-card-skeleton .w80 { width: 80%; }
 </style>
