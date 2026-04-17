@@ -42,6 +42,29 @@ jobs:
 
       - uses: github/codeql-action/analyze@v3
 
+  premium-build:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      RUSTYMAIL_CLIENT_ID: ${{ secrets.RUSTYMAIL_CLIENT_ID }}
+      RUSTYMAIL_CLIENT_SECRET: ${{ secrets.RUSTYMAIL_CLIENT_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.PREMIUM_PAT }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf cmake
+
+      - run: make install
+      - run: cargo check --manifest-path src-tauri/Cargo.toml --features premium
+
   audit:
     runs-on: ubuntu-latest
     steps:
