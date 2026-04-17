@@ -18,6 +18,9 @@
     currentMessages,
     isMessagesLoading,
     messagesError,
+    selectedThreadIds,
+    clearSelection,
+    selectAll,
     type LocalMessage,
   } from "$lib/stores/messages";
   import { writable, get } from "svelte/store";
@@ -37,6 +40,8 @@
   import LinkSafetyDialog from "$lib/components/LinkSafetyDialog.svelte";
   import CommandPalette from "$lib/components/CommandPalette.svelte";
   import UpdateModal from "$lib/components/UpdateModal.svelte";
+  import LabelPicker from "$lib/components/LabelPicker.svelte";
+  import SnoozePopover from "$lib/components/SnoozePopover.svelte";
   import { shortcutManager } from "$lib/shortcut-manager";
   import { addToast } from "$lib/stores/toast";
   import { pendingUpdate } from "$lib/utils/updater";
@@ -77,6 +82,8 @@
   let showCommandPalette = $state(false);
   let viewMode = $state<"mail" | "calendar" | "subscriptions">("mail");
   let snoozePopoverOpen = $state(false);
+  let batchSnoozeOpen = $state(false);
+  let labelPickerOpen = $state(false);
   let snoozedCount = $state(0);
 
   let isMacOS = $state(false);
@@ -638,7 +645,7 @@
           const newOnes = [...fetchedMap.values()];
 
           if (newOnes.length === 0 && kept.length === current.length) return kept;
-          return [...newOnes, ...kept];
+          return [...newOnes, ...kept].sort((a, b) => (b.internal_date || 0) - (a.internal_date || 0));
         });
       } else {
         threads.set(fetched);
@@ -1074,6 +1081,137 @@
     }
   }
 
+  const SYSTEM_LABEL_IDS = new Set([
+    "INBOX", "SENT", "DRAFT", "TRASH", "SPAM", "STARRED", "IMPORTANT",
+    "UNREAD", "CHAT", "VOICEMAIL", "SNOOZED",
+  ]);
+
+  let userLabels = $derived(
+    $labels
+      .filter(l => l.type === "user" && !l.id.startsWith("CATEGORY_") && !SYSTEM_LABEL_IDS.has(l.id))
+      .map(l => ({ id: l.id, name: l.name }))
+  );
+
+  function forceRefreshThreads() {
+    isLoadingThreads = false;
+    loadThreads(true);
+  }
+
+  async function executeBatchAction(action: string, extraArgs?: any) {
+    const ids = [...$selectedThreadIds];
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    const previousList = [...$threads];
+
+    clearSelection();
+
+    // Optimistic removal for actions that remove threads from current view
+    if (["archive", "trash", "restore", "snooze", "unsnooze", "movetolabel"].includes(action)) {
+      threads.update(ts => ts.filter(t => !idSet.has(t.id)));
+      selectedThreadId.set(null);
+      currentMessages.set([]);
+    }
+    // Optimistic update for star/read (threads stay in list, just change state)
+    if (action === "star") {
+      threads.update(ts => ts.map(t => idSet.has(t.id) ? { ...t, starred: extraArgs, star_type: extraArgs ? (t.star_type || "YELLOW_STAR") : null } : t));
+    }
+    if (action === "read") {
+      threads.update(ts => ts.map(t => idSet.has(t.id) ? { ...t, unread: extraArgs ? 0 : 1 } : t));
+    }
+
+    try {
+      let result: any;
+      switch (action) {
+        case "archive":
+          result = await invoke("batch_archive_threads", { threadIds: ids });
+          if (result.succeeded > 0) {
+            const archivedIds = ids.filter(id => !result.failed_ids.includes(id));
+            addToast(`${result.succeeded} thread${result.succeeded > 1 ? 's' : ''} archived`, "info", 6000, {
+              label: "Undo",
+              onClick: async () => {
+                await invoke("batch_move_to_label", { threadIds: archivedIds, addLabels: ["INBOX"], removeLabels: [] });
+                forceRefreshThreads();
+              }
+            });
+          }
+          break;
+        case "trash":
+          result = await invoke("batch_trash_threads", { threadIds: ids });
+          if (result.succeeded > 0) {
+            const trashedIds = ids.filter(id => !result.failed_ids.includes(id));
+            addToast(`${result.succeeded} thread${result.succeeded > 1 ? 's' : ''} moved to trash`, "info", 6000, {
+              label: "Undo",
+              onClick: async () => {
+                for (const id of trashedIds) {
+                  await invoke("untrash_thread", { threadId: id });
+                }
+                forceRefreshThreads();
+              }
+            });
+          }
+          break;
+        case "restore":
+          let restoreSucceeded = 0;
+          const restoreFailed: string[] = [];
+          for (const id of ids) {
+            try {
+              await invoke("untrash_thread", { threadId: id });
+              restoreSucceeded++;
+            } catch { restoreFailed.push(id); }
+          }
+          result = { succeeded: restoreSucceeded, failed_ids: restoreFailed };
+          if (restoreSucceeded > 0) {
+            addToast(`${restoreSucceeded} thread${restoreSucceeded > 1 ? 's' : ''} restored`, "success");
+            delete labelLastSyncMap["INBOX"];
+            delete labelLastSyncMap["UNIFIED_INBOX"];
+          }
+          break;
+        case "read":
+          result = await invoke("batch_mark_read_status", { threadIds: ids, isRead: extraArgs });
+          if (result.succeeded > 0) addToast(`${result.succeeded} thread${result.succeeded > 1 ? 's' : ''} marked as ${extraArgs ? 'read' : 'unread'}`, "info");
+          break;
+        case "star":
+          result = await invoke("batch_star_threads", { threadIds: ids, starred: extraArgs });
+          if (result.succeeded > 0) addToast(`${result.succeeded} thread${result.succeeded > 1 ? 's' : ''} ${extraArgs ? 'starred' : 'unstarred'}`, "info");
+          break;
+        case "snooze":
+          result = await invoke("batch_snooze_threads", { threadIds: ids, snoozedUntil: extraArgs });
+          if (result.succeeded > 0) addToast(`${result.succeeded} thread${result.succeeded > 1 ? 's' : ''} snoozed`, "info");
+          break;
+        case "unsnooze":
+          let unsnoozeSucceeded = 0;
+          const unsnoozeFailed: string[] = [];
+          for (const id of ids) {
+            try {
+              await invoke("unsnooze_thread", { threadId: id });
+              unsnoozeSucceeded++;
+            } catch { unsnoozeFailed.push(id); }
+          }
+          result = { succeeded: unsnoozeSucceeded, failed_ids: unsnoozeFailed };
+          if (unsnoozeSucceeded > 0) {
+            addToast(`${unsnoozeSucceeded} thread${unsnoozeSucceeded > 1 ? 's' : ''} unsnoozed`, "info");
+            delete labelLastSyncMap["INBOX"];
+            delete labelLastSyncMap["UNIFIED_INBOX"];
+          }
+          break;
+        case "movetolabel":
+          result = await invoke("batch_move_to_label", { threadIds: ids, addLabels: [extraArgs], removeLabels: ["INBOX"] });
+          if (result.succeeded > 0) addToast(`${result.succeeded} thread${result.succeeded > 1 ? 's' : ''} moved`, "info");
+          break;
+      }
+      if (result?.failed_ids?.length > 0) {
+        addToast(`${result.failed_ids.length} thread${result.failed_ids.length > 1 ? 's' : ''} failed`, "error");
+        // Restore optimistically removed threads on partial failure
+        if (["archive", "trash", "restore", "snooze", "unsnooze", "movetolabel"].includes(action) && result.failed_ids.length > 0) {
+          forceRefreshThreads();
+        }
+      }
+    } catch (e: any) {
+      addToast(`Batch action failed: ${e}`, "error");
+      threads.set(previousList);
+    }
+  }
+
   async function checkSnoozedThreads() {
     try {
       const unsnoozed: string[] = await invoke("check_snoozed_threads");
@@ -1242,6 +1380,27 @@
     )
       return;
     
+    // Batch selection shortcuts
+    if (event.key === "a" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      selectAll($threads.map(t => t.id));
+      return;
+    }
+    if (event.key === "Escape" && $selectedThreadIds.size > 0) {
+      clearSelection();
+      return;
+    }
+    if ($selectedThreadIds.size > 0) {
+      if (event.key === "e") { executeBatchAction("archive"); return; }
+      if (event.key === "#") { executeBatchAction("trash"); return; }
+      if (event.key === "I" && event.shiftKey) {
+        const selected = $threads.filter(t => $selectedThreadIds.has(t.id));
+        const hasUnread = selected.some(t => t.unread > 0);
+        executeBatchAction("read", hasUnread);
+        return;
+      }
+    }
+
     // Commands e, #, Shift+I, r remain as contextual thread actions
     if (!$selectedThreadId) return;
     if (event.key === "e") executeAction("archive");
@@ -1583,6 +1742,16 @@
         onsearch={handleSearch}
         onclearsearch={clearSearch}
         onselectcategory={selectCategory}
+        onbatcharchive={() => executeBatchAction("archive")}
+        onbatchtrash={() => executeBatchAction("trash")}
+        onbatchrestore={() => executeBatchAction("restore")}
+        onbatchread={(_ids, isRead) => executeBatchAction("read", isRead)}
+        onbatchstar={(_ids, starred) => executeBatchAction("star", starred)}
+        onbatchsnooze={() => { batchSnoozeOpen = true; }}
+        onbatchunsnooze={(ids) => executeBatchAction("unsnooze")}
+        onbatchmovetolabel={() => { labelPickerOpen = true; }}
+        isSnoozedView={$selectedLabelId === "SNOOZED" || $selectedLabelId === "UNIFIED_SNOOZED"}
+        isTrashView={$selectedLabelId === "TRASH"}
       />
 
       <MessageDetail
@@ -1597,6 +1766,25 @@
         oneditdraft={handleEditDraft}
         oniframeload={handleIframeLoad}
       />
+
+      {#if batchSnoozeOpen}
+        <div class="batch-popover-overlay">
+          <SnoozePopover
+            onsnooze={(until) => { batchSnoozeOpen = false; executeBatchAction("snooze", until); }}
+            onclose={() => { batchSnoozeOpen = false; }}
+          />
+        </div>
+      {/if}
+
+      {#if labelPickerOpen}
+        <div class="batch-popover-overlay">
+          <LabelPicker
+            labels={userLabels}
+            onselect={(labelId) => { labelPickerOpen = false; executeBatchAction("movetolabel", labelId); }}
+            onclose={() => { labelPickerOpen = false; }}
+          />
+        </div>
+      {/if}
     {:else if viewMode === "calendar"}
       <FullCalendar {isMacOS} />
     {:else if viewMode === "subscriptions"}
@@ -1785,5 +1973,12 @@
     to {
       transform: rotate(360deg);
     }
+  }
+  .batch-popover-overlay {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 200;
   }
 </style>

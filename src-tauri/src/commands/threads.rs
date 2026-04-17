@@ -236,6 +236,12 @@ pub struct ThreadCountResult {
     pub has_more_remote: bool,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BatchResult {
+    pub succeeded: usize,
+    pub failed_ids: Vec<String>,
+}
+
 pub(crate) async fn get_thread_count_inner(
     pool: &sqlx::SqlitePool,
     account_id: &str,
@@ -968,6 +974,24 @@ pub async fn untrash_thread(
         &thread_id,
     )
     .await?;
+    // Ensure INBOX label is present — Gmail API may not reflect it immediately after untrash
+    sqlx::query("INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?, 'INBOX')")
+        .bind(&thread_id)
+        .execute(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query(
+        "UPDATE threads SET
+            sender = (SELECT m.sender FROM messages m WHERE m.thread_id = threads.id ORDER BY m.internal_date DESC LIMIT 1),
+            subject = (SELECT m.subject FROM messages m WHERE m.thread_id = threads.id ORDER BY m.internal_date DESC LIMIT 1),
+            latest_date = (SELECT MAX(m.internal_date) FROM messages m WHERE m.thread_id = threads.id),
+            metadata_synced = 1
+        WHERE id = ?"
+    )
+    .bind(&thread_id)
+    .execute(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1148,6 +1172,168 @@ pub(crate) async fn mark_read_status_local(pool: &sqlx::SqlitePool, thread_id: &
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn batch_archive_threads(
+    app_handle: tauri::AppHandle,
+    thread_ids: Vec<String>,
+) -> Result<BatchResult, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+    let mut succeeded = 0usize;
+    let mut failed_ids = Vec::new();
+    for tid in &thread_ids {
+        match crate::gmail_api::modify_thread(
+            pool.inner(),
+            &account.id,
+            &account.access_token,
+            tid,
+            vec![],
+            vec!["INBOX".to_string()],
+        )
+        .await
+        {
+            Ok(()) => succeeded += 1,
+            Err(_) => failed_ids.push(tid.clone()),
+        }
+    }
+    Ok(BatchResult {
+        succeeded,
+        failed_ids,
+    })
+}
+
+#[tauri::command]
+pub async fn batch_trash_threads(
+    app_handle: tauri::AppHandle,
+    thread_ids: Vec<String>,
+) -> Result<BatchResult, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+    let mut succeeded = 0usize;
+    let mut failed_ids = Vec::new();
+    for tid in &thread_ids {
+        match crate::gmail_api::trash_thread(
+            pool.inner(),
+            &account.id,
+            &account.access_token,
+            tid,
+        )
+        .await
+        {
+            Ok(()) => succeeded += 1,
+            Err(_) => failed_ids.push(tid.clone()),
+        }
+    }
+    Ok(BatchResult {
+        succeeded,
+        failed_ids,
+    })
+}
+
+#[tauri::command]
+pub async fn batch_mark_read_status(
+    app_handle: tauri::AppHandle,
+    thread_ids: Vec<String>,
+    is_read: bool,
+) -> Result<BatchResult, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+    let (add, remove) = if is_read {
+        (vec![], vec!["UNREAD".to_string()])
+    } else {
+        (vec!["UNREAD".to_string()], vec![])
+    };
+    let mut succeeded = 0usize;
+    let mut failed_ids = Vec::new();
+    for tid in &thread_ids {
+        match crate::gmail_api::modify_thread(
+            pool.inner(),
+            &account.id,
+            &account.access_token,
+            tid,
+            add.clone(),
+            remove.clone(),
+        )
+        .await
+        {
+            Ok(()) => succeeded += 1,
+            Err(_) => failed_ids.push(tid.clone()),
+        }
+    }
+    Ok(BatchResult {
+        succeeded,
+        failed_ids,
+    })
+}
+
+#[tauri::command]
+pub async fn batch_star_threads(
+    app_handle: tauri::AppHandle,
+    thread_ids: Vec<String>,
+    starred: bool,
+) -> Result<BatchResult, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+    let (add, remove) = if starred {
+        (vec!["STARRED".to_string()], vec![])
+    } else {
+        (vec![], vec!["STARRED".to_string()])
+    };
+    let mut succeeded = 0usize;
+    let mut failed_ids = Vec::new();
+    for tid in &thread_ids {
+        match crate::gmail_api::modify_thread(
+            pool.inner(),
+            &account.id,
+            &account.access_token,
+            tid,
+            add.clone(),
+            remove.clone(),
+        )
+        .await
+        {
+            Ok(()) => succeeded += 1,
+            Err(_) => failed_ids.push(tid.clone()),
+        }
+    }
+    Ok(BatchResult {
+        succeeded,
+        failed_ids,
+    })
+}
+
+#[tauri::command]
+pub async fn batch_move_to_label(
+    app_handle: tauri::AppHandle,
+    thread_ids: Vec<String>,
+    add_labels: Vec<String>,
+    remove_labels: Vec<String>,
+) -> Result<BatchResult, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+    let mut succeeded = 0usize;
+    let mut failed_ids = Vec::new();
+    for tid in &thread_ids {
+        match crate::gmail_api::modify_thread(
+            pool.inner(),
+            &account.id,
+            &account.access_token,
+            tid,
+            add_labels.clone(),
+            remove_labels.clone(),
+        )
+        .await
+        {
+            Ok(()) => succeeded += 1,
+            Err(_) => failed_ids.push(tid.clone()),
+        }
+    }
+    Ok(BatchResult {
+        succeeded,
+        failed_ids,
+    })
 }
 
 #[cfg(test)]
@@ -1690,5 +1876,27 @@ mod tests {
         insert_thread(&pool, "t1", "acc1").await;
         let threads = get_threads_inner(&pool, "acc1", None, None, 0, 50).await.unwrap();
         assert!(threads.is_empty());
+    }
+
+    #[test]
+    fn test_batch_result_serialization() {
+        let result = BatchResult {
+            succeeded: 5,
+            failed_ids: vec!["thread1".to_string(), "thread2".to_string()],
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"succeeded\":5"));
+        assert!(json.contains("thread1"));
+        assert!(json.contains("thread2"));
+    }
+
+    #[test]
+    fn test_batch_result_empty() {
+        let result = BatchResult {
+            succeeded: 0,
+            failed_ids: vec![],
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert_eq!(json, "{\"succeeded\":0,\"failed_ids\":[]}");
     }
 }

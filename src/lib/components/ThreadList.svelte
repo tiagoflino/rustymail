@@ -12,7 +12,7 @@
   } from "$lib/components/icons";
   import { getStarIcon, getStarColor } from "$lib/components/starIcons";
   import { threads, isSyncing } from "$lib/stores/threads";
-  import { selectedThreadId } from "$lib/stores/messages";
+  import { selectedThreadId, selectedThreadIds, lastSelectedIndex, toggleThreadSelection, clearSelection, selectAll } from "$lib/stores/messages";
   import { formatTime, decodeEntities } from "$lib/utils/formatters.js";
   import CategoryTabs from "./CategoryTabs.svelte";
 
@@ -80,6 +80,16 @@
     onsearch: (query: string) => void;
     onclearsearch: () => void;
     onselectcategory: (category: string) => void;
+    onbatcharchive: (ids: string[]) => void;
+    onbatchtrash: (ids: string[]) => void;
+    onbatchrestore: (ids: string[]) => void;
+    onbatchread: (ids: string[], isRead: boolean) => void;
+    onbatchstar: (ids: string[], starred: boolean) => void;
+    onbatchsnooze: (ids: string[], until: number) => void;
+    onbatchunsnooze: (ids: string[]) => void;
+    onbatchmovetolabel: (ids: string[], labelId: string) => void;
+    isSnoozedView?: boolean;
+    isTrashView?: boolean;
   }
 
   let {
@@ -109,6 +119,16 @@
     onsearch,
     onclearsearch,
     onselectcategory,
+    onbatcharchive,
+    onbatchtrash,
+    onbatchrestore,
+    onbatchread,
+    onbatchstar,
+    onbatchsnooze,
+    onbatchunsnooze,
+    onbatchmovetolabel,
+    isSnoozedView = false,
+    isTrashView = false,
   }: Props = $props();
 
   let searchInput = $state("");
@@ -316,6 +336,7 @@
   {/if}
 
   <div class="list-header">
+    {#if $selectedThreadIds.size === 0}
     <h3>
       {$searchQuery ? "Search Results" : activeLabelName}
       {#if isUnifiedView && !$searchQuery}
@@ -364,9 +385,69 @@
         </button>
       </div>
     {/if}
+    {:else}
+      <div class="bulk-toolbar">
+        <div class="bulk-toolbar-left">
+          <div class="bulk-select-all" onclick={() => {
+            const allIds = $threads.map(t => t.id);
+            if ($selectedThreadIds.size === $threads.length) clearSelection();
+            else selectAll(allIds);
+          }} onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); const allIds = $threads.map(t => t.id); if ($selectedThreadIds.size === $threads.length) clearSelection(); else selectAll(allIds); }}} role="checkbox" aria-checked={$selectedThreadIds.size === $threads.length ? 'true' : $selectedThreadIds.size > 0 ? 'mixed' : 'false'} tabindex="0">
+            {#if $selectedThreadIds.size === $threads.length}
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <rect x="0.5" y="0.5" width="13" height="13" rx="3" fill="#0A84FF" stroke="#0A84FF"/>
+                <path d="M3.5 7L6 9.5L10.5 4.5" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            {:else}
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <rect x="0.5" y="0.5" width="13" height="13" rx="3" fill="#0A84FF" stroke="#0A84FF"/>
+                <line x1="4" y1="7" x2="10" y2="7" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+            {/if}
+          </div>
+          <span class="bulk-count">{$selectedThreadIds.size} selected</span>
+          <div class="bulk-separator"></div>
+          <button class="bulk-action" title="Archive" onclick={() => onbatcharchive([...$selectedThreadIds])}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
+          </button>
+          {#if isTrashView}
+            <button class="bulk-action" title="Restore from Trash" onclick={() => onbatchrestore([...$selectedThreadIds])}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 105.64-11.36L1 10"/></svg>
+            </button>
+          {:else}
+            <button class="bulk-action" title="Move to Trash" onclick={() => onbatchtrash([...$selectedThreadIds])}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+            </button>
+          {/if}
+          <div class="bulk-separator"></div>
+          <button class="bulk-action" title={(() => { const selected = $threads.filter(t => $selectedThreadIds.has(t.id)); return selected.some(t => t.unread > 0) ? 'Mark as Read' : 'Mark as Unread'; })()} onclick={() => { const selected = $threads.filter(t => $selectedThreadIds.has(t.id)); const hasUnread = selected.some(t => t.unread > 0); onbatchread([...$selectedThreadIds], hasUnread); }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+          </button>
+          <button class="bulk-action" title={(() => { const selected = $threads.filter(t => $selectedThreadIds.has(t.id)); return selected.some(t => t.starred) ? 'Unstar' : 'Star'; })()} onclick={() => { const selected = $threads.filter(t => $selectedThreadIds.has(t.id)); const hasStarred = selected.some(t => t.starred); onbatchstar([...$selectedThreadIds], !hasStarred); }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          </button>
+          <div class="bulk-separator"></div>
+          {#if isSnoozedView}
+            <button class="bulk-action" title="Unsnooze" onclick={() => onbatchunsnooze([...$selectedThreadIds])}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+            </button>
+          {:else}
+            <button class="bulk-action" title="Snooze" onclick={() => onbatchsnooze([...$selectedThreadIds], 0)}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            </button>
+          {/if}
+          <button class="bulk-action" title="Move to Label" onclick={() => onbatchmovetolabel([...$selectedThreadIds], '')}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+          </button>
+        </div>
+        <button class="bulk-action bulk-close" title="Clear selection" onclick={() => clearSelection()}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+    {/if}
   </div>
 
-  <div class="thread-scroll-area" bind:this={threadScrollArea}>
+  <div class="thread-scroll-area" class:has-selection={$selectedThreadIds.size > 0} bind:this={threadScrollArea}>
     {#if $threads.length === 0 && ($isSyncing || isLabelFetching || isLoadingThreads || isBackgroundFilling)}
       {#each Array(8) as _}
         <div class="skeleton-thread">
@@ -388,7 +469,7 @@
         <div
           class="thread-item {thread.unread > 0
             ? 'unread'
-            : ''} {$selectedThreadId === thread.id ? 'selected' : ''}"
+            : ''} {$selectedThreadId === thread.id ? 'selected' : ''} {$selectedThreadIds.has(thread.id) ? 'multi-selected' : ''}"
           class:unified={isUnifiedView}
           style={isUnifiedView ? `--account-color: ${getAccountColor(thread.account_id, allAccounts)}` : ''}
           role="button"
@@ -399,6 +480,41 @@
           }}
         >
           <div class="thread-item-leading">
+            <div
+              class="thread-checkbox {$selectedThreadIds.has(thread.id) ? 'checked' : ''}"
+              onclick={(e) => {
+                e.stopPropagation();
+                const idx = $threads.indexOf(thread);
+                if (e.shiftKey && $lastSelectedIndex !== null) {
+                  const start = Math.min($lastSelectedIndex, idx);
+                  const end = Math.max($lastSelectedIndex, idx);
+                  const ids = $threads.slice(start, end + 1).map(t => t.id);
+                  selectedThreadIds.update(set => {
+                    const next = new Set(set);
+                    ids.forEach(id => next.add(id));
+                    return next;
+                  });
+                } else {
+                  toggleThreadSelection(thread.id);
+                }
+                lastSelectedIndex.set(idx);
+              }}
+              onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); toggleThreadSelection(thread.id); }}}
+              role="checkbox"
+              aria-checked={$selectedThreadIds.has(thread.id)}
+              tabindex="-1"
+            >
+              {#if $selectedThreadIds.has(thread.id)}
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <rect x="0.5" y="0.5" width="13" height="13" rx="3" fill="#0A84FF" stroke="#0A84FF"/>
+                  <path d="M3.5 7L6 9.5L10.5 4.5" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              {:else}
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <rect x="0.5" y="0.5" width="13" height="13" rx="3" stroke="var(--text-secondary)" stroke-opacity="0.5"/>
+                </svg>
+              {/if}
+            </div>
             <button
               class="thread-star {thread.starred ? 'starred' : ''}"
               style={thread.star_type ? `color: ${getStarColor(thread.star_type)};` : ''}
@@ -767,12 +883,11 @@
   }
   .thread-item-leading {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
-    gap: 4px;
-    margin-right: 8px;
+    gap: 2px;
+    margin-right: 4px;
     flex-shrink: 0;
-    width: 28px;
   }
   .thread-star {
     background: none;
@@ -786,8 +901,8 @@
     align-items: center;
     justify-content: center;
     border-radius: 4px;
-    width: 24px;
-    height: 24px;
+    width: 20px;
+    height: 20px;
     overflow: hidden;
   }
   .thread-star:hover {
@@ -809,8 +924,8 @@
     align-items: center;
     justify-content: center;
     border-radius: 4px;
-    width: 24px;
-    height: 24px;
+    width: 20px;
+    height: 20px;
     overflow: hidden;
   }
   .thread-important:hover {
@@ -973,4 +1088,85 @@
     border-radius: 4px;
     margin-left: 8px;
   }
+
+  /* Multi-select checkboxes */
+  .thread-checkbox {
+    width: 0;
+    overflow: hidden;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: width 0.12s ease, opacity 0.12s ease;
+  }
+  .thread-item:hover .thread-checkbox,
+  .thread-checkbox.checked,
+  .has-selection .thread-checkbox {
+    width: 20px;
+    opacity: 1;
+  }
+  .thread-item.multi-selected {
+    background-color: rgba(10, 132, 255, 0.08);
+  }
+  :global([data-theme="dark"]) .thread-item.multi-selected {
+    background-color: rgba(10, 132, 255, 0.12);
+  }
+
+  /* Bulk action toolbar */
+  .bulk-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+  }
+  .bulk-toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .bulk-select-all {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+  }
+  .bulk-select-all:hover { background: var(--sidebar-hover); }
+  .bulk-count {
+    font-size: var(--font-size-toolbar);
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin: 0 4px;
+    white-space: nowrap;
+  }
+  .bulk-separator {
+    width: 1px;
+    height: 16px;
+    background: var(--border-color);
+    margin: 0 4px;
+    flex-shrink: 0;
+  }
+  .bulk-action {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    transition: color 0.1s, background 0.1s;
+  }
+  .bulk-action:hover {
+    color: var(--accent-blue);
+    background: var(--sidebar-hover);
+  }
+  .bulk-close { margin-left: auto; }
 </style>
