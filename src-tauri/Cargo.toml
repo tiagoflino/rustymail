@@ -43,6 +43,11 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
+rustymail-premium = { path = "crates/rustymail-premium", optional = true }
+
+[features]
+default = []
+premium = ["dep:rustymail-premium"]
 
 [dev-dependencies]
 mockall = "0.13"

@@ -31,6 +31,13 @@ pub fn run() {
                 .expect("Failed to initialize database");
             handle.manage(pool);
             handle.manage(page_token_store::PageTokenStore::new());
+            #[cfg(feature = "premium")]
+            {
+                let engine = rustymail_premium::llm::engine::LlmEngine::new(
+                    handle.path().app_data_dir().expect("app data dir")
+                );
+                handle.manage(engine);
+            }
             tray::setup_tray(app)?;
             println!("Database initialized successfully!");
             Ok(())
@@ -109,6 +116,8 @@ pub fn run() {
             commands::subscriptions::scan_subscriptions,
             commands::subscriptions::mark_unsubscribed,
             tray::update_tray_unread,
+            #[cfg(feature = "premium")]
+            rustymail_premium::commands::llm::summarize_thread,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

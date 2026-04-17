@@ -1,0 +1,19 @@
+[package]
+name = "rustymail-premium"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+metal = ["llama-cpp-2/metal"]
+cuda = ["llama-cpp-2/cuda"]
+vulkan = ["llama-cpp-2/vulkan"]
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+sqlx = { version = "0.8.2", default-features = false, features = ["sqlite", "runtime-tokio-rustls", "macros", "chrono"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+llama-cpp-2 = "0.1"
