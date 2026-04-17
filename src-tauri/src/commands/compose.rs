@@ -109,7 +109,7 @@ pub(crate) async fn search_contacts_inner(
         }
     }
 
-    suggestions.sort_by(|a, b| a.email.len().cmp(&b.email.len()));
+    suggestions.sort_by_key(|a| a.email.len());
     suggestions.truncate(10);
     Ok(suggestions)
 }

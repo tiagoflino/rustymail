@@ -1,4 +1,5 @@
 use super::accounts::get_active_account;
+use super::threads::BatchResult;
 use tauri::AppHandle;
 use tauri::Manager;
 
@@ -145,6 +146,47 @@ pub async fn check_snoozed_threads(
     }
 
     Ok(thread_ids)
+}
+
+#[tauri::command]
+pub async fn batch_snooze_threads(
+    app_handle: AppHandle,
+    thread_ids: Vec<String>,
+    snoozed_until: i64,
+) -> Result<BatchResult, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_secs() as i64;
+
+    if snoozed_until <= now {
+        return Err("snoozed_until must be in the future".to_string());
+    }
+
+    let mut succeeded = 0usize;
+    let mut failed_ids = Vec::new();
+    for tid in &thread_ids {
+        match sqlx::query(
+            "INSERT OR REPLACE INTO snoozed_threads (thread_id, account_id, snoozed_until, created_at) VALUES (?, ?, ?, ?)"
+        )
+        .bind(tid)
+        .bind(&account.id)
+        .bind(snoozed_until)
+        .bind(now)
+        .execute(pool.inner())
+        .await
+        {
+            Ok(_) => succeeded += 1,
+            Err(_) => failed_ids.push(tid.clone()),
+        }
+    }
+    Ok(BatchResult {
+        succeeded,
+        failed_ids,
+    })
 }
 
 #[cfg(test)]
