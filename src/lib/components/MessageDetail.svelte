@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { onMount } from "svelte";
   import { addToast } from "$lib/stores/toast";
   import {
     iconArchive,
@@ -22,6 +23,11 @@
     type LocalMessage,
   } from "$lib/stores/messages";
   import { formatTime, decodeEntities } from "$lib/utils/formatters.js";
+
+  let aiSummary = $state<string | null>(null);
+  let aiSummaryLoading = $state(false);
+  let aiStatusMessage = $state<string | null>(null);
+  let aiAvailable = $state(false);
 
   let expandedMessages = $state(new Set<string>());
   let lastExpandedThreadId: string | null = null;
@@ -82,6 +88,70 @@
     $selectedThreadId;
     showSnoozePopover = false;
   });
+
+  onMount(async () => {
+    try {
+      await invoke("get_ai_status");
+      aiAvailable = true;
+    } catch {
+      aiAvailable = false;
+    }
+  });
+
+  $effect(() => {
+    $selectedThreadId;
+    aiSummary = null;
+  });
+
+  function formatAiSummary(text: string): string {
+    return text
+      .replace(/\*\*(.+?)\*\*/g, '<strong class="ai-heading">$1</strong>')
+      .replace(/^- (.+)$/gm, '<li>$1</li>')
+      .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
+      .replace(/\n{2,}/g, '</p><p>')
+      .replace(/\n/g, '<br>')
+      .replace(/^/, '<p>')
+      .replace(/$/, '</p>')
+      .replace(/<p><\/p>/g, '');
+  }
+
+  async function pollAiStatus(): Promise<void> {
+    try {
+      const status: any = await invoke("get_ai_status");
+      if (status === "NotSetUp") {
+        aiStatusMessage = "Preparing AI engine...";
+      } else if (status?.Downloading != null) {
+        const pct = Math.round(status.Downloading.progress_pct);
+        aiStatusMessage = `Downloading AI model... ${pct}%`;
+      } else if (status === "Loading") {
+        aiStatusMessage = "Loading AI model...";
+      } else if (status === "Ready") {
+        aiStatusMessage = "Generating summary...";
+      }
+    } catch { /* ignore polling errors */ }
+  }
+
+  async function handleSummarize() {
+    if (!$selectedThreadId || aiSummaryLoading) return;
+    aiSummaryLoading = true;
+    aiSummary = null;
+    aiStatusMessage = "Preparing AI...";
+
+    let pollInterval: ReturnType<typeof setInterval> | null = setInterval(pollAiStatus, 500);
+
+    try {
+      await invoke("ensure_ai_ready");
+      aiStatusMessage = "Generating summary...";
+      const result = await invoke("summarize_thread", { threadId: $selectedThreadId });
+      aiSummary = result as string;
+    } catch (e: any) {
+      addToast(`AI summarization failed: ${e}`, "error", 5000);
+    } finally {
+      if (pollInterval) clearInterval(pollInterval);
+      aiSummaryLoading = false;
+      aiStatusMessage = null;
+    }
+  }
 
   function toggleMessage(id: string) {
     const next = new Set(expandedMessages);
@@ -343,7 +413,39 @@
         <span class="toolbar-icon">{@html iconMail}</span><span>Unread</span
         >
       </button>
+      {#if aiAvailable}
+        <div class="toolbar-spacer"></div>
+        <button onclick={handleSummarize} class="toolbar-btn ai-btn" title="Summarize with AI" disabled={aiSummaryLoading}>
+          {#if aiSummaryLoading}
+            <span class="toolbar-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="30 70" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/></circle></svg></span>
+          {:else}
+            <span class="toolbar-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 014 4c0 1.1-.4 2.1-1 2.8L12 12l-3-3.2A4 4 0 0112 2z"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 18h6"/><path d="M10 22h4"/></svg></span>
+          {/if}
+          <span>{aiSummaryLoading ? 'Working...' : 'Summarize'}</span>
+        </button>
+      {/if}
     </div>
+    {#if aiSummaryLoading && aiStatusMessage}
+      <div class="ai-progress-panel">
+        <span class="ai-progress-label">{aiStatusMessage}</span>
+        <div class="ai-progress-bar">
+          <div class="ai-progress-fill" class:indeterminate={!aiStatusMessage?.includes('%')}
+            style={aiStatusMessage?.includes('%') ? `width: ${aiStatusMessage.match(/(\d+)%/)?.[1] || 0}%` : ''}
+          ></div>
+        </div>
+      </div>
+    {/if}
+    {#if aiSummary}
+      <div class="ai-summary-panel">
+        <div class="ai-summary-header">
+          <span class="ai-summary-label">AI Summary</span>
+          <button class="ai-summary-close" onclick={() => { aiSummary = null; }} title="Dismiss">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div class="ai-summary-text">{@html formatAiSummary(aiSummary)}</div>
+      </div>
+    {/if}
     {#if $isMessagesLoading}
       <div class="message-scroll-area">
         {#each Array(2) as _}
@@ -1090,5 +1192,103 @@
     position: absolute;
     top: 8px;
     right: 0;
+  }
+  .toolbar-spacer { flex: 1; }
+  .ai-btn { margin-left: auto; }
+  .ai-btn:not(:disabled):hover { color: #8B5CF6; }
+  .ai-summary-panel {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-color);
+    background: rgba(139, 92, 246, 0.04);
+  }
+  :global([data-theme="dark"]) .ai-summary-panel {
+    background: rgba(139, 92, 246, 0.08);
+  }
+  .ai-summary-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .ai-summary-label {
+    font-size: var(--font-size-small);
+    font-weight: 600;
+    color: #8B5CF6;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .ai-summary-close {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-secondary);
+    padding: 2px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+  }
+  .ai-summary-close:hover { color: var(--text-primary); background: var(--sidebar-hover); }
+  .ai-summary-text {
+    font-size: var(--font-size-detail);
+    color: var(--text-primary);
+    line-height: 1.6;
+    margin: 0;
+  }
+  .ai-summary-text :global(p) { margin: 0 0 8px 0; }
+  .ai-summary-text :global(p:last-child) { margin-bottom: 0; }
+  .ai-summary-text :global(.ai-heading) {
+    display: block;
+    font-size: var(--font-size-detail);
+    font-weight: 700;
+    color: #8B5CF6;
+    margin-top: 10px;
+    margin-bottom: 4px;
+  }
+  .ai-summary-text :global(.ai-heading:first-child) { margin-top: 0; }
+  .ai-summary-text :global(ul) {
+    margin: 4px 0 8px 0;
+    padding-left: 18px;
+    list-style: disc;
+  }
+  .ai-summary-text :global(li) {
+    margin-bottom: 3px;
+    line-height: 1.5;
+  }
+  .ai-progress-panel {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border-color);
+    background: rgba(139, 92, 246, 0.04);
+  }
+  :global([data-theme="dark"]) .ai-progress-panel {
+    background: rgba(139, 92, 246, 0.08);
+  }
+  .ai-progress-label {
+    font-size: var(--font-size-small);
+    font-weight: 500;
+    color: #8B5CF6;
+    display: block;
+    margin-bottom: 6px;
+  }
+  .ai-progress-bar {
+    width: 100%;
+    height: 4px;
+    background: var(--border-color);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .ai-progress-fill {
+    height: 100%;
+    background: #8B5CF6;
+    border-radius: 2px;
+    transition: width 0.3s ease;
+  }
+  .ai-progress-fill.indeterminate {
+    width: 30% !important;
+    animation: ai-progress-slide 1.2s ease-in-out infinite;
+  }
+  @keyframes ai-progress-slide {
+    0% { margin-left: 0; }
+    50% { margin-left: 70%; }
+    100% { margin-left: 0; }
   }
 </style>

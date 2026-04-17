@@ -117,6 +117,10 @@ pub fn run() {
             commands::subscriptions::mark_unsubscribed,
             tray::update_tray_unread,
             #[cfg(feature = "premium")]
+            rustymail_premium::commands::llm::get_ai_status,
+            #[cfg(feature = "premium")]
+            rustymail_premium::commands::llm::ensure_ai_ready,
+            #[cfg(feature = "premium")]
             rustymail_premium::commands::llm::summarize_thread,
         ])
         .run(tauri::generate_context!())
