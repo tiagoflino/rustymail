@@ -14,45 +14,22 @@ jobs:
       RUSTYMAIL_CLIENT_SECRET: ${{ secrets.RUSTYMAIL_CLIENT_SECRET }}
     steps:
       - uses: actions/checkout@v4
-      
-      - uses: actions/setup-node@v4
         with:
-          node-version: 20
-          
-      - uses: dtolnay/rust-toolchain@stable
-      
-      - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-      
-      - run: make install
-      - run: make lint
-      - run: make test
-      - run: make build
-
-  security:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: github/codeql-action/init@v3
-        with:
-          languages: javascript, typescript, actions, rust
-
-      - uses: github/codeql-action/analyze@v3
-
-  premium-build:
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    env:
-      RUSTYMAIL_CLIENT_ID: ${{ secrets.RUSTYMAIL_CLIENT_ID }}
-      RUSTYMAIL_CLIENT_SECRET: ${{ secrets.RUSTYMAIL_CLIENT_SECRET }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
+          submodules: ${{ secrets.PREMIUM_DEPLOY_KEY != '' }}
           ssh-key: ${{ secrets.PREMIUM_DEPLOY_KEY }}
+
+      - name: Fallback premium stub for fork PRs
+        if: ${{ !secrets.PREMIUM_DEPLOY_KEY }}
+        run: |
+          if [ ! -f src-tauri/crates/rustymail-premium/Cargo.toml ]; then
+            mkdir -p src-tauri/crates/rustymail-premium/src/commands src-tauri/crates/rustymail-premium/src/llm
+            printf '[package]\nname = "rustymail-premium"\nversion = "0.1.0"\nedition = "2021"\n' > src-tauri/crates/rustymail-premium/Cargo.toml
+            echo "pub mod commands; pub mod llm;" > src-tauri/crates/rustymail-premium/src/lib.rs
+            echo "pub mod llm;" > src-tauri/crates/rustymail-premium/src/commands/mod.rs
+            touch src-tauri/crates/rustymail-premium/src/commands/llm.rs
+            echo "pub mod engine;" > src-tauri/crates/rustymail-premium/src/llm/mod.rs
+            touch src-tauri/crates/rustymail-premium/src/llm/engine.rs
+          fi
 
       - uses: actions/setup-node@v4
         with:
@@ -63,13 +40,65 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf cmake
 
       - run: make install
-      - run: cargo check --manifest-path src-tauri/Cargo.toml --features premium
+      - run: make lint
+      - run: make test
+      - run: make build
+
+      - name: Check premium build
+        if: ${{ secrets.PREMIUM_DEPLOY_KEY != '' }}
+        run: cargo check --manifest-path src-tauri/Cargo.toml --features premium
+
+  security:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: ${{ secrets.PREMIUM_DEPLOY_KEY != '' }}
+          ssh-key: ${{ secrets.PREMIUM_DEPLOY_KEY }}
+
+      - name: Fallback premium stub for fork PRs
+        if: ${{ !secrets.PREMIUM_DEPLOY_KEY }}
+        run: |
+          if [ ! -f src-tauri/crates/rustymail-premium/Cargo.toml ]; then
+            mkdir -p src-tauri/crates/rustymail-premium/src/commands src-tauri/crates/rustymail-premium/src/llm
+            printf '[package]\nname = "rustymail-premium"\nversion = "0.1.0"\nedition = "2021"\n' > src-tauri/crates/rustymail-premium/Cargo.toml
+            echo "pub mod commands; pub mod llm;" > src-tauri/crates/rustymail-premium/src/lib.rs
+            echo "pub mod llm;" > src-tauri/crates/rustymail-premium/src/commands/mod.rs
+            touch src-tauri/crates/rustymail-premium/src/commands/llm.rs
+            echo "pub mod engine;" > src-tauri/crates/rustymail-premium/src/llm/mod.rs
+            touch src-tauri/crates/rustymail-premium/src/llm/engine.rs
+          fi
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript, typescript, actions, rust
+
+      - uses: github/codeql-action/analyze@v3
 
   audit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: ${{ secrets.PREMIUM_DEPLOY_KEY != '' }}
+          ssh-key: ${{ secrets.PREMIUM_DEPLOY_KEY }}
+
+      - name: Fallback premium stub for fork PRs
+        if: ${{ !secrets.PREMIUM_DEPLOY_KEY }}
+        run: |
+          if [ ! -f src-tauri/crates/rustymail-premium/Cargo.toml ]; then
+            mkdir -p src-tauri/crates/rustymail-premium/src/commands src-tauri/crates/rustymail-premium/src/llm
+            printf '[package]\nname = "rustymail-premium"\nversion = "0.1.0"\nedition = "2021"\n' > src-tauri/crates/rustymail-premium/Cargo.toml
+            echo "pub mod commands; pub mod llm;" > src-tauri/crates/rustymail-premium/src/lib.rs
+            echo "pub mod llm;" > src-tauri/crates/rustymail-premium/src/commands/mod.rs
+            touch src-tauri/crates/rustymail-premium/src/commands/llm.rs
+            echo "pub mod engine;" > src-tauri/crates/rustymail-premium/src/llm/mod.rs
+            touch src-tauri/crates/rustymail-premium/src/llm/engine.rs
+          fi
+
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo install cargo-audit
       - run: cd src-tauri && cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0097 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099
-
