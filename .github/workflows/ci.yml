@@ -12,14 +12,19 @@ jobs:
     env:
       RUSTYMAIL_CLIENT_ID: ${{ secrets.RUSTYMAIL_CLIENT_ID }}
       RUSTYMAIL_CLIENT_SECRET: ${{ secrets.RUSTYMAIL_CLIENT_SECRET }}
+      HAS_PREMIUM_KEY: ${{ secrets.PREMIUM_DEPLOY_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
+        if: env.HAS_PREMIUM_KEY == 'true'
         with:
-          submodules: ${{ secrets.PREMIUM_DEPLOY_KEY != '' }}
+          submodules: true
           ssh-key: ${{ secrets.PREMIUM_DEPLOY_KEY }}
 
-      - name: Fallback premium stub for fork PRs
-        if: ${{ !secrets.PREMIUM_DEPLOY_KEY }}
+      - uses: actions/checkout@v4
+        if: env.HAS_PREMIUM_KEY != 'true'
+
+      - name: Create premium stub (fork PRs without deploy key)
+        if: env.HAS_PREMIUM_KEY != 'true'
         run: |
           if [ ! -f src-tauri/crates/rustymail-premium/Cargo.toml ]; then
             mkdir -p src-tauri/crates/rustymail-premium/src/commands src-tauri/crates/rustymail-premium/src/llm
@@ -45,7 +50,7 @@ jobs:
       - run: make build
 
       - name: Check premium build
-        if: ${{ secrets.PREMIUM_DEPLOY_KEY != '' }}
+        if: env.HAS_PREMIUM_KEY == 'true'
         run: cargo check --manifest-path src-tauri/Cargo.toml --features premium
 
   security:
@@ -53,14 +58,20 @@ jobs:
     permissions:
       contents: read
       security-events: write
+    env:
+      HAS_PREMIUM_KEY: ${{ secrets.PREMIUM_DEPLOY_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
+        if: env.HAS_PREMIUM_KEY == 'true'
         with:
-          submodules: ${{ secrets.PREMIUM_DEPLOY_KEY != '' }}
+          submodules: true
           ssh-key: ${{ secrets.PREMIUM_DEPLOY_KEY }}
 
-      - name: Fallback premium stub for fork PRs
-        if: ${{ !secrets.PREMIUM_DEPLOY_KEY }}
+      - uses: actions/checkout@v4
+        if: env.HAS_PREMIUM_KEY != 'true'
+
+      - name: Create premium stub
+        if: env.HAS_PREMIUM_KEY != 'true'
         run: |
           if [ ! -f src-tauri/crates/rustymail-premium/Cargo.toml ]; then
             mkdir -p src-tauri/crates/rustymail-premium/src/commands src-tauri/crates/rustymail-premium/src/llm
@@ -80,14 +91,20 @@ jobs:
 
   audit:
     runs-on: ubuntu-latest
+    env:
+      HAS_PREMIUM_KEY: ${{ secrets.PREMIUM_DEPLOY_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
+        if: env.HAS_PREMIUM_KEY == 'true'
         with:
-          submodules: ${{ secrets.PREMIUM_DEPLOY_KEY != '' }}
+          submodules: true
           ssh-key: ${{ secrets.PREMIUM_DEPLOY_KEY }}
 
-      - name: Fallback premium stub for fork PRs
-        if: ${{ !secrets.PREMIUM_DEPLOY_KEY }}
+      - uses: actions/checkout@v4
+        if: env.HAS_PREMIUM_KEY != 'true'
+
+      - name: Create premium stub
+        if: env.HAS_PREMIUM_KEY != 'true'
         run: |
           if [ ! -f src-tauri/crates/rustymail-premium/Cargo.toml ]; then
             mkdir -p src-tauri/crates/rustymail-premium/src/commands src-tauri/crates/rustymail-premium/src/llm
