@@ -19,6 +19,10 @@ build:
 dev:
 	npm run tauri dev
 
+dev-premium:
+	
+	npm run tauri dev -- --features premium
+
 release:
 ifndef VERSION
 	$(error Usage: make release VERSION=0.2.0)

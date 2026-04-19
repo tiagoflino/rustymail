@@ -29,8 +29,18 @@ pub fn run() {
             let handle = app.handle().clone();
             let pool = tauri::async_runtime::block_on(async { db::init_db(&handle).await })
                 .expect("Failed to initialize database");
+            #[cfg(feature = "premium")]
+            let pool_clone = pool.clone();
             handle.manage(pool);
             handle.manage(page_token_store::PageTokenStore::new());
+            #[cfg(feature = "premium")]
+            {
+                let engine = rustymail_premium::llm::engine::LlmEngine::new(
+                    handle.path().app_data_dir().expect("app data dir")
+                );
+                engine.start_auto_unload_timer(pool_clone);
+                handle.manage(engine);
+            }
             tray::setup_tray(app)?;
             println!("Database initialized successfully!");
             Ok(())
@@ -109,6 +119,14 @@ pub fn run() {
             commands::subscriptions::scan_subscriptions,
             commands::subscriptions::mark_unsubscribed,
             tray::update_tray_unread,
+            #[cfg(feature = "premium")]
+            rustymail_premium::commands::llm::get_ai_status,
+            #[cfg(feature = "premium")]
+            rustymail_premium::commands::llm::get_ai_hardware,
+            #[cfg(feature = "premium")]
+            rustymail_premium::commands::llm::ensure_ai_ready,
+            #[cfg(feature = "premium")]
+            rustymail_premium::commands::llm::summarize_thread,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
