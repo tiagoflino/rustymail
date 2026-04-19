@@ -1,0 +1,3 @@
+[submodule "src-tauri/crates/rustymail-premium"]
+	path = src-tauri/crates/rustymail-premium
+	url = git@github.com:tiagoflino/rustymail-premium.git

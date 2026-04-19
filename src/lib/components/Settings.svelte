@@ -45,6 +45,10 @@
   let activeTab = $state("accounts");
   let settings: Record<string, string> = $state({});
   let appVersion = $state("...");
+  let aiStatus: any = $state(null);
+  let aiModelDownloaded = $state(false);
+  let aiModelSize = $state('');
+  let aiDevices: Array<{name: string, description: string, backend: string}> = $state([]);
 
   getVersion().then((v) => (appVersion = v));
 
@@ -55,6 +59,7 @@
     compose: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`,
     notifications: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>`,
     shortcuts: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.001M10 8h.001M14 8h.001M18 8h.001M8 12h.001M12 12h.001M16 12h.001M7 16h10"/></svg>`,
+    ai: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 014 4c0 1.1-.4 2.1-1 2.8L12 12l-3-3.2A4 4 0 0112 2z"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 18h6"/><path d="M10 22h4"/></svg>`,
     about: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`,
   };
 
@@ -65,6 +70,7 @@
     { id: "compose", label: "Compose & Reply" },
     { id: "notifications", label: "Notifications" },
     { id: "shortcuts", label: "Shortcuts" },
+    { id: "ai", label: "AI" },
     { id: "about", label: "About" },
   ];
 
@@ -77,6 +83,18 @@
         settings[e.key] = e.value;
       }
       if (!settings.link_behavior) settings.link_behavior = "open";
+
+      try {
+        aiStatus = await invoke("get_ai_status");
+        aiModelDownloaded = aiStatus?.Ready != null || aiStatus === "NotSetUp";
+      } catch {
+        aiStatus = null;
+      }
+      try {
+        aiDevices = await invoke("get_ai_hardware") as typeof aiDevices;
+      } catch {
+        aiDevices = [];
+      }
     } catch (e) {
       console.error("Failed to load settings", e);
     }
@@ -754,6 +772,143 @@
                     <span class="shortcut-action">{s.action}</span>
                   </div>
                 {/each}
+              </div>
+            </div>
+          {:else if activeTab === "ai"}
+            <div class="section">
+              <div class="section-title">AI Engine</div>
+              <p class="section-desc">
+                Rustymail uses a local AI model for email summarization. All processing happens on your device — no email content leaves your machine.
+              </p>
+
+              <div class="setting-card">
+                <div class="card-row">
+                  <div class="setting-label">
+                    <span class="setting-name">Model Status</span>
+                    <span class="setting-hint">
+                      {#if aiStatus === null}
+                        AI features not available
+                      {:else if aiStatus?.Ready != null}
+                        Model loaded ({aiStatus.Ready.model_size_mb} MB, {aiStatus.Ready.n_layers} layers) — {aiStatus.Ready.gpu_offload ? 'GPU accelerated' : 'CPU only'}
+                      {:else if aiStatus === "NotSetUp"}
+                        Model not downloaded — will download on first use (~1.5 GB)
+                      {:else if aiStatus?.Downloading != null}
+                        Downloading... {Math.round(aiStatus.Downloading.progress_pct)}%
+                      {:else if aiStatus === "Loading"}
+                        Loading model...
+                      {:else if aiStatus?.Error != null}
+                        Error: {aiStatus.Error}
+                      {/if}
+                    </span>
+                  </div>
+                </div>
+
+                {#if aiDevices.length > 0}
+                  <div class="card-row">
+                    <div class="setting-label">
+                      <span class="setting-name">Hardware</span>
+                      <span class="setting-hint">
+                        {#each aiDevices as dev}
+                          {dev.description || dev.name} ({dev.backend}){aiDevices.indexOf(dev) < aiDevices.length - 1 ? ', ' : ''}
+                        {/each}
+                      </span>
+                    </div>
+                  </div>
+                {/if}
+
+                <div class="card-row">
+                  <div class="setting-row-inline">
+                    <div class="setting-label">
+                      <span class="setting-name">Summary Detail</span>
+                      <span class="setting-hint">Controls the length and depth of email summaries</span>
+                    </div>
+                    <div class="option-group">
+                      {#each [["concise", "Concise"], ["standard", "Standard"]] as [val, label]}
+                        <button
+                          class="option-btn {(settings.ai_summary_style || 'standard') === val ? 'selected' : ''}"
+                          onclick={() => saveSetting("ai_summary_style", val)}
+                        >{label}</button>
+                      {/each}
+                    </div>
+                  </div>
+                </div>
+
+                {#if !aiStatus?.Ready?.gpu_offload}
+                  <div class="card-row">
+                    <div class="setting-label">
+                      <span class="setting-name">CPU Thread Limit</span>
+                      <span class="setting-hint">
+                        {settings.ai_threads === "0" || !settings.ai_threads
+                          ? "Auto (use all available cores)"
+                          : `Limited to ${settings.ai_threads} threads`}
+                      </span>
+                    </div>
+                    <div class="slider-row">
+                      <input
+                        type="range"
+                        class="range-slider"
+                        min="0"
+                        max="16"
+                        step="1"
+                        value={parseInt(settings.ai_threads || "0")}
+                        oninput={(e) => saveSetting("ai_threads", e.currentTarget.value)}
+                      />
+                      <span class="slider-value">
+                        {parseInt(settings.ai_threads || "0") === 0 ? "Auto" : settings.ai_threads}
+                      </span>
+                    </div>
+                  </div>
+                {/if}
+
+                <div class="card-row">
+                  <div class="setting-row-inline">
+                    <div class="setting-label">
+                      <span class="setting-name">Auto-unload Model</span>
+                      <span class="setting-hint">Free RAM by unloading the model after inactivity</span>
+                    </div>
+                    <div class="option-group">
+                      {#each [["0", "Never"], ["5", "5 min"], ["10", "10 min"], ["30", "30 min"]] as [val, label]}
+                        <button
+                          class="option-btn {(settings.ai_auto_unload || '5') === val ? 'selected' : ''}"
+                          onclick={() => saveSetting("ai_auto_unload", val)}
+                        >{label}</button>
+                      {/each}
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card-row last">
+                  <div class="setting-row-inline">
+                    <div class="setting-label">
+                      <span class="setting-name">Model Management</span>
+                      <span class="setting-hint">Re-download the AI model if it's not working correctly</span>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                      {#if aiStatus?.Ready != null}
+                        <button
+                          class="option-btn"
+                          onclick={async () => {
+                            try {
+                              await invoke("ensure_ai_ready");
+                              aiStatus = await invoke("get_ai_status");
+                            } catch {}
+                          }}
+                        >Reload Model</button>
+                      {/if}
+                      <button
+                        class="option-btn"
+                        onclick={async () => {
+                          try {
+                            await invoke("ensure_ai_ready");
+                            aiStatus = await invoke("get_ai_status");
+                          } catch (e) {
+                            console.error("Model reset failed:", e);
+                          }
+                        }}
+                      >Re-download</button>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           {:else if activeTab === "about"}
