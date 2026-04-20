@@ -14,7 +14,8 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         avatar_url TEXT,
         token_expiry INTEGER,
         is_active INTEGER DEFAULT 1,
-        created_at INTEGER
+        created_at INTEGER,
+        credential_source TEXT DEFAULT 'builtin'
     );
 
     CREATE TABLE IF NOT EXISTS labels (
@@ -354,6 +355,14 @@ async fn m007_create_snoozed_threads(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+async fn m008_add_credential_source(pool: &SqlitePool) -> Result<()> {
+    if !has_column(pool, "accounts", "credential_source").await {
+        sqlx::query("ALTER TABLE accounts ADD COLUMN credential_source TEXT DEFAULT 'builtin'")
+            .execute(pool).await?;
+    }
+    Ok(())
+}
+
 async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     let applied: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
         .fetch_all(pool)
@@ -366,6 +375,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
             (2, "threads", "metadata_synced"),
             (3, "labels", "threads_total"),
             (5, "labels", "bg_color"),
+            (8, "accounts", "credential_source"),
         ];
         for (version, table, column) in &bootstrap_checks {
             if has_column(pool, table, column).await {
@@ -393,7 +403,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 }
 
 async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()> {
-    for version in 1..=7i64 {
+    for version in 1..=8i64 {
         if !applied.contains(&version) {
             println!("[Migration] Running v{}...", version);
             match version {
@@ -404,6 +414,7 @@ async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()
                 5 => m005_add_label_colors(pool).await?,
                 6 => m006_create_subscriptions_table(pool).await?,
                 7 => m007_create_snoozed_threads(pool).await?,
+                8 => m008_add_credential_source(pool).await?,
                 _ => {}
             }
             sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
@@ -597,7 +608,7 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
             .fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 7);
+        assert_eq!(count, 8);
     }
 
     #[tokio::test]

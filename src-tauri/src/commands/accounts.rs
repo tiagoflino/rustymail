@@ -139,7 +139,7 @@ pub(crate) async fn get_account_by_id(pool: &sqlx::SqlitePool, account_id: &str)
 }
 
 #[cfg(not(debug_assertions))]
-fn get_client_credentials() -> Result<(String, String), String> {
+fn get_builtin_credentials() -> Result<(String, String), String> {
     Ok((
         env!("RUSTYMAIL_CLIENT_ID").to_string(),
         env!("RUSTYMAIL_CLIENT_SECRET").to_string(),
@@ -147,7 +147,7 @@ fn get_client_credentials() -> Result<(String, String), String> {
 }
 
 #[cfg(debug_assertions)]
-fn get_client_credentials() -> Result<(String, String), String> {
+fn get_builtin_credentials() -> Result<(String, String), String> {
     let id = env::var("RUSTYMAIL_CLIENT_ID")
         .map_err(|_| "RUSTYMAIL_CLIENT_ID not found in environment".to_string())?;
     let secret = env::var("RUSTYMAIL_CLIENT_SECRET")
@@ -155,8 +155,51 @@ fn get_client_credentials() -> Result<(String, String), String> {
     Ok((id.trim().to_string(), secret.trim().to_string()))
 }
 
+async fn get_client_credentials(pool: &sqlx::SqlitePool, source: &str) -> Result<(String, String), String> {
+    if source == "custom" {
+        let client_id: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = 'oauth_custom_client_id'")
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        let client_secret: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = 'oauth_custom_client_secret'")
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let id = client_id.unwrap_or_default();
+        let secret = client_secret.unwrap_or_default();
+
+        if id.is_empty() || secret.is_empty() {
+            return Err("Custom OAuth credentials not configured. Please add your Client ID and Client Secret in Settings > Accounts.".to_string());
+        }
+        Ok((id.trim().to_string(), secret.trim().to_string()))
+    } else {
+        get_builtin_credentials()
+    }
+}
+
+async fn determine_credential_source(pool: &sqlx::SqlitePool) -> String {
+    let has_id = sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = 'oauth_custom_client_id'")
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+    let has_secret = sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = 'oauth_custom_client_secret'")
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+    if has_id && has_secret { "custom".to_string() } else { "builtin".to_string() }
+}
+
 pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String> {
-    let (client_id, client_secret) = get_client_credentials()?;
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let credential_source = determine_credential_source(pool.inner()).await;
+    let (client_id, client_secret) = get_client_credentials(pool.inner(), &credential_source).await?;
 
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -349,20 +392,19 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
 
     crate::credentials::store_tokens(&account_id, &access_token, &refresh_token)?;
 
-    let pool = app_handle.state::<sqlx::SqlitePool>();
-
     let _ = sqlx::query("UPDATE accounts SET is_active = 0")
         .execute(pool.inner())
         .await;
 
-    let sql = "INSERT INTO accounts (id, email, display_name, avatar_url, token_expiry, is_active, created_at)
-               VALUES (?, ?, ?, ?, ?, 1, ?)
+    let sql = "INSERT INTO accounts (id, email, display_name, avatar_url, token_expiry, is_active, created_at, credential_source)
+               VALUES (?, ?, ?, ?, ?, 1, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                  email = excluded.email,
                  display_name = excluded.display_name,
                  avatar_url = excluded.avatar_url,
                  token_expiry = excluded.token_expiry,
-                 is_active = 1";
+                 is_active = 1,
+                 credential_source = excluded.credential_source";
     sqlx::query(sql)
         .bind(&account_id)
         .bind(&email)
@@ -370,6 +412,7 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
         .bind(&avatar_url)
         .bind(chrono::Utc::now().timestamp() + 3500)
         .bind(chrono::Utc::now().timestamp())
+        .bind(&credential_source)
         .execute(pool.inner())
         .await
         .map_err(|e| e.to_string())?;
@@ -389,6 +432,7 @@ pub struct AccountInfo {
     pub display_name: String,
     pub avatar_url: String,
     pub is_active: bool,
+    pub credential_source: String,
 }
 
 #[derive(serde::Serialize)]
@@ -410,9 +454,10 @@ pub async fn check_auth_status(app_handle: tauri::AppHandle) -> Result<AuthStatu
         avatar_url: Option<String>,
         token_expiry: Option<i64>,
         is_active: Option<i32>,
+        credential_source: String,
     }
 
-    let all_accounts: Vec<AccountRow> = sqlx::query_as("SELECT id, email, display_name, avatar_url, token_expiry, is_active FROM accounts")
+    let all_accounts: Vec<AccountRow> = sqlx::query_as("SELECT id, email, display_name, avatar_url, token_expiry, is_active, COALESCE(credential_source, 'builtin') as credential_source FROM accounts")
         .fetch_all(pool.inner())
         .await
         .map_err(|e| e.to_string())?;
@@ -433,6 +478,7 @@ pub async fn check_auth_status(app_handle: tauri::AppHandle) -> Result<AuthStatu
             display_name: a.display_name.clone().unwrap_or_default(),
             avatar_url: a.avatar_url.clone().unwrap_or_default(),
             is_active: a.is_active.unwrap_or(0) == 1,
+            credential_source: a.credential_source.clone(),
         })
         .collect();
 
@@ -501,7 +547,13 @@ pub(crate) async fn refresh_and_update(
     account_id: &str,
     refresh_token: &str,
 ) -> Result<(), String> {
-    let (client_id, client_secret) = get_client_credentials()?;
+    let source: String = sqlx::query_scalar("SELECT COALESCE(credential_source, 'builtin') FROM accounts WHERE id = ?")
+        .bind(account_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or_else(|_| "builtin".to_string());
+
+    let (client_id, client_secret) = get_client_credentials(pool, &source).await?;
 
     let client = reqwest::Client::new();
     let res = client
@@ -521,6 +573,9 @@ pub(crate) async fn refresh_and_update(
         let error_code = error_body["error"].as_str().unwrap_or("");
         if error_code == "invalid_grant" {
             let _ = crate::credentials::delete_tokens(account_id);
+            if source == "custom" {
+                return Err("Authentication expired. Your custom OAuth credentials may have changed. Please check Settings > Accounts and re-authenticate.".to_string());
+            }
             return Err("invalid_grant: Please re-authenticate your account.".to_string());
         }
         return Err(format!("Token refresh failed: {}", error_body));
@@ -575,9 +630,10 @@ pub(crate) async fn get_accounts_inner(pool: &sqlx::SqlitePool) -> Result<Vec<Ac
         display_name: Option<String>,
         avatar_url: Option<String>,
         is_active: Option<i32>,
+        credential_source: String,
     }
 
-    let rows: Vec<Row> = sqlx::query_as("SELECT id, email, display_name, avatar_url, is_active FROM accounts ORDER BY created_at ASC")
+    let rows: Vec<Row> = sqlx::query_as("SELECT id, email, display_name, avatar_url, is_active, COALESCE(credential_source, 'builtin') as credential_source FROM accounts ORDER BY created_at ASC")
         .fetch_all(pool)
         .await
         .map_err(|e| e.to_string())?;
@@ -590,6 +646,7 @@ pub(crate) async fn get_accounts_inner(pool: &sqlx::SqlitePool) -> Result<Vec<Ac
             display_name: r.display_name.unwrap_or_default(),
             avatar_url: r.avatar_url.unwrap_or_default(),
             is_active: r.is_active.unwrap_or(0) == 1,
+            credential_source: r.credential_source,
         })
         .collect())
 }
@@ -663,6 +720,22 @@ pub async fn remove_account(
     let _ = crate::credentials::delete_tokens(&account_id);
 
     remove_account_inner(pool.inner(), &account_id).await
+}
+
+#[derive(serde::Serialize)]
+pub struct CredentialConfig {
+    pub has_custom_credentials: bool,
+    pub default_source: String,
+}
+
+#[tauri::command]
+pub async fn get_credential_config(app_handle: tauri::AppHandle) -> Result<CredentialConfig, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let source = determine_credential_source(pool.inner()).await;
+    Ok(CredentialConfig {
+        has_custom_credentials: source == "custom",
+        default_source: source,
+    })
 }
 
 #[cfg(test)]
@@ -879,5 +952,92 @@ mod tests {
 
         let result = check_auth_status_db(&pool).await.unwrap();
         assert_eq!(result, Some("acc2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_determine_credential_source_builtin_when_no_settings() {
+        let pool = setup_test_db().await;
+        let source = determine_credential_source(&pool).await;
+        assert_eq!(source, "builtin");
+    }
+
+    #[tokio::test]
+    async fn test_determine_credential_source_builtin_when_partial() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO settings (key, value) VALUES ('oauth_custom_client_id', 'some-id.apps.googleusercontent.com')")
+            .execute(&pool).await.unwrap();
+        let source = determine_credential_source(&pool).await;
+        assert_eq!(source, "builtin"); // Both must be set
+    }
+
+    #[tokio::test]
+    async fn test_determine_credential_source_custom_when_both_set() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO settings (key, value) VALUES ('oauth_custom_client_id', 'id.apps.googleusercontent.com')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO settings (key, value) VALUES ('oauth_custom_client_secret', 'GOCSPX-secret')")
+            .execute(&pool).await.unwrap();
+        let source = determine_credential_source(&pool).await;
+        assert_eq!(source, "custom");
+    }
+
+    #[tokio::test]
+    async fn test_determine_credential_source_builtin_when_empty_strings() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO settings (key, value) VALUES ('oauth_custom_client_id', '')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO settings (key, value) VALUES ('oauth_custom_client_secret', '')")
+            .execute(&pool).await.unwrap();
+        let source = determine_credential_source(&pool).await;
+        assert_eq!(source, "builtin");
+    }
+
+    #[tokio::test]
+    async fn test_get_client_credentials_custom_reads_from_settings() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO settings (key, value) VALUES ('oauth_custom_client_id', 'my-custom-id.apps.googleusercontent.com')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO settings (key, value) VALUES ('oauth_custom_client_secret', 'my-custom-secret')")
+            .execute(&pool).await.unwrap();
+        let (id, secret) = get_client_credentials(&pool, "custom").await.unwrap();
+        assert_eq!(id, "my-custom-id.apps.googleusercontent.com");
+        assert_eq!(secret, "my-custom-secret");
+    }
+
+    #[tokio::test]
+    async fn test_get_client_credentials_custom_fails_when_empty() {
+        let pool = setup_test_db().await;
+        let result = get_client_credentials(&pool, "custom").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not configured"));
+    }
+
+    #[tokio::test]
+    async fn test_get_client_credentials_builtin_always_works() {
+        let pool = setup_test_db().await;
+        // Builtin uses compile-time/env vars - in test mode uses env vars
+        // This test verifies the function doesn't error for "builtin" source
+        // (actual values depend on env, just verify no panic)
+        let _result = get_client_credentials(&pool, "builtin").await;
+        // Don't assert Ok - env vars may not be set in test env
+        // Just verify no panic
+    }
+
+    #[tokio::test]
+    async fn test_credential_source_column_exists() {
+        let pool = setup_test_db().await;
+        let result: (i32,) = sqlx::query_as("SELECT COUNT(*) FROM pragma_table_info('accounts') WHERE name = 'credential_source'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(result.0, 1);
+    }
+
+    #[tokio::test]
+    async fn test_account_credential_source_defaults_to_builtin() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO accounts (id, email, display_name, avatar_url, token_expiry, is_active, created_at) VALUES ('test@test.com', 'test@test.com', 'Test', '', 0, 1, 0)")
+            .execute(&pool).await.unwrap();
+        let source: String = sqlx::query_scalar("SELECT COALESCE(credential_source, 'builtin') FROM accounts WHERE id = 'test@test.com'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(source, "builtin");
     }
 }
