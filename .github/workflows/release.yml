@@ -48,8 +48,7 @@ jobs:
       - if: contains(matrix.os, 'macos')
         run: |
           brew install cmake
-          echo "CXXFLAGS=-mmacosx-version-min=11.0" >> $GITHUB_ENV
-          echo "CFLAGS=-mmacosx-version-min=11.0" >> $GITHUB_ENV
+          echo "CMAKE_OSX_DEPLOYMENT_TARGET=11.0" >> $GITHUB_ENV
         env:
           HOMEBREW_NO_AUTO_UPDATE: 1
 
