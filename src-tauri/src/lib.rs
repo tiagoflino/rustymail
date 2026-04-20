@@ -59,6 +59,7 @@ pub fn run() {
             commands::accounts::get_accounts,
             commands::accounts::switch_account,
             commands::accounts::remove_account,
+            commands::accounts::get_credential_config,
             commands::settings::get_settings,
             commands::settings::get_setting,
             commands::settings::update_setting,

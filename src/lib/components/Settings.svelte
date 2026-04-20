@@ -18,10 +18,11 @@
       display_name: string;
       avatar_url: string;
       is_active: boolean;
+      credential_source?: string;
     }>;
     onclose: () => void;
     onAccountSwitch: (id: string) => void;
-    onAccountAdd: () => void;
+    onAccountAdd: (credentialSource?: string, clientId?: string, clientSecret?: string) => void;
     onAccountRemove: (id: string) => void;
     onThemeChange?: (mode: string) => void;
     onDensityChange?: (density: string) => void;
@@ -43,6 +44,25 @@
   }: SettingsProps = $props();
 
   let activeTab = $state("accounts");
+  let addingAccount = $state(false);
+  let showByoFields = $state(false);
+  let byoClientId = $state('');
+  let byoClientSecret = $state('');
+  let byoIdError = $derived(
+    byoClientId && !byoClientId.trim().endsWith('.apps.googleusercontent.com')
+      ? 'Must end with .apps.googleusercontent.com'
+      : ''
+  );
+  let byoSecretError = $derived(
+    byoClientSecret && byoClientSecret.trim().length < 10
+      ? 'Secret seems too short'
+      : ''
+  );
+  let byoValid = $derived(
+    byoClientId.trim().endsWith('.apps.googleusercontent.com')
+    && byoClientSecret.trim().length >= 10
+    && !byoIdError && !byoSecretError
+  );
   let settings: Record<string, string> = $state({});
   let appVersion = $state("...");
   let aiStatus: any = $state(null);
@@ -230,6 +250,9 @@
                         >{account.display_name || account.email}</span
                       >
                       <span class="account-email">{account.email}</span>
+                      {#if account.credential_source === "custom"}
+                        <span class="credential-badge">Custom OAuth</span>
+                      {/if}
                     </div>
                     <div class="account-actions">
                       {#if account.is_active}
@@ -252,9 +275,82 @@
                   </div>
                 {/each}
               </div>
-              <button class="btn-add-account" onclick={onAccountAdd}>
-                {@html iconPlus} Add Account
-              </button>
+              {#if !addingAccount}
+                <button class="btn-add-account" onclick={() => addingAccount = true}>
+                  {@html iconPlus} Add Account
+                </button>
+              {:else}
+                <div class="add-account-panel">
+                  <div class="setting-card">
+                    <div class="card-row">
+                      <button
+                        class="add-method-btn primary"
+                        onclick={() => { addingAccount = false; onAccountAdd(); }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+                        Sign in with Google
+                      </button>
+                    </div>
+                    <div class="card-row last">
+                      <button
+                        class="add-method-toggle"
+                        onclick={() => showByoFields = !showByoFields}
+                      >
+                        <span class="advanced-arrow" class:open={showByoFields}>
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                        </span>
+                        Use your own OAuth credentials
+                      </button>
+                      {#if showByoFields}
+                        <div class="byo-fields">
+                          <div class="byo-field">
+                            <input
+                              type="text"
+                              class="credential-input"
+                              class:invalid={byoIdError}
+                              placeholder="Client ID (123456789-abc.apps.googleusercontent.com)"
+                              bind:value={byoClientId}
+                            />
+                            {#if byoIdError}
+                              <span class="field-error">{byoIdError}</span>
+                            {/if}
+                          </div>
+                          <div class="byo-field">
+                            <input
+                              type="password"
+                              class="credential-input"
+                              class:invalid={byoSecretError}
+                              placeholder="Client Secret (GOCSPX-...)"
+                              bind:value={byoClientSecret}
+                            />
+                            {#if byoSecretError}
+                              <span class="field-error">{byoSecretError}</span>
+                            {/if}
+                          </div>
+                          <div class="byo-actions">
+                            <button
+                              class="add-method-btn"
+                              disabled={!byoValid}
+                              onclick={() => {
+                                addingAccount = false;
+                                showByoFields = false;
+                                onAccountAdd('custom', byoClientId.trim(), byoClientSecret.trim());
+                                byoClientId = '';
+                                byoClientSecret = '';
+                              }}
+                            >Sign in with custom credentials</button>
+                            <button
+                              class="setup-guide-link"
+                              onclick={() => invoke("open_external_url", { url: "https://github.com/tiagoflino/rustymail/blob/main/docs/byo-oauth-setup.md" })}
+                            >How to set up →</button>
+                          </div>
+                        </div>
+                      {/if}
+                    </div>
+                  </div>
+                  <button class="btn-cancel-add" onclick={() => { addingAccount = false; showByoFields = false; }}>Cancel</button>
+                </div>
+              {/if}
             </div>
 
             {#if accounts.length > 1}
@@ -1505,4 +1601,104 @@
   .folder-browse-btn:hover {
     background: var(--sidebar-hover);
   }
+
+  .advanced-arrow {
+    display: flex;
+    align-items: center;
+    transition: transform 0.15s ease;
+  }
+  .advanced-arrow.open { transform: rotate(90deg); }
+  .credential-input {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-standard);
+    background: var(--bg-view);
+    color: var(--text-primary);
+    font-size: var(--font-size-base);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    margin-top: 6px;
+  }
+  .credential-input::placeholder { color: var(--text-secondary); opacity: 0.5; }
+  .credential-input:focus { outline: none; border-color: var(--accent-blue); }
+  .credential-input.invalid { border-color: #FF453A; }
+  .credential-input.invalid:focus { border-color: #FF453A; }
+  .byo-field { display: flex; flex-direction: column; gap: 3px; }
+  .field-error { font-size: 11px; color: #FF453A; padding-left: 2px; }
+  .setup-guide-link {
+    font-size: var(--font-size-small);
+    color: var(--accent-blue);
+    text-decoration: none;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    font-family: inherit;
+  }
+  .setup-guide-link:hover { text-decoration: underline; }
+  .credential-badge {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--sidebar-hover);
+    color: var(--text-secondary);
+    font-weight: 500;
+    margin-left: 6px;
+  }
+  .add-account-panel { margin-top: 12px; }
+  .add-method-btn {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 10px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-standard);
+    background: var(--bg-view);
+    color: var(--text-primary);
+    font-size: var(--font-size-base);
+    font-family: inherit;
+    font-weight: 500;
+    cursor: pointer;
+    transition: border-color 0.1s;
+  }
+  .add-method-btn:hover:not(:disabled) { border-color: var(--accent-blue); }
+  .add-method-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .add-method-btn.primary { font-weight: 600; }
+  .add-method-toggle {
+    background: none;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--font-size-small);
+    color: var(--text-secondary);
+    padding: 4px 0;
+    font-family: inherit;
+  }
+  .add-method-toggle:hover { color: var(--text-primary); }
+  .byo-fields {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .byo-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .btn-cancel-add {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: var(--font-size-small);
+    font-family: inherit;
+    margin-top: 8px;
+    padding: 4px 0;
+  }
+  .btn-cancel-add:hover { color: var(--text-primary); }
 </style>
