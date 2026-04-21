@@ -246,6 +246,7 @@ pub async fn unsubscribe(
         });
     }
 
+    tracing::info!("Unsubscribe: no method available for subscription_id={}", subscription_id);
     Ok(UnsubscribeResult {
         method: "none".to_string(),
         success: false,
@@ -292,6 +293,7 @@ pub async fn scan_subscriptions_inner(
     account_id: &str,
     access_token: &str,
 ) -> Result<ScanResult, String> {
+    tracing::info!("Scanning subscriptions for {}", account_id);
     #[derive(sqlx::FromRow)]
     #[allow(dead_code)]
     struct MsgRow {

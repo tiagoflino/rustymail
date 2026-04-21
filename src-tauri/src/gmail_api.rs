@@ -735,21 +735,21 @@ pub async fn batch_hydrate_threads(
             Ok(details) => {
                 match store_thread_messages(pool, account_id, details).await {
                     Ok(()) => completed += 1,
-                    Err(e) => eprintln!("[Hydrate] DB write failed for thread {}: {}", tid, e),
+                    Err(e) => tracing::error!("Hydrate DB write failed for thread {}: {}", tid, e),
                 }
             }
             Err((status, e)) => {
                 if *status == 404 {
                     gone_ids.push(tid);
                 } else {
-                    eprintln!("[Hydrate] API fetch failed for {}: {}", tid, e);
+                    tracing::error!("Hydrate API fetch failed for {}: {}", tid, e);
                 }
             }
         }
     }
 
     if !gone_ids.is_empty() {
-        println!("[Hydrate] Removing {} gone threads (404)", gone_ids.len());
+        tracing::info!("Hydrate: removing {} gone threads (404)", gone_ids.len());
         for chunk in gone_ids.chunks(50) {
             let placeholders: Vec<&str> = chunk.iter().map(|_| "?").collect();
             let sql = format!(
@@ -775,7 +775,7 @@ pub async fn batch_hydrate_threads(
         }
     }
 
-    println!("[Hydrate] Completed {}/{} threads ({} gone)", completed, total, gone_ids.len());
+    tracing::info!("Hydrate completed {}/{} threads ({} gone)", completed, total, gone_ids.len());
     (total, completed)
 }
 
@@ -878,7 +878,7 @@ pub async fn batch_metadata_hydrate(
                 .await;
 
                 if let Err(e) = update_result {
-                    eprintln!("[MetadataHydrate] DB update failed for thread {}: {}", tid, e);
+                    tracing::error!("MetadataHydrate DB update failed for thread {}: {}", tid, e);
                     continue;
                 }
 
@@ -909,14 +909,14 @@ pub async fn batch_metadata_hydrate(
                 if *status == 404 {
                     gone_ids.push(tid);
                 } else {
-                    eprintln!("[MetadataHydrate] API fetch failed for {}: {}", tid, e);
+                    tracing::error!("MetadataHydrate API fetch failed for {}: {}", tid, e);
                 }
             }
         }
     }
 
     if !gone_ids.is_empty() {
-        println!("[MetadataHydrate] Removing {} gone threads (404)", gone_ids.len());
+        tracing::info!("MetadataHydrate: removing {} gone threads (404)", gone_ids.len());
         for chunk in gone_ids.chunks(50) {
             let placeholders: Vec<&str> = chunk.iter().map(|_| "?").collect();
             let sql = format!(
@@ -942,8 +942,8 @@ pub async fn batch_metadata_hydrate(
         }
     }
 
-    println!(
-        "[MetadataHydrate] Completed {}/{} threads ({} gone)",
+    tracing::info!(
+        "MetadataHydrate completed {}/{} threads ({} gone)",
         completed, total, gone_ids.len()
     );
 }
@@ -1043,14 +1043,14 @@ pub async fn evict_old_message_bodies(pool: &SqlitePool, account_id: &str, max_c
     match result {
         Ok(r) => {
             if r.rows_affected() > 0 {
-                println!(
-                    "[Cache] Evicted bodies from {} messages (keeping {} recent threads)",
+                tracing::info!(
+                    "Cache evicted bodies from {} messages (keeping {} recent threads)",
                     r.rows_affected(),
                     max_cached
                 );
             }
         }
-        Err(e) => println!("[Cache] Eviction error: {}", e),
+        Err(e) => tracing::error!("Cache eviction error: {}", e),
     }
 }
 
@@ -1113,20 +1113,20 @@ pub async fn fetch_history(
         }
 
         let history_res: HistoryResponse = res.json().await.map_err(|e| e.to_string())?;
-        println!("[History] Response historyId={}, records={}", history_res.history_id,
+        tracing::info!("History response historyId={}, records={}", history_res.history_id,
             history_res.history.as_ref().map(|r| r.len()).unwrap_or(0));
         latest_history_id = history_res.history_id;
 
         if let Some(records) = history_res.history {
             for rec in &records {
-                if !rec.messages_added.is_empty() { println!("[History] messagesAdded: {}", rec.messages_added.len()); }
-                if !rec.messages_deleted.is_empty() { println!("[History] messagesDeleted: {}", rec.messages_deleted.len()); }
-                if !rec.labels_added.is_empty() { println!("[History] labelsAdded: {} (labels: {:?})", rec.labels_added.len(), rec.labels_added.iter().map(|l| &l.label_ids).collect::<Vec<_>>()); }
-                if !rec.labels_removed.is_empty() { println!("[History] labelsRemoved: {} (labels: {:?})", rec.labels_removed.len(), rec.labels_removed.iter().map(|l| &l.label_ids).collect::<Vec<_>>()); }
+                if !rec.messages_added.is_empty() { tracing::info!("History messagesAdded: {}", rec.messages_added.len()); }
+                if !rec.messages_deleted.is_empty() { tracing::info!("History messagesDeleted: {}", rec.messages_deleted.len()); }
+                if !rec.labels_added.is_empty() { tracing::info!("History labelsAdded: {} (labels: {:?})", rec.labels_added.len(), rec.labels_added.iter().map(|l| &l.label_ids).collect::<Vec<_>>()); }
+                if !rec.labels_removed.is_empty() { tracing::info!("History labelsRemoved: {} (labels: {:?})", rec.labels_removed.len(), rec.labels_removed.iter().map(|l| &l.label_ids).collect::<Vec<_>>()); }
             }
             all_records.extend(records);
             if all_records.len() > 200 {
-                println!("[History] Too many records ({}), aborting incremental sync", all_records.len());
+                tracing::warn!("History too many records ({}), aborting incremental sync", all_records.len());
                 return Ok(None);
             }
         }
@@ -1572,7 +1572,7 @@ pub async fn upload_to_drive(
 
     if !perm_res.status().is_success() {
         // File uploaded but sharing failed — return link anyway
-        eprintln!("Warning: Failed to set sharing permission on Drive file {}", file_id);
+        tracing::warn!("Failed to set sharing permission on Drive file {}", file_id);
     }
 
     Ok(format!("https://drive.google.com/file/d/{}/view?usp=sharing", file_id))

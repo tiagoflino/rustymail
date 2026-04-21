@@ -19,7 +19,7 @@ pub async fn sync_gmail_data(
         None => super::accounts::get_active_account(pool.inner()).await?,
     };
 
-    println!("[Sync] Starting sync for: {}", account.id);
+    tracing::info!("Sync started for account {}", account.id);
 
     crate::gmail_api::fetch_and_store_labels(pool.inner(), &account.id, &account.access_token)
         .await?;
@@ -31,7 +31,7 @@ pub async fn sync_gmail_data(
         crate::gmail_api::get_last_history_id(pool.inner(), &account.id).await;
 
     if let Some(ref history_id) = last_history_id {
-        println!("[Sync] Attempting incremental sync from historyId={}", history_id);
+        tracing::info!("Incremental sync from historyId={}", history_id);
         let result = crate::gmail_api::fetch_history(
             pool.inner(),
             &account.id,
@@ -61,16 +61,16 @@ pub async fn sync_gmail_data(
                 new_thread_ids = delta.new_inbox_thread_ids;
             }
             Ok(None) => {
-                println!("[Sync] History expired (404), falling back to full sync");
+                tracing::info!("History expired (404), falling back to full sync");
                 full_sync(pool.inner(), &account, &label_id, &app_handle).await?;
             }
             Err(e) => {
-                println!("[Sync] Incremental sync error: {}, falling back to full sync", e);
+                tracing::warn!("Incremental sync error: {}, falling back to full sync", e);
                 full_sync(pool.inner(), &account, &label_id, &app_handle).await?;
             }
         }
     } else {
-        println!("[Sync] No historyId stored, running full sync");
+        tracing::info!("No historyId stored, running full sync");
         full_sync(pool.inner(), &account, &label_id, &app_handle).await?;
     }
 
@@ -113,7 +113,7 @@ async fn full_sync(
 
     let stale = crate::gmail_api::get_stale_thread_ids(pool, &account.id).await;
     if !stale.is_empty() {
-        println!("[Sync] Re-hydrating {} stale threads", stale.len());
+        tracing::info!("Re-hydrating {} stale threads", stale.len());
         crate::gmail_api::batch_metadata_hydrate(
             pool,
             &account.id,
@@ -137,7 +137,7 @@ async fn full_sync(
 
     if let Ok(history_id) = crate::gmail_api::get_profile_history_id(&account.access_token).await {
         crate::gmail_api::set_last_history_id(pool, &account.id, &history_id).await;
-        println!("[Sync] Stored historyId={} from profile after full sync", history_id);
+        tracing::info!("Stored historyId={} from profile after full sync", history_id);
     }
 
     Ok(())
@@ -213,6 +213,7 @@ pub async fn ensure_threads_hydrated(
         }
     }
     if !need_hydration.is_empty() {
+        tracing::info!("Hydration started for {} threads", need_hydration.len());
         crate::gmail_api::batch_hydrate_threads(
             pool.inner(),
             &account.id,
@@ -220,6 +221,7 @@ pub async fn ensure_threads_hydrated(
             need_hydration,
         )
         .await;
+        tracing::info!("Hydration completed");
     }
 
     Ok(())

@@ -199,6 +199,7 @@ pub async fn search_messages(
     app_handle: tauri::AppHandle,
     query: String,
 ) -> Result<Vec<LocalThread>, String> {
+    tracing::info!("Search: '{}'", &query[..query.len().min(100)]);
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
 

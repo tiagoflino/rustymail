@@ -18,9 +18,11 @@ pub async fn create_event(
     app_handle: tauri::AppHandle,
     event: NewCalendarEvent,
 ) -> Result<CalendarEvent, String> {
+    tracing::info!("Calendar event created");
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
     crate::calendar_api::create_event(&account.access_token, &event).await
+        .map_err(|e| { tracing::error!("Calendar API error: {}", e); e })
 }
 
 #[tauri::command]
@@ -29,9 +31,11 @@ pub async fn update_event(
     event_id: String,
     event: NewCalendarEvent,
 ) -> Result<CalendarEvent, String> {
+    tracing::info!("Calendar event updated: {}", event_id);
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
     crate::calendar_api::update_event(&account.access_token, &event_id, &event).await
+        .map_err(|e| { tracing::error!("Calendar API error: {}", e); e })
 }
 
 #[tauri::command]
@@ -39,7 +43,9 @@ pub async fn delete_event(
     app_handle: tauri::AppHandle,
     event_id: String,
 ) -> Result<(), String> {
+    tracing::info!("Calendar event deleted: {}", event_id);
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
     crate::calendar_api::delete_event(&account.access_token, &event_id).await
+        .map_err(|e| { tracing::error!("Calendar API error: {}", e); e })
 }

@@ -363,6 +363,19 @@ async fn m008_add_credential_source(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+async fn m009_create_ai_summary_cache(pool: &SqlitePool) -> Result<()> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS ai_summary_cache (
+            thread_id TEXT PRIMARY KEY,
+            summary TEXT NOT NULL,
+            message_count INTEGER NOT NULL,
+            latest_message_date INTEGER NOT NULL,
+            created_at INTEGER NOT NULL
+        )"
+    ).execute(pool).await?;
+    Ok(())
+}
+
 async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     let applied: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
         .fetch_all(pool)
@@ -385,10 +398,16 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
                     .await;
             }
         }
-        // Bootstrap: mark m006 if snoozed_threads table already exists
+        // Bootstrap: mark table-based migrations if tables already exist
         if has_table(pool, "snoozed_threads").await {
             let _ = sqlx::query("INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)")
                 .bind(6i64)
+                .execute(pool)
+                .await;
+        }
+        if has_table(pool, "ai_summary_cache").await {
+            let _ = sqlx::query("INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)")
+                .bind(9i64)
                 .execute(pool)
                 .await;
         }
@@ -403,7 +422,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 }
 
 async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()> {
-    for version in 1..=8i64 {
+    for version in 1..=9i64 {
         if !applied.contains(&version) {
             println!("[Migration] Running v{}...", version);
             match version {
@@ -415,6 +434,7 @@ async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()
                 6 => m006_create_subscriptions_table(pool).await?,
                 7 => m007_create_snoozed_threads(pool).await?,
                 8 => m008_add_credential_source(pool).await?,
+                9 => m009_create_ai_summary_cache(pool).await?,
                 _ => {}
             }
             sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
@@ -608,7 +628,7 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
             .fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 8);
+        assert_eq!(count, 9);
     }
 
     #[tokio::test]
