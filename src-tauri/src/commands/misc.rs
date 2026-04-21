@@ -62,7 +62,7 @@ pub async fn get_recent_logs(app_handle: tauri::AppHandle, lines: Option<usize>)
 pub async fn open_log_directory(app_handle: tauri::AppHandle) -> Result<(), String> {
     let dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
     let log_dir = dir.join("logs");
-    tauri_plugin_opener::open_url(&format!("file://{}", log_dir.to_string_lossy()), None::<&str>)
+    tauri_plugin_opener::open_url(format!("file://{}", log_dir.to_string_lossy()), None::<&str>)
         .map_err(|e| format!("Failed to open directory: {}", e))
 }
 
