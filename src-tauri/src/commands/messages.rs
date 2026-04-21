@@ -78,8 +78,8 @@ pub async fn get_messages(
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let msgs = get_messages_inner(pool.inner(), &thread_id).await?;
     for m in &msgs {
-        println!(
-            "[Messages] id={} subject='{}' body_html_len={} body_plain_len={} has_att={}",
+        tracing::info!(
+            "Message id={} subject='{}' body_html_len={} body_plain_len={} has_att={}",
             m.id,
             &m.subject[..m.subject.len().min(40)],
             m.body_html.len(),

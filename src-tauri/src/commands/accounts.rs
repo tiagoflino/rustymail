@@ -197,6 +197,7 @@ async fn determine_credential_source(pool: &sqlx::SqlitePool) -> String {
 }
 
 pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String> {
+    tracing::info!("OAuth flow started");
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let credential_source = determine_credential_source(pool.inner()).await;
     let (client_id, client_secret) = get_client_credentials(pool.inner(), &credential_source).await?;
@@ -244,14 +245,14 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
         .url();
 
     match tauri_plugin_opener::open_url(auth_url.as_str(), None::<&str>) {
-        Ok(_) => println!("[OAuth] Browser opened successfully"),
+        Ok(_) => tracing::info!("OAuth browser opened"),
         Err(e) => {
-            println!("[OAuth] Failed to open browser: {}", e);
+            tracing::error!("OAuth failed to open browser: {}", e);
             return Err(format!("Failed to open browser: {}", e));
         }
     }
 
-    println!("[OAuth] Waiting for callback...");
+    tracing::info!("OAuth waiting for callback");
     let (mut stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
     let mut reader = BufReader::new(&mut stream);
     let mut request_line = String::new();
@@ -286,6 +287,7 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
     }
 
     if !error_param.is_empty() {
+        tracing::warn!("OAuth cancelled or denied: {}", error_param);
         let response = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body style='font-family:-apple-system,system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;color:#333;'><div style='text-align:center'><h2>Authentication Cancelled</h2><p>You did not approve the required permissions. You can close this tab and return to Rustymail.</p></div></body></html>";
         let _ = stream.write_all(response.as_bytes()).await;
         return Err(format!("Google authentication was cancelled or denied: {}", error_param));
@@ -304,7 +306,7 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
         return Err("CSRF token mismatch".to_string());
     }
 
-    println!("[OAuth] Exchanging code for tokens...");
+    tracing::info!("OAuth exchanging code for tokens");
     let http_client = reqwest::ClientBuilder::new()
         .redirect(reqwest::redirect::Policy::none())
         .build()
@@ -315,10 +317,10 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
         .request_async(&http_client)
         .await
         .map_err(|e| {
-            println!("[OAuth] Token exchange failed: {:?}", e);
+            tracing::error!("OAuth token exchange failed: {}", e);
             e.to_string()
         })?;
-    println!("[OAuth] Token exchange succeeded.");
+    tracing::info!("OAuth token exchange succeeded");
 
     let access_token = token_result.access_token().secret().to_string();
     let refresh_token = token_result
@@ -326,7 +328,7 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
         .map(|r| r.secret().clone())
         .unwrap_or_default();
 
-    println!("Tokens acquired successfully! Validating permissions...");
+    tracing::info!("Tokens acquired, validating permissions");
 
     let http_client = reqwest::Client::new();
     
@@ -389,6 +391,7 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
     };
 
     let account_id = email.clone();
+    tracing::info!("OAuth flow completed for {}", account_id);
 
     crate::credentials::store_tokens(&account_id, &access_token, &refresh_token)?;
 
@@ -547,6 +550,7 @@ pub(crate) async fn refresh_and_update(
     account_id: &str,
     refresh_token: &str,
 ) -> Result<(), String> {
+    tracing::info!("Token refresh for {}", account_id);
     let source: String = sqlx::query_scalar("SELECT COALESCE(credential_source, 'builtin') FROM accounts WHERE id = ?")
         .bind(account_id)
         .fetch_one(pool)
@@ -572,12 +576,14 @@ pub(crate) async fn refresh_and_update(
         let error_body: serde_json::Value = res.json().await.unwrap_or_default();
         let error_code = error_body["error"].as_str().unwrap_or("");
         if error_code == "invalid_grant" {
+            tracing::warn!("Token refresh invalid_grant for {}", account_id);
             let _ = crate::credentials::delete_tokens(account_id);
             if source == "custom" {
                 return Err("Authentication expired. Your custom OAuth credentials may have changed. Please check Settings > Accounts and re-authenticate.".to_string());
             }
             return Err("invalid_grant: Please re-authenticate your account.".to_string());
         }
+        tracing::error!("Token refresh failed for {}: {}", account_id, error_body);
         return Err(format!("Token refresh failed: {}", error_body));
     }
 
@@ -658,6 +664,7 @@ pub async fn get_accounts(app_handle: tauri::AppHandle) -> Result<Vec<AccountInf
 }
 
 pub(crate) async fn switch_account_inner(pool: &sqlx::SqlitePool, account_id: &str) -> Result<(), String> {
+    tracing::info!("Account switched to: {}", account_id);
     sqlx::query("UPDATE accounts SET is_active = 0")
         .execute(pool)
         .await
@@ -680,6 +687,7 @@ pub async fn switch_account(
 }
 
 pub(crate) async fn remove_account_inner(pool: &sqlx::SqlitePool, account_id: &str) -> Result<(), String> {
+    tracing::info!("Account removed: {}", account_id);
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
     sqlx::query("DELETE FROM messages WHERE account_id = ?")
         .bind(account_id)

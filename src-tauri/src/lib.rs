@@ -8,6 +8,8 @@ mod subscription_detector;
 mod tray;
 
 use tauri::Manager;
+use tracing_subscriber::{fmt, EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_appender::rolling;
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -27,6 +29,22 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let handle = app.handle().clone();
+
+            let app_data_dir = handle.path().app_data_dir().expect("app data dir");
+            let log_dir = app_data_dir.join("logs");
+            std::fs::create_dir_all(&log_dir).ok();
+            let file_appender = rolling::daily(&log_dir, "rustymail.log");
+            let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+            Box::leak(Box::new(guard));
+
+            tracing_subscriber::registry()
+                .with(EnvFilter::new("rustymail_lib=info,rustymail_premium=info,warn"))
+                .with(fmt::layer().with_writer(non_blocking).with_ansi(false).with_target(true))
+                .with(fmt::layer().with_writer(std::io::stderr).with_ansi(true).with_target(true))
+                .init();
+
+            tracing::info!("Rustymail starting up");
+
             let pool = tauri::async_runtime::block_on(async { db::init_db(&handle).await })
                 .expect("Failed to initialize database");
             #[cfg(feature = "premium")]
@@ -36,13 +54,13 @@ pub fn run() {
             #[cfg(feature = "premium")]
             {
                 let engine = rustymail_premium::llm::engine::LlmEngine::new(
-                    handle.path().app_data_dir().expect("app data dir")
+                    app_data_dir.clone()
                 );
                 engine.start_auto_unload_timer(pool_clone);
                 handle.manage(engine);
             }
             tray::setup_tray(app)?;
-            println!("Database initialized successfully!");
+            tracing::info!("Database initialized, tray setup complete");
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -113,6 +131,9 @@ pub fn run() {
             commands::misc::open_external_url,
             commands::misc::get_upcoming_events,
             commands::misc::get_file_size,
+            commands::misc::get_log_path,
+            commands::misc::get_recent_logs,
+            commands::misc::open_log_directory,
             commands::subscriptions::get_subscriptions,
             commands::subscriptions::correct_subscription,
             commands::subscriptions::delete_subscription,
@@ -128,6 +149,8 @@ pub fn run() {
             rustymail_premium::commands::llm::ensure_ai_ready,
             #[cfg(feature = "premium")]
             rustymail_premium::commands::llm::summarize_thread,
+            #[cfg(feature = "premium")]
+            rustymail_premium::commands::llm::clear_ai_cache,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
