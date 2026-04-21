@@ -9,6 +9,7 @@
     iconCheck,
   } from "$lib/components/icons";
   import { checkForUpdates } from "$lib/utils/updater";
+  import { addToast } from "$lib/stores/toast";
 
   interface SettingsProps {
     show: boolean;
@@ -65,6 +66,8 @@
   );
   let settings: Record<string, string> = $state({});
   let appVersion = $state("...");
+  let logPath = $state('');
+  let recentLogs = $state('');
   let aiStatus: any = $state(null);
   let aiModelDownloaded = $state(false);
   let aiModelSize = $state('');
@@ -80,6 +83,7 @@
     notifications: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>`,
     shortcuts: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.001M10 8h.001M14 8h.001M18 8h.001M8 12h.001M12 12h.001M16 12h.001M7 16h10"/></svg>`,
     ai: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 014 4c0 1.1-.4 2.1-1 2.8L12 12l-3-3.2A4 4 0 0112 2z"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 18h6"/><path d="M10 22h4"/></svg>`,
+    logs: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>`,
     about: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`,
   };
 
@@ -91,6 +95,7 @@
     { id: "notifications", label: "Notifications" },
     { id: "shortcuts", label: "Shortcuts" },
     { id: "ai", label: "AI" },
+    { id: "logs", label: "Logs" },
     { id: "about", label: "About" },
   ];
 
@@ -115,8 +120,17 @@
       } catch {
         aiDevices = [];
       }
+      try { logPath = await invoke("get_log_path") as string; } catch {}
     } catch (e) {
       console.error("Failed to load settings", e);
+    }
+  }
+
+  async function loadRecentLogs() {
+    try {
+      recentLogs = await invoke("get_recent_logs", { lines: 100 }) as string;
+    } catch {
+      recentLogs = "No logs available yet.";
     }
   }
 
@@ -973,6 +987,26 @@
                   </div>
                 </div>
 
+                <div class="card-row">
+                  <div class="setting-row-inline">
+                    <div class="setting-label">
+                      <span class="setting-name">Summary Cache</span>
+                      <span class="setting-hint">Clear cached AI summaries to force re-generation</span>
+                    </div>
+                    <button
+                      class="option-btn"
+                      onclick={async () => {
+                        try {
+                          const count = await invoke("clear_ai_cache");
+                          addToast(`Cleared ${count} cached summaries`, "info", 3000);
+                        } catch {
+                          addToast("No cached summaries to clear", "info", 3000);
+                        }
+                      }}
+                    >Clear Cache</button>
+                  </div>
+                </div>
+
                 <div class="card-row last">
                   <div class="setting-row-inline">
                     <div class="setting-label">
@@ -1006,6 +1040,46 @@
                   </div>
                 </div>
               </div>
+            </div>
+          {:else if activeTab === "logs"}
+            <div class="section">
+              <div class="section-title">Application Logs</div>
+              <p class="section-desc">
+                View and export logs for troubleshooting. Share with support when reporting issues.
+              </p>
+              <div class="setting-card">
+                <div class="card-row">
+                  <div class="setting-row-inline">
+                    <div class="setting-label">
+                      <span class="setting-name">Log Location</span>
+                      <span class="setting-hint">{logPath || 'Loading...'}</span>
+                    </div>
+                    <button class="option-btn" onclick={async () => {
+                      try { await invoke("open_log_directory"); } catch {}
+                    }}>Open Folder</button>
+                  </div>
+                </div>
+                <div class="card-row last">
+                  <div class="setting-row-inline">
+                    <div class="setting-label">
+                      <span class="setting-name">Recent Logs</span>
+                      <span class="setting-hint">Last 100 log entries</span>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                      <button class="option-btn" onclick={loadRecentLogs}>View Logs</button>
+                      <button class="option-btn" onclick={async () => {
+                        if (recentLogs) {
+                          await navigator.clipboard.writeText(recentLogs);
+                          addToast("Logs copied to clipboard", "info", 2000);
+                        }
+                      }} disabled={!recentLogs}>Copy to Clipboard</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {#if recentLogs}
+                <pre class="log-viewer">{recentLogs}</pre>
+              {/if}
             </div>
           {:else if activeTab === "about"}
             <div class="section about-section">
@@ -1701,4 +1775,19 @@
     padding: 4px 0;
   }
   .btn-cancel-add:hover { color: var(--text-primary); }
+
+  .log-viewer {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--text-secondary);
+    background: var(--sidebar-hover);
+    border-radius: var(--radius-standard);
+    padding: 12px;
+    max-height: 300px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin-top: 12px;
+  }
 </style>

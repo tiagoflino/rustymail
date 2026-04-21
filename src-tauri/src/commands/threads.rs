@@ -743,7 +743,7 @@ pub async fn fetch_label_threads(
     let store_key = format!("{}:{}", account.id, label_id);
     let current_token = token_store.get(&store_key);
 
-    println!("[OnDemand] Fetching threads for label: {} (has_token: {})", label_id, current_token.is_some());
+    tracing::info!("Fetching threads for label: {} (has_token: {})", label_id, current_token.is_some());
     let result = crate::gmail_api::fetch_and_store_threads(
         pool.inner(),
         &account.id,
@@ -817,7 +817,7 @@ pub async fn fetch_category_threads(
         _ => return Err(format!("Unknown category: {}", category)),
     };
 
-    println!("[OnDemand] Fetching threads for category {} (has_token: {}, query: {:?})", category, current_token.is_some(), query);
+    tracing::info!("Fetching threads for category {} (has_token: {}, query: {:?})", category, current_token.is_some(), query);
     let result = crate::gmail_api::fetch_and_store_threads(
         pool.inner(),
         &account.id,
@@ -1179,6 +1179,7 @@ pub async fn batch_archive_threads(
     app_handle: tauri::AppHandle,
     thread_ids: Vec<String>,
 ) -> Result<BatchResult, String> {
+    tracing::info!("Batch archive: {} threads", thread_ids.len());
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
     let mut succeeded = 0usize;
@@ -1198,6 +1199,9 @@ pub async fn batch_archive_threads(
             Err(_) => failed_ids.push(tid.clone()),
         }
     }
+    if !failed_ids.is_empty() {
+        tracing::error!("Batch archive: {} succeeded, {} failed", succeeded, failed_ids.len());
+    }
     Ok(BatchResult {
         succeeded,
         failed_ids,
@@ -1209,6 +1213,7 @@ pub async fn batch_trash_threads(
     app_handle: tauri::AppHandle,
     thread_ids: Vec<String>,
 ) -> Result<BatchResult, String> {
+    tracing::info!("Batch trash: {} threads", thread_ids.len());
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
     let mut succeeded = 0usize;
@@ -1225,6 +1230,9 @@ pub async fn batch_trash_threads(
             Ok(()) => succeeded += 1,
             Err(_) => failed_ids.push(tid.clone()),
         }
+    }
+    if !failed_ids.is_empty() {
+        tracing::error!("Batch trash: {} succeeded, {} failed", succeeded, failed_ids.len());
     }
     Ok(BatchResult {
         succeeded,

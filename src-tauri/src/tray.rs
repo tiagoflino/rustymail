@@ -87,8 +87,8 @@ pub fn update_tray_unread(app_handle: AppHandle, count: u32) {
         {
             let label = if count > 0 { Some(count.to_string()) } else { None };
             match window.set_badge_label(label.clone()) {
-                Ok(_) => println!("[Tray] Badge set to: {:?}", label),
-                Err(e) => eprintln!("[Tray] Failed to set badge: {}", e),
+                Ok(_) => tracing::info!("Tray badge set to: {:?}", label),
+                Err(e) => tracing::error!("Tray failed to set badge: {}", e),
             }
         }
 

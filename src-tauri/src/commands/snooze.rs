@@ -42,6 +42,7 @@ pub async fn snooze_thread(
     .await
     .map_err(|e| e.to_string())?;
 
+    tracing::info!("Thread snoozed: {} until {}", thread_id, snoozed_until);
     Ok(())
 }
 
@@ -60,6 +61,7 @@ pub async fn unsnooze_thread(
         .await
         .map_err(|e| e.to_string())?;
 
+    tracing::info!("Thread unsnoozed: {}", thread_id);
     Ok(())
 }
 
@@ -135,6 +137,7 @@ pub async fn check_snoozed_threads(
     let thread_ids: Vec<String> = expired.into_iter().map(|r| r.thread_id).collect();
 
     if !thread_ids.is_empty() {
+        tracing::info!("Checked snoozed threads: {} expired", thread_ids.len());
         sqlx::query(
             "DELETE FROM snoozed_threads WHERE account_id = ? AND snoozed_until <= ?"
         )

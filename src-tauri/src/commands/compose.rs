@@ -42,6 +42,7 @@ pub async fn send_message(
         _ => vec![],
     };
 
+    tracing::info!("Sending message, subject='{}'", &subject[..subject.len().min(50)]);
     crate::gmail_api::send_message(
         &account.id,
         &row.email,
@@ -55,6 +56,10 @@ pub async fn send_message(
         &attachments,
     )
     .await
+    .map_err(|e| {
+        tracing::error!("Send failed: {}", e);
+        e
+    })
 }
 
 pub(crate) async fn search_contacts_inner(
@@ -159,6 +164,7 @@ pub async fn save_draft(
         _ => vec![],
     };
 
+    tracing::info!("Saving draft, subject='{}'", &subject[..subject.len().min(50)]);
     let new_draft_id = crate::gmail_api::save_draft(
         &account.id,
         &row.email,
