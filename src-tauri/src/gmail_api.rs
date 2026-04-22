@@ -1695,6 +1695,29 @@ fn build_mime_message(
     Ok(base64::encode_config(formatted, base64::URL_SAFE_NO_PAD))
 }
 
+pub async fn send_draft(
+    access_token: &str,
+    draft_id: &str,
+) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let url = gmail_api_url("/gmail/v1/users/me/drafts/send");
+    let body = serde_json::json!({ "id": draft_id });
+
+    let res = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", access_token))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !res.status().is_success() {
+        return Err(format!("Failed to send draft: HTTP {}", res.status()));
+    }
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn send_message(
     _account_id: &str,
@@ -4251,5 +4274,52 @@ mod tests {
 
         let ids = get_no_metadata_thread_ids(&pool, "acc1").await;
         assert_eq!(ids, vec!["t1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_send_draft_via_mock() {
+        let server = httpmock::MockServer::start();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/gmail/v1/users/me/drafts/send")
+                .header("Authorization", "Bearer fake_token");
+            then.status(200)
+                .json_body(serde_json::json!({"id": "msg123", "threadId": "t456"}));
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = send_draft("fake_token", "draft_abc").await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok());
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn test_send_draft_not_found() {
+        let server = httpmock::MockServer::start();
+
+        server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/gmail/v1/users/me/drafts/send");
+            then.status(404)
+                .body("Not Found");
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = send_draft("fake_token", "deleted_draft").await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("404"));
     }
 }

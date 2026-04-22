@@ -668,7 +668,7 @@
                   </div>
                 </div>
 
-                <div class="card-row last">
+                <div class="card-row">
                   <div class="setting-row-inline">
                     <div class="setting-label">
                       <span class="setting-name">Link Behavior</span>
@@ -679,6 +679,23 @@
                         <button
                           class="option-btn {(settings.link_behavior || 'open') === val ? 'selected' : ''}"
                           onclick={() => saveSetting("link_behavior", val)}
+                        >{label}</button>
+                      {/each}
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card-row last">
+                  <div class="setting-row-inline">
+                    <div class="setting-label">
+                      <span class="setting-name">When I close the window</span>
+                      <span class="setting-hint">Choose what happens when you click the close button</span>
+                    </div>
+                    <div class="option-group">
+                      {#each [["minimize", "Minimize to tray"], ["quit", "Quit application"]] as [val, label]}
+                        <button
+                          class="option-btn {(settings.close_behavior || 'minimize') === val ? 'selected' : ''}"
+                          onclick={() => saveSetting("close_behavior", val)}
                         >{label}</button>
                       {/each}
                     </div>

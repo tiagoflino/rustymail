@@ -59,6 +59,10 @@
   let attachments = $state<ComposeAttachment[]>([]);
   let totalAttachmentSize = $derived(attachments.reduce((sum, a) => sum + a.size, 0));
   let isDragging = $state(false);
+  let isSending = $state(false);
+  let showScheduleMenu = $state(false);
+  let showDatePicker = $state(false);
+  let customDateTime = $state('');
   const MAX_ATTACHMENT_SIZE = 25 * 1024 * 1024;
 
   function formatSize(bytes: number): string {
@@ -442,6 +446,80 @@
     onClose();
   }
 
+  function computeTomorrowMorning(): number {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(9, 0, 0, 0);
+    return Math.floor(d.getTime() / 1000);
+  }
+
+  function computeNextMonday(): number {
+    const d = new Date();
+    const day = d.getDay();
+    const daysUntilMonday = day === 0 ? 1 : day === 1 ? 7 : 8 - day;
+    d.setDate(d.getDate() + daysUntilMonday);
+    d.setHours(9, 0, 0, 0);
+    return Math.floor(d.getTime() / 1000);
+  }
+
+  function formatScheduleTime(ts: number): string {
+    return new Date(ts * 1000).toLocaleString(undefined, {
+      weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+    });
+  }
+
+  function getEditorContent(): string {
+    return editorEl?.innerHTML || "";
+  }
+
+  async function scheduleSend(sendAt: number) {
+    if (!to.trim()) {
+      addToast("Please add a recipient", "error");
+      return;
+    }
+    showScheduleMenu = false;
+    showDatePicker = false;
+
+    try {
+      const draftId = await invoke("save_draft", {
+        to: `${to.trim()}${cc ? "," + cc : ""}${bcc ? "," + bcc : ""}`,
+        subject,
+        body: getEditorContent(),
+        threadId: threadId || null,
+        inReplyTo: inReplyTo || null,
+        references: references || null,
+        draftId: currentDraftId || null,
+        attachmentPaths: attachments.length > 0 ? attachments.map(a => a.path) : null,
+        accountId: accountId || null,
+      }) as string;
+
+      const scheduleId = await invoke("schedule_send", {
+        draftId,
+        threadId: threadId || null,
+        toRecipients: to.trim(),
+        subject: subject || "(no subject)",
+        sendAt,
+      });
+
+      const timeStr = formatScheduleTime(sendAt);
+      addToast(`Scheduled for ${timeStr}`, "info", 8000, {
+        label: "Undo",
+        onClick: async () => {
+          try {
+            await invoke("cancel_scheduled_send", { id: scheduleId });
+            addToast("Schedule cancelled", "info");
+          } catch (e) {
+            addToast(`Failed to cancel: ${e}`, "error");
+          }
+        }
+      });
+
+      onClose();
+    } catch (e: any) {
+      addToast(`Failed to schedule: ${e}`, "error");
+    }
+  }
+
   const iconMinimize = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
   const iconMaximize = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>`;
   const iconBold = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4h8a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z"></path><path d="M6 12h9a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z"></path></svg>`;
@@ -652,9 +730,53 @@
 
     <footer class="compose-toolbar">
       <div class="formatting-tools">
-        <button class="send-btn" onclick={send}>
-            Send
-        </button>
+        {#if showScheduleMenu}
+          <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+          <div class="schedule-backdrop" onclick={() => { showScheduleMenu = false; showDatePicker = false; }}></div>
+        {/if}
+        <div class="send-split">
+          <button class="send-btn" disabled={isSending} onclick={send}>
+            {isSending ? "Sending..." : "Send"}
+          </button>
+          <button class="send-dropdown" disabled={isSending} onclick={(e) => { e.stopPropagation(); showScheduleMenu = !showScheduleMenu; }} title="Schedule Send">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          {#if showScheduleMenu}
+            <div class="schedule-menu">
+              <div class="schedule-header">Schedule Send</div>
+              <button class="schedule-option" onclick={() => scheduleSend(computeTomorrowMorning())}>
+                <span class="schedule-label">Tomorrow Morning</span>
+                <span class="schedule-time">{new Date(computeTomorrowMorning() * 1000).toLocaleDateString(undefined, { weekday: 'short' })} 9:00 AM</span>
+              </button>
+              <button class="schedule-option" onclick={() => scheduleSend(computeNextMonday())}>
+                <span class="schedule-label">Monday Morning</span>
+                <span class="schedule-time">{new Date(computeNextMonday() * 1000).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} 9:00 AM</span>
+              </button>
+              <div class="schedule-divider"></div>
+              <button class="schedule-option" onclick={() => { showDatePicker = true; }}>
+                <span class="schedule-label">Pick date & time...</span>
+              </button>
+              {#if showDatePicker}
+                <div class="schedule-picker">
+                  <input
+                    type="datetime-local"
+                    class="schedule-datetime"
+                    bind:value={customDateTime}
+                    min={new Date(Date.now() + 60000).toISOString().slice(0, 16)}
+                  />
+                  <button
+                    class="schedule-confirm"
+                    disabled={!customDateTime}
+                    onclick={() => {
+                      const ts = Math.floor(new Date(customDateTime).getTime() / 1000);
+                      scheduleSend(ts);
+                    }}
+                  >Schedule</button>
+                </div>
+              {/if}
+            </div>
+          {/if}
+        </div>
         <div class="divider"></div>
         <div class="font-picker" bind:this={fontPickerEl}>
           <button
@@ -949,13 +1071,17 @@
     gap: 6px;
   }
 
+  .send-split {
+    display: flex;
+    position: relative;
+  }
   .send-btn {
     background: var(--accent-blue, #0a84ff);
     color: white;
     font-weight: 500;
     font-size: var(--font-size-detail);
     border: none;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-pill) 0 0 var(--radius-pill);
     padding: 0 20px;
     height: 32px;
     cursor: pointer;
@@ -974,6 +1100,93 @@
     opacity: 0.5;
     cursor: not-allowed;
   }
+  .send-dropdown {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 8px;
+    border: none;
+    background: var(--accent-blue, #0a84ff);
+    color: white;
+    cursor: pointer;
+    border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+    border-left: 1px solid rgba(255,255,255,0.2);
+    transition: background 0.1s;
+  }
+  .send-dropdown:hover { background: #0070e0; }
+  .send-dropdown:disabled { opacity: 0.5; cursor: not-allowed; }
+  .schedule-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 99;
+  }
+  .schedule-menu {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    margin-bottom: 6px;
+    background: var(--bg-view);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-standard);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    z-index: 100;
+    min-width: 260px;
+    overflow: hidden;
+  }
+  .schedule-header {
+    padding: 8px 12px;
+    font-size: var(--font-size-small);
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .schedule-option {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    padding: 8px 12px;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: var(--font-size-base);
+    font-family: inherit;
+    cursor: pointer;
+    text-align: left;
+  }
+  .schedule-option:hover { background: var(--sidebar-hover); }
+  .schedule-label { font-weight: 500; }
+  .schedule-time { font-size: var(--font-size-small); color: var(--text-secondary); }
+  .schedule-divider { height: 1px; background: var(--border-color); margin: 2px 0; }
+  .schedule-picker {
+    padding: 8px 12px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .schedule-datetime {
+    flex: 1;
+    padding: 6px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-standard);
+    background: var(--bg-view);
+    color: var(--text-primary);
+    font-size: var(--font-size-small);
+    font-family: inherit;
+  }
+  .schedule-confirm {
+    padding: 6px 12px;
+    border: none;
+    background: var(--accent-blue);
+    color: white;
+    border-radius: var(--radius-standard);
+    font-size: var(--font-size-small);
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .schedule-confirm:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .divider {
     width: 1px;
