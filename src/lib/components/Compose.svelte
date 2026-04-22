@@ -63,6 +63,10 @@
   let showScheduleMenu = $state(false);
   let showDatePicker = $state(false);
   let customDateTime = $state('');
+  let showTemplatePicker = $state(false);
+  let templates = $state<Array<{id: string, name: string, subject: string, body_html: string}>>([]);
+  let showSaveTemplateInput = $state(false);
+  let newTemplateName = $state('');
   const MAX_ATTACHMENT_SIZE = 25 * 1024 * 1024;
 
   function formatSize(bytes: number): string {
@@ -228,6 +232,78 @@
     editorEl?.focus();
   }
 
+  function toggleTemplatePicker() {
+    showTemplatePicker = !showTemplatePicker;
+    showSaveTemplateInput = false;
+    newTemplateName = '';
+    if (showTemplatePicker) {
+      invoke("get_templates").then((t: any) => { templates = t; }).catch(() => {});
+    }
+  }
+
+  function insertTemplate(tmpl: typeof templates[0]) {
+    showTemplatePicker = false;
+
+    if (!subject.trim() && tmpl.subject) {
+      subject = tmpl.subject;
+    }
+
+    if (editorEl) {
+      const sigEl = editorEl.querySelector('.rustymail-signature');
+      if (sigEl) {
+        // Preserve signature and everything after it
+        const sigHtml = sigEl.outerHTML;
+        let afterSig = '';
+        let sibling = sigEl.nextSibling;
+        while (sibling) {
+          afterSig += sibling instanceof Element ? sibling.outerHTML : sibling.textContent || '';
+          sibling = sibling.nextSibling;
+        }
+        editorEl.innerHTML = tmpl.body_html + sigHtml + afterSig;
+      } else {
+        editorEl.innerHTML = tmpl.body_html;
+      }
+      bodyHTML = editorEl.innerHTML;
+      editorEl.focus();
+    }
+  }
+
+  async function saveAsTemplate() {
+    const name = newTemplateName.trim();
+    if (!name) return;
+
+    let content = '';
+    if (editorEl) {
+      const sigEl = editorEl.querySelector('.rustymail-signature');
+      if (sigEl) {
+        const range = document.createRange();
+        range.setStartBefore(editorEl.firstChild || editorEl);
+        range.setEndBefore(sigEl);
+        const frag = range.cloneContents();
+        const temp = document.createElement('div');
+        temp.appendChild(frag);
+        content = temp.innerHTML;
+      } else {
+        content = editorEl.innerHTML;
+      }
+    }
+
+    try {
+      await invoke("create_template", {
+        name,
+        subject: subject || '',
+        bodyHtml: content,
+      });
+      templates = await invoke("get_templates") as typeof templates;
+      showSaveTemplateInput = false;
+      showTemplatePicker = false;
+      newTemplateName = '';
+      addToast(`Template "${name}" saved`, "success", 3000);
+    } catch (e: any) {
+      addToast(`Failed to save template: ${e}`, "error");
+    }
+  }
+
   onMount(async () => {
     try {
       const sig = (await invoke("get_setting", { key: "signature" })) as string;
@@ -252,6 +328,10 @@
         if (editorEl) editorEl.innerHTML = initialBodyHTML;
       }
     }
+
+    try {
+      templates = await invoke("get_templates") as typeof templates;
+    } catch {}
 
     unlistenDrop = (await listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
       if (event.payload.paths?.length) {
@@ -801,6 +881,50 @@
           {/if}
         </div>
         <div class="divider"></div>
+        <div class="template-picker-wrap">
+          <button class="toolbar-btn template-btn" onclick={toggleTemplatePicker} title="Templates">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          </button>
+          {#if showTemplatePicker}
+            <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+            <div class="template-backdrop" onclick={() => { showTemplatePicker = false; showSaveTemplateInput = false; }}></div>
+            <div class="template-dropdown">
+              <div class="template-dd-header">Templates</div>
+              {#if templates.length === 0 && !showSaveTemplateInput}
+                <div class="template-empty">No templates yet</div>
+              {:else}
+                <div class="template-list">
+                  {#each templates as tmpl}
+                    <button class="template-option" onclick={() => insertTemplate(tmpl)}>
+                      <span class="template-opt-name">{tmpl.name}</span>
+                      {#if tmpl.subject}
+                        <span class="template-opt-subject">{tmpl.subject}</span>
+                      {/if}
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+              <div class="template-dd-divider"></div>
+              {#if showSaveTemplateInput}
+                <div class="template-save-form">
+                  <input
+                    type="text"
+                    class="template-name-input"
+                    placeholder="Template name"
+                    bind:value={newTemplateName}
+                    onkeydown={(e) => { if (e.key === 'Enter') saveAsTemplate(); if (e.key === 'Escape') { showSaveTemplateInput = false; } }}
+                  />
+                  <button class="template-save-btn" disabled={!newTemplateName.trim()} onclick={saveAsTemplate}>Save</button>
+                </div>
+              {:else}
+                <button class="template-option template-action" onclick={() => { showSaveTemplateInput = true; setTimeout(() => document.querySelector('.template-name-input')?.focus(), 50); }}>
+                  Save current email as template…
+                </button>
+              {/if}
+            </div>
+          {/if}
+        </div>
+        <div class="divider"></div>
         <button class="format-btn" title="Bold" onclick={() => format("bold")}
           >{@html iconBold}</button
         >
@@ -833,8 +957,8 @@
     position: fixed;
     bottom: 0;
     right: 80px;
-    width: 500px;
-    height: 550px;
+    width: 620px;
+    height: 580px;
     background: var(--bg-view, #ffffff);
     border-radius: var(--radius-modal) var(--radius-modal) 0 0;
     box-shadow:
@@ -1383,4 +1507,112 @@
     color: var(--text-secondary);
     margin-left: auto;
   }
+
+  .template-picker-wrap {
+    position: relative;
+    display: flex;
+  }
+  .template-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    width: 32px;
+    height: 32px;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-standard);
+    color: var(--text-secondary);
+    cursor: pointer;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
+  }
+  .template-btn:hover {
+    background: var(--sidebar-hover);
+    color: var(--text-primary);
+  }
+  .template-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 99;
+  }
+  .template-dropdown {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    margin-bottom: 6px;
+    background: var(--bg-view);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-standard);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    z-index: 100;
+    min-width: 280px;
+    max-width: 360px;
+    overflow: hidden;
+  }
+  .template-dd-header {
+    padding: 8px 12px;
+    font-size: var(--font-size-small);
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .template-list {
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  .template-option {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    padding: 8px 12px;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: var(--font-size-base);
+    font-family: inherit;
+    cursor: pointer;
+    text-align: left;
+    gap: 2px;
+  }
+  .template-option:hover { background: var(--sidebar-hover); }
+  .template-opt-name { font-weight: 500; }
+  .template-opt-subject { font-size: var(--font-size-small); color: var(--text-secondary); }
+  .template-dd-divider { height: 1px; background: var(--border-color); }
+  .template-action { color: var(--accent-blue); font-weight: 500; }
+  .template-empty {
+    padding: 12px;
+    font-size: var(--font-size-small);
+    color: var(--text-secondary);
+    text-align: center;
+  }
+  .template-save-form {
+    display: flex;
+    gap: 6px;
+    padding: 8px 12px;
+  }
+  .template-name-input {
+    flex: 1;
+    padding: 6px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-standard);
+    background: var(--bg-view);
+    color: var(--text-primary);
+    font-size: var(--font-size-small);
+    font-family: inherit;
+  }
+  .template-name-input:focus { outline: none; border-color: var(--accent-blue); }
+  .template-save-btn {
+    padding: 6px 12px;
+    border: none;
+    background: var(--accent-blue);
+    color: white;
+    border-radius: var(--radius-standard);
+    font-size: var(--font-size-small);
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .template-save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>
