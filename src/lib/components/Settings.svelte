@@ -72,6 +72,9 @@
   let aiModelDownloaded = $state(false);
   let aiModelSize = $state('');
   let aiDevices: Array<{name: string, description: string, backend: string}> = $state([]);
+  let settingsTemplates = $state<Array<{id: string, name: string, subject: string, body_html: string}>>([]);
+  let editingTemplateId = $state<string | null>(null);
+  let editingTemplateName = $state('');
 
   getVersion().then((v) => (appVersion = v));
 
@@ -121,6 +124,7 @@
         aiDevices = [];
       }
       try { logPath = await invoke("get_log_path") as string; } catch {}
+      try { settingsTemplates = await invoke("get_templates") as typeof settingsTemplates; } catch {}
     } catch (e) {
       console.error("Failed to load settings", e);
     }
@@ -819,6 +823,59 @@
                       saveSetting("signature", e.currentTarget.value)}
                   ></textarea>
                 </div>
+              </div>
+            </div>
+
+            <div class="section" style="margin-top: 24px;">
+              <div class="section-title">Templates</div>
+              <p class="section-desc">
+                Create templates from the compose window using the Templates button. Manage them here.
+              </p>
+              <div class="setting-card">
+                {#if settingsTemplates.length === 0}
+                  <div class="card-row last">
+                    <span class="setting-hint">No templates yet. Open compose and save an email as a template.</span>
+                  </div>
+                {:else}
+                  {#each settingsTemplates as tmpl, i}
+                    <div class="card-row" class:last={i === settingsTemplates.length - 1}>
+                      <div class="setting-row-inline">
+                        <div class="setting-label">
+                          {#if editingTemplateId === tmpl.id}
+                            <input
+                              type="text"
+                              class="template-rename-input"
+                              bind:value={editingTemplateName}
+                              onblur={async () => {
+                                if (editingTemplateName.trim() && editingTemplateName !== tmpl.name) {
+                                  try {
+                                    await invoke("update_template", { id: tmpl.id, name: editingTemplateName.trim(), subject: tmpl.subject, bodyHtml: tmpl.body_html });
+                                    settingsTemplates = await invoke("get_templates") as typeof settingsTemplates;
+                                  } catch {}
+                                }
+                                editingTemplateId = null;
+                              }}
+                              onkeydown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { editingTemplateId = null; } }}
+                            />
+                          {:else}
+                            <span class="setting-name">{tmpl.name}</span>
+                            <span class="setting-hint">{tmpl.subject || '(no subject)'}</span>
+                          {/if}
+                        </div>
+                        <div style="display: flex; gap: 6px;">
+                          <button class="option-btn" onclick={() => { editingTemplateId = tmpl.id; editingTemplateName = tmpl.name; setTimeout(() => document.querySelector('.template-rename-input')?.focus(), 50); }}>Rename</button>
+                          <button class="option-btn" onclick={async () => {
+                            try {
+                              await invoke("delete_template", { id: tmpl.id });
+                              settingsTemplates = settingsTemplates.filter(t => t.id !== tmpl.id);
+                              addToast("Template deleted", "info", 3000);
+                            } catch {}
+                          }}>Delete</button>
+                        </div>
+                      </div>
+                    </div>
+                  {/each}
+                {/if}
               </div>
             </div>
           {:else if activeTab === "notifications"}
@@ -1806,5 +1863,16 @@
     white-space: pre-wrap;
     word-break: break-all;
     margin-top: 12px;
+  }
+
+  .template-rename-input {
+    padding: 4px 8px;
+    border: 1px solid var(--accent-blue);
+    border-radius: var(--radius-standard);
+    background: var(--bg-view);
+    color: var(--text-primary);
+    font-size: var(--font-size-base);
+    font-family: inherit;
+    width: 200px;
   }
 </style>
