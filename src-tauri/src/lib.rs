@@ -7,7 +7,7 @@ mod page_token_store;
 mod subscription_detector;
 mod tray;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tracing_subscriber::{fmt, EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 use tracing_appender::rolling;
 
@@ -16,12 +16,17 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+#[tauri::command]
+fn confirm_quit(app_handle: tauri::AppHandle) {
+    app_handle.exit(0);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(debug_assertions)]
     dotenvy::dotenv().ok();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -65,9 +70,25 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // Hide window instead of closing — app stays in tray
+                let handle = window.app_handle().clone();
+                let pool = handle.state::<sqlx::SqlitePool>();
+                let close_behavior = tauri::async_runtime::block_on(async {
+                    sqlx::query_scalar::<_, String>(
+                        "SELECT value FROM settings WHERE key = 'close_behavior'"
+                    )
+                    .fetch_optional(pool.inner())
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "minimize".to_string())
+                });
+
                 api.prevent_close();
-                let _ = window.hide();
+                if close_behavior == "quit" {
+                    let _ = window.emit("quit-requested", ());
+                } else {
+                    let _ = window.hide();
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -106,6 +127,11 @@ pub fn run() {
             commands::threads::batch_mark_read_status,
             commands::threads::batch_star_threads,
             commands::snooze::batch_snooze_threads,
+            commands::schedule::schedule_send,
+            commands::schedule::cancel_scheduled_send,
+            commands::schedule::get_scheduled_sends,
+            commands::schedule::check_scheduled_sends,
+            commands::schedule::get_scheduled_count,
             commands::threads::batch_move_to_label,
             commands::messages::get_messages,
             commands::messages::sync_thread_messages,
@@ -128,6 +154,7 @@ pub fn run() {
             commands::calendar::create_event,
             commands::calendar::update_event,
             commands::calendar::delete_event,
+            confirm_quit,
             commands::misc::open_external_url,
             commands::misc::get_upcoming_events,
             commands::misc::get_file_size,
@@ -152,6 +179,17 @@ pub fn run() {
             #[cfg(feature = "premium")]
             rustymail_premium::commands::llm::clear_ai_cache,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { api, .. } = &event {
+            api.prevent_exit();
+            if let Some(window) = app_handle.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+                let _ = window.emit("quit-requested", ());
+            }
+        }
+    });
 }
