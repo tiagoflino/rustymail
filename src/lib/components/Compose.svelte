@@ -811,8 +811,7 @@
     <footer class="compose-toolbar">
       <div class="formatting-tools">
         {#if showScheduleMenu}
-          <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-          <div class="schedule-backdrop" onclick={() => { showScheduleMenu = false; showDatePicker = false; }}></div>
+          <div class="schedule-backdrop" onclick={() => { showScheduleMenu = false; showDatePicker = false; }} role="presentation"></div>
         {/if}
         <div class="send-split">
           <button class="send-btn" disabled={isSending} onclick={send}>
@@ -886,8 +885,7 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
           </button>
           {#if showTemplatePicker}
-            <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-            <div class="template-backdrop" onclick={() => { showTemplatePicker = false; showSaveTemplateInput = false; }}></div>
+            <div class="template-backdrop" onclick={() => { showTemplatePicker = false; showSaveTemplateInput = false; }} role="presentation"></div>
             <div class="template-dropdown">
               <div class="template-dd-header">Templates</div>
               {#if templates.length === 0 && !showSaveTemplateInput}
@@ -917,7 +915,7 @@
                   <button class="template-save-btn" disabled={!newTemplateName.trim()} onclick={saveAsTemplate}>Save</button>
                 </div>
               {:else}
-                <button class="template-option template-action" onclick={() => { showSaveTemplateInput = true; setTimeout(() => document.querySelector('.template-name-input')?.focus(), 50); }}>
+                <button class="template-option template-action" onclick={() => { showSaveTemplateInput = true; setTimeout(() => (document.querySelector('.template-name-input') as HTMLElement)?.focus(), 50); }}>
                   Save current email as template…
                 </button>
               {/if}

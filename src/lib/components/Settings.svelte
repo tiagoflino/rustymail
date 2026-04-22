@@ -863,7 +863,7 @@
                           {/if}
                         </div>
                         <div style="display: flex; gap: 6px;">
-                          <button class="option-btn" onclick={() => { editingTemplateId = tmpl.id; editingTemplateName = tmpl.name; setTimeout(() => document.querySelector('.template-rename-input')?.focus(), 50); }}>Rename</button>
+                          <button class="option-btn" onclick={() => { editingTemplateId = tmpl.id; editingTemplateName = tmpl.name; setTimeout(() => (document.querySelector('.template-rename-input') as HTMLElement)?.focus(), 50); }}>Rename</button>
                           <button class="option-btn" onclick={async () => {
                             try {
                               await invoke("delete_template", { id: tmpl.id });
