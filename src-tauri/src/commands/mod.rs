@@ -11,6 +11,7 @@ pub mod sync;
 pub mod threads;
 pub mod subscriptions;
 pub mod schedule;
+pub mod templates;
 
 #[cfg(test)]
 pub(crate) mod test_helpers;

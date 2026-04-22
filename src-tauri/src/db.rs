@@ -144,6 +144,15 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         created_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS templates (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        subject TEXT DEFAULT '',
+        body_html TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_thread_labels_thread ON thread_labels(thread_id);
     CREATE INDEX IF NOT EXISTS idx_thread_labels_label ON thread_labels(label_id);
     CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
@@ -411,6 +420,24 @@ async fn m010_create_scheduled_sends(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+async fn m011_create_templates(pool: &SqlitePool) -> Result<()> {
+    if !has_table(pool, "templates").await {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS templates (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                subject TEXT DEFAULT '',
+                body_html TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )"
+        )
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
 async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     let applied: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
         .fetch_all(pool)
@@ -452,6 +479,12 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
                 .execute(pool)
                 .await;
         }
+        if has_table(pool, "templates").await {
+            let _ = sqlx::query("INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)")
+                .bind(11i64)
+                .execute(pool)
+                .await;
+        }
         let applied_after: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
             .fetch_all(pool)
             .await
@@ -463,7 +496,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 }
 
 async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()> {
-    for version in 1..=10i64 {
+    for version in 1..=11i64 {
         if !applied.contains(&version) {
             println!("[Migration] Running v{}...", version);
             match version {
@@ -477,6 +510,7 @@ async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()
                 8 => m008_add_credential_source(pool).await?,
                 9 => m009_create_ai_summary_cache(pool).await?,
                 10 => m010_create_scheduled_sends(pool).await?,
+                11 => m011_create_templates(pool).await?,
                 _ => {}
             }
             sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
@@ -514,7 +548,7 @@ mod tests {
         for expected in &[
             "accounts", "attachments", "drafts", "history_state", "labels",
             "message_labels", "messages", "messages_fts", "schema_migrations",
-            "settings", "snoozed_threads", "subscriptions", "thread_labels", "threads",
+            "settings", "snoozed_threads", "subscriptions", "templates", "thread_labels", "threads",
         ] {
             assert!(names.contains(expected), "Missing table: {expected}");
         }
@@ -670,7 +704,7 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
             .fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 10);
+        assert_eq!(count, 11);
     }
 
     #[tokio::test]
@@ -744,5 +778,33 @@ mod tests {
         ).bind(now).fetch_all(&pool).await.unwrap();
         assert_eq!(overdue.len(), 1);
         assert_eq!(overdue[0].0, "d1");
+    }
+
+    #[tokio::test]
+    async fn test_templates_table_exists() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+        let result: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='templates'"
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(result.0, 1);
+    }
+
+    #[tokio::test]
+    async fn test_templates_insert_and_query() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+        let now = chrono::Utc::now().timestamp();
+        sqlx::query(
+            "INSERT INTO templates (id, name, subject, body_html, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+        )
+        .bind("t1").bind("Meeting Follow-up").bind("Re: Our Meeting")
+        .bind("<p>Thanks for the meeting</p>").bind(now).bind(now)
+        .execute(&pool).await.unwrap();
+
+        let row: (String, String) = sqlx::query_as("SELECT name, subject FROM templates WHERE id = 't1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(row.0, "Meeting Follow-up");
+        assert_eq!(row.1, "Re: Our Meeting");
     }
 }
