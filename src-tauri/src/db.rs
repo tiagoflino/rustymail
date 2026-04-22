@@ -133,6 +133,17 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         PRIMARY KEY (thread_id, account_id)
     );
 
+    CREATE TABLE IF NOT EXISTS scheduled_sends (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id TEXT NOT NULL,
+        draft_id TEXT NOT NULL,
+        thread_id TEXT,
+        to_recipients TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        send_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_thread_labels_thread ON thread_labels(thread_id);
     CREATE INDEX IF NOT EXISTS idx_thread_labels_label ON thread_labels(label_id);
     CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
@@ -145,6 +156,7 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
     CREATE INDEX IF NOT EXISTS idx_subscriptions_account ON subscriptions(account_id);
     CREATE INDEX IF NOT EXISTS idx_subscriptions_sender ON subscriptions(sender_email);
     CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions(account_id, status);
+    CREATE INDEX IF NOT EXISTS idx_scheduled_sends_time ON scheduled_sends(send_at);
 
     PRAGMA journal_mode=WAL;
     "#;
@@ -376,6 +388,29 @@ async fn m009_create_ai_summary_cache(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+async fn m010_create_scheduled_sends(pool: &SqlitePool) -> Result<()> {
+    if !has_table(pool, "scheduled_sends").await {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS scheduled_sends (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id TEXT NOT NULL,
+                draft_id TEXT NOT NULL,
+                thread_id TEXT,
+                to_recipients TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                send_at INTEGER NOT NULL,
+                created_at INTEGER NOT NULL
+            )"
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_scheduled_sends_time ON scheduled_sends(send_at)")
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
 async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     let applied: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
         .fetch_all(pool)
@@ -411,6 +446,12 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
                 .execute(pool)
                 .await;
         }
+        if has_table(pool, "scheduled_sends").await {
+            let _ = sqlx::query("INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)")
+                .bind(10i64)
+                .execute(pool)
+                .await;
+        }
         let applied_after: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
             .fetch_all(pool)
             .await
@@ -422,7 +463,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 }
 
 async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()> {
-    for version in 1..=9i64 {
+    for version in 1..=10i64 {
         if !applied.contains(&version) {
             println!("[Migration] Running v{}...", version);
             match version {
@@ -435,6 +476,7 @@ async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()
                 7 => m007_create_snoozed_threads(pool).await?,
                 8 => m008_add_credential_source(pool).await?,
                 9 => m009_create_ai_summary_cache(pool).await?,
+                10 => m010_create_scheduled_sends(pool).await?,
                 _ => {}
             }
             sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
@@ -628,7 +670,7 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
             .fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 9);
+        assert_eq!(count, 10);
     }
 
     #[tokio::test]
@@ -652,5 +694,55 @@ mod tests {
         let versions: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations WHERE version = 6")
             .fetch_all(&pool).await.unwrap();
         assert!(!versions.is_empty(), "migration 6 should be applied");
+    }
+
+    #[tokio::test]
+    async fn test_scheduled_sends_table_exists() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+        let result: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='scheduled_sends'"
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(result.0, 1);
+    }
+
+    #[tokio::test]
+    async fn test_scheduled_sends_insert_and_query() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+        let now = chrono::Utc::now().timestamp();
+        sqlx::query(
+            "INSERT INTO scheduled_sends (account_id, draft_id, thread_id, to_recipients, subject, send_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind("acc1").bind("draft123").bind("thread456")
+        .bind("test@test.com").bind("Test Subject")
+        .bind(now + 3600).bind(now)
+        .execute(&pool).await.unwrap();
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM scheduled_sends")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count.0, 1);
+    }
+
+    #[tokio::test]
+    async fn test_scheduled_sends_query_overdue() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+        let now = chrono::Utc::now().timestamp();
+
+        // Insert one overdue and one future
+        sqlx::query(
+            "INSERT INTO scheduled_sends (account_id, draft_id, to_recipients, subject, send_at, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+        ).bind("acc1").bind("d1").bind("a@b.com").bind("Overdue").bind(now - 60).bind(now).execute(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO scheduled_sends (account_id, draft_id, to_recipients, subject, send_at, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+        ).bind("acc1").bind("d2").bind("c@d.com").bind("Future").bind(now + 3600).bind(now).execute(&pool).await.unwrap();
+
+        let overdue: Vec<(String,)> = sqlx::query_as(
+            "SELECT draft_id FROM scheduled_sends WHERE send_at <= ?"
+        ).bind(now).fetch_all(&pool).await.unwrap();
+        assert_eq!(overdue.len(), 1);
+        assert_eq!(overdue[0].0, "d1");
     }
 }

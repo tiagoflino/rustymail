@@ -55,7 +55,13 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             });
         }
         "quit" => {
-            app.exit(0);
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+                let _ = window.emit("quit-requested", ());
+            } else {
+                app.exit(0);
+            }
         }
         _ => {}
     }

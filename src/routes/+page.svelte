@@ -3,6 +3,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { listen } from "@tauri-apps/api/event";
   import { sendNotification, isPermissionGranted, requestPermission, onAction } from "@tauri-apps/plugin-notification";
+  import { ask } from "@tauri-apps/plugin-dialog";
   import { checkForUpdates, setupPeriodicUpdateCheck } from "$lib/utils/updater";
   import { analyzeLinkSafety, type LinkAnalysis } from "$lib/utils/linkSafety";
   import { onMount, onDestroy } from "svelte";
@@ -86,6 +87,7 @@
   let batchSnoozeOpen = $state(false);
   let labelPickerOpen = $state(false);
   let snoozedCount = $state(0);
+  let scheduledCount = $state(0);
 
   let isMacOS = $state(false);
   let sidebarCollapsed = $state(false);
@@ -311,12 +313,14 @@
     const isUnified = syncLabelId.startsWith("UNIFIED_");
     const realLabelId = isUnified ? syncLabelId.replace("UNIFIED_", "") : syncLabelId;
 
-    const isSnoozedView = syncLabelId === "SNOOZED" || syncLabelId === "UNIFIED_SNOOZED";
+    const isSnoozedView = syncLabelId === "SNOOZED" || syncLabelId === "UNIFIED_SNOOZED" || syncLabelId === "SCHEDULED";
 
     try {
       await checkSnoozedThreads();
+      await checkScheduledSends();
+      await refreshScheduledCount();
 
-      // Snoozed is a virtual label — skip Gmail sync, just reload local data
+      // Snoozed/Scheduled are virtual labels — skip Gmail sync, just reload local data
       if (isSnoozedView) {
         await loadThreads(true);
         return;
@@ -546,6 +550,41 @@
         hasMoreRemote = false;
       } catch (e) {
         console.error("Failed to load snoozed threads", e);
+        threads.set([]);
+        totalCount = 0;
+        hasMoreRemote = false;
+      } finally {
+        isLoadingThreads = false;
+      }
+      return;
+    }
+
+    if ($selectedLabelId === "SCHEDULED") {
+      try {
+        const scheduled: any[] = await invoke("get_scheduled_sends");
+        const scheduledList = scheduled.map(s => ({
+          id: `scheduled-${s.id}`,
+          subject: s.subject,
+          sender: s.to_recipients,
+          snippet: `Scheduled for ${new Date(s.send_at * 1000).toLocaleString()}`,
+          date: new Date(s.created_at * 1000).toISOString(),
+          unread: 0,
+          starred: false,
+          star_type: null,
+          important: false,
+          labels: ["SCHEDULED"],
+          message_count: 0,
+          internal_date: s.send_at * 1000,
+          history_id: "",
+          has_attachments: false,
+          account_id: s.account_id,
+        }));
+        threads.set(scheduledList);
+        scheduledCount = scheduledList.length;
+        totalCount = scheduledList.length;
+        hasMoreRemote = false;
+      } catch (e) {
+        console.error("Failed to load scheduled sends", e);
         threads.set([]);
         totalCount = 0;
         hasMoreRemote = false;
@@ -878,8 +917,8 @@
 
     await loadThreads(true);
 
-    // SNOOZED is a virtual label — no Gmail sync needed
-    if (labelId === "SNOOZED" || labelId === "UNIFIED_SNOOZED") return;
+    // SNOOZED and SCHEDULED are virtual labels — no Gmail sync needed
+    if (labelId === "SNOOZED" || labelId === "UNIFIED_SNOOZED" || labelId === "SCHEDULED") return;
 
     const lastSync = labelLastSyncMap[labelId] || 0;
     if (isReselect || Date.now() - lastSync > 300000) {
@@ -1223,6 +1262,26 @@
     } catch (e) {
       console.error("[Snooze] check failed:", e);
     }
+  }
+
+  async function checkScheduledSends() {
+    try {
+      const sent: string[] = await invoke("check_scheduled_sends");
+      if (sent.length > 0) {
+        for (const subject of sent) {
+          addToast(`Scheduled email sent: ${subject}`, "success", 5000);
+        }
+        scheduledCount = Math.max(0, scheduledCount - sent.length);
+      }
+    } catch (e) {
+      console.error("Failed to check scheduled sends:", e);
+    }
+  }
+
+  async function refreshScheduledCount() {
+    try {
+      scheduledCount = await invoke("get_scheduled_count") as number;
+    } catch {}
   }
 
   function handleSnoozeFromPalette(id: string) {
@@ -1590,6 +1649,8 @@
       await loadLabels();
       await loadThreads(true);
       await checkAndSetupSync();
+      await checkScheduledSends();
+      await refreshScheduledCount();
 
       // Load available superstars
       invoke<string[]>("get_available_superstars", { accountId: null })
@@ -1635,10 +1696,32 @@
     listen("tray-check-mail", async () => {
       await performSync(true);
     }).then((fn) => (unlistenTrayCheckMail = fn));
+
+    // Quit confirmation — warn about scheduled/snoozed items
+    listen("quit-requested", async () => {
+      if (snoozedCount === 0 && scheduledCount === 0) {
+        await invoke("confirm_quit");
+        return;
+      }
+
+      const parts: string[] = [];
+      if (scheduledCount > 0) parts.push(`${scheduledCount} scheduled email${scheduledCount > 1 ? 's' : ''}`);
+      if (snoozedCount > 0) parts.push(`${snoozedCount} snoozed thread${snoozedCount > 1 ? 's' : ''}`);
+
+      const confirmed = await ask(
+        `You have ${parts.join(' and ')}. If you quit, scheduled emails won't be sent on time and snoozed threads won't resurface until you reopen the app.`,
+        { title: "Quit Rustymail?", kind: "warning", okLabel: "Quit Anyway", cancelLabel: "Cancel" }
+      );
+
+      if (confirmed) {
+        await invoke("confirm_quit");
+      }
+    }).then((fn) => (unlistenQuitRequested = fn));
   });
 
   let unlistenTrayCompose: (() => void) | null = null;
   let unlistenTrayCheckMail: (() => void) | null = null;
+  let unlistenQuitRequested: (() => void) | null = null;
   let stopUpdateCheck: (() => void) | null = null;
   $effect(() => {
     if ($isAuthenticated && !stopUpdateCheck) {
@@ -1661,6 +1744,7 @@
     if (stopUpdateCheck) stopUpdateCheck();
     if (unlistenTrayCompose) unlistenTrayCompose();
     if (unlistenTrayCheckMail) unlistenTrayCheckMail();
+    if (unlistenQuitRequested) unlistenQuitRequested();
   });
 
   function getActiveLabelName(): string {
@@ -1713,6 +1797,7 @@
       {labels}
       {selectedLabelId}
       snoozedCount={snoozedCount}
+      scheduledCount={scheduledCount}
       oncompose={() => openCompose()}
       onsync={() => performSync(true)}
       onthemecycle={cycleTheme}
