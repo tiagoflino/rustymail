@@ -1697,16 +1697,24 @@
       await performSync(true);
     }).then((fn) => (unlistenTrayCheckMail = fn));
 
-    // Quit confirmation — warn about scheduled/snoozed items
+    // Quit confirmation — fetch fresh counts from backend (not stale component state)
     listen("quit-requested", async () => {
-      if (snoozedCount === 0 && scheduledCount === 0) {
+      let freshScheduled = 0;
+      let freshSnoozed = 0;
+      try { freshScheduled = await invoke("get_scheduled_count") as number; } catch {}
+      try {
+        const snoozedList: any[] = await invoke("get_snoozed_threads");
+        freshSnoozed = snoozedList.length;
+      } catch {}
+
+      if (freshScheduled === 0 && freshSnoozed === 0) {
         await invoke("confirm_quit");
         return;
       }
 
       const parts: string[] = [];
-      if (scheduledCount > 0) parts.push(`${scheduledCount} scheduled email${scheduledCount > 1 ? 's' : ''}`);
-      if (snoozedCount > 0) parts.push(`${snoozedCount} snoozed thread${snoozedCount > 1 ? 's' : ''}`);
+      if (freshScheduled > 0) parts.push(`${freshScheduled} scheduled email${freshScheduled > 1 ? 's' : ''}`);
+      if (freshSnoozed > 0) parts.push(`${freshSnoozed} snoozed thread${freshSnoozed > 1 ? 's' : ''}`);
 
       const confirmed = await ask(
         `You have ${parts.join(' and ')}. If you quit, scheduled emails won't be sent on time and snoozed threads won't resurface until you reopen the app.`,
