@@ -37,6 +37,27 @@ pub async fn send_message(
         .await
         .map_err(|e| e.to_string())?;
 
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "imap" {
+        let config = crate::provider::imap::connection::ImapConfig::from_db(pool.inner(), &account.id).await?;
+        let provider = crate::provider::imap::provider::ImapProvider::new(config);
+        let attachments = match attachment_paths {
+            Some(ref paths) if !paths.is_empty() => crate::email_utils::read_attachment_files(paths)?,
+            _ => vec![],
+        };
+        let msg = crate::email_utils::build_mime_message(
+            &row.email,
+            &to,
+            &subject,
+            &body,
+            in_reply_to.as_deref(),
+            references.as_deref(),
+            false,
+            &attachments,
+        )?;
+        return provider.send_message(&msg).await;
+    }
+
     let attachments = match attachment_paths {
         Some(ref paths) if !paths.is_empty() => crate::email_utils::read_attachment_files(paths)?,
         _ => vec![],

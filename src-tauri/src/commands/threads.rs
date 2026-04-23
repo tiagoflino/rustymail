@@ -924,6 +924,14 @@ pub(crate) async fn fetch_threads_by_ids(
 pub async fn archive_thread(app_handle: tauri::AppHandle, thread_id: String) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
+
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "imap" {
+        let config = crate::provider::imap::connection::ImapConfig::from_db(pool.inner(), &account.id).await?;
+        let provider = crate::provider::imap::provider::ImapProvider::new(config);
+        return provider.archive_thread(pool.inner(), &thread_id).await;
+    }
+
     crate::gmail_api::modify_thread(
         pool.inner(),
         &account.id,
@@ -942,6 +950,14 @@ pub async fn move_thread_to_trash(
 ) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
+
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "imap" {
+        let config = crate::provider::imap::connection::ImapConfig::from_db(pool.inner(), &account.id).await?;
+        let provider = crate::provider::imap::provider::ImapProvider::new(config);
+        return provider.trash_thread(pool.inner(), &thread_id).await;
+    }
+
     crate::gmail_api::trash_thread(pool.inner(), &account.id, &account.access_token, &thread_id)
         .await
 }
@@ -1003,6 +1019,14 @@ pub async fn mark_thread_read_status(
 ) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
+
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "imap" {
+        let config = crate::provider::imap::connection::ImapConfig::from_db(pool.inner(), &account.id).await?;
+        let provider = crate::provider::imap::provider::ImapProvider::new(config);
+        return provider.mark_read(pool.inner(), &thread_id, is_read).await;
+    }
+
     let (add, remove) = if is_read {
         (vec![], vec!["UNREAD".to_string()])
     } else {
@@ -1036,6 +1060,14 @@ pub async fn set_thread_star(
         Some(id) => super::accounts::get_account_by_id(pool.inner(), &id).await?,
         None => get_active_account(pool.inner()).await?,
     };
+
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "imap" {
+        let config = crate::provider::imap::connection::ImapConfig::from_db(pool.inner(), &account.id).await?;
+        let provider = crate::provider::imap::provider::ImapProvider::new(config);
+        let starred = star_label_id.is_some();
+        return provider.set_star(pool.inner(), &thread_id, starred).await;
+    }
 
     // Only remove superstars that actually exist in the user's account
     let existing_stars = sqlx::query_scalar::<_, String>(

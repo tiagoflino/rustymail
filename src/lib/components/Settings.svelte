@@ -46,9 +46,96 @@
 
   let activeTab = $state("accounts");
   let addingAccount = $state(false);
+  let addAccountTab = $state<'google' | 'imap'>('google');
   let showByoFields = $state(false);
   let byoClientId = $state('');
   let byoClientSecret = $state('');
+
+  let imapEmail = $state('');
+  let imapDisplayName = $state('');
+  let imapPassword = $state('');
+  let imapHost = $state('');
+  let imapPort = $state(993);
+  let smtpHost = $state('');
+  let smtpPort = $state(587);
+  let imapUseTls = $state(true);
+  let imapTestResult = $state('');
+  let imapTesting = $state(false);
+  let imapAdding = $state(false);
+
+  const IMAP_PRESETS: Record<string, { imap_host: string; imap_port: number; smtp_host: string; smtp_port: number }> = {
+    'outlook.com': { imap_host: 'outlook.office365.com', imap_port: 993, smtp_host: 'smtp.office365.com', smtp_port: 587 },
+    'hotmail.com': { imap_host: 'outlook.office365.com', imap_port: 993, smtp_host: 'smtp.office365.com', smtp_port: 587 },
+    'live.com': { imap_host: 'outlook.office365.com', imap_port: 993, smtp_host: 'smtp.office365.com', smtp_port: 587 },
+    'yahoo.com': { imap_host: 'imap.mail.yahoo.com', imap_port: 993, smtp_host: 'smtp.mail.yahoo.com', smtp_port: 587 },
+    'fastmail.com': { imap_host: 'imap.fastmail.com', imap_port: 993, smtp_host: 'smtp.fastmail.com', smtp_port: 587 },
+    'icloud.com': { imap_host: 'imap.mail.me.com', imap_port: 993, smtp_host: 'smtp.mail.me.com', smtp_port: 587 },
+    'me.com': { imap_host: 'imap.mail.me.com', imap_port: 993, smtp_host: 'smtp.mail.me.com', smtp_port: 587 },
+    'mac.com': { imap_host: 'imap.mail.me.com', imap_port: 993, smtp_host: 'smtp.mail.me.com', smtp_port: 587 },
+    'aol.com': { imap_host: 'imap.aol.com', imap_port: 993, smtp_host: 'smtp.aol.com', smtp_port: 587 },
+    'zoho.com': { imap_host: 'imap.zoho.com', imap_port: 993, smtp_host: 'smtp.zoho.com', smtp_port: 587 },
+    'protonmail.com': { imap_host: '127.0.0.1', imap_port: 1143, smtp_host: '127.0.0.1', smtp_port: 1025 },
+    'pm.me': { imap_host: '127.0.0.1', imap_port: 1143, smtp_host: '127.0.0.1', smtp_port: 1025 },
+  };
+
+  function applyImapPreset() {
+    const domain = imapEmail.split('@')[1]?.toLowerCase();
+    if (domain && IMAP_PRESETS[domain]) {
+      const preset = IMAP_PRESETS[domain];
+      imapHost = preset.imap_host;
+      imapPort = preset.imap_port;
+      smtpHost = preset.smtp_host;
+      smtpPort = preset.smtp_port;
+    }
+  }
+
+  async function testImapConnection() {
+    imapTesting = true;
+    imapTestResult = '';
+    try {
+      const imapResult: string = await invoke('test_imap_connection', { host: imapHost, port: imapPort, username: imapEmail, password: imapPassword });
+      const smtpResult: string = await invoke('test_smtp_connection', { host: smtpHost, port: smtpPort, username: imapEmail, password: imapPassword });
+      imapTestResult = 'Connection successful';
+    } catch (e: any) {
+      imapTestResult = `Failed: ${e}`;
+    }
+    imapTesting = false;
+  }
+
+  async function addImapAccount() {
+    imapAdding = true;
+    try {
+      await invoke('add_imap_account', {
+        email: imapEmail,
+        displayName: imapDisplayName || imapEmail.split('@')[0],
+        password: imapPassword,
+        imapHost: imapHost,
+        imapPort: imapPort,
+        smtpHost: smtpHost,
+        smtpPort: smtpPort,
+        useTls: imapUseTls,
+      });
+      addingAccount = false;
+      resetImapForm();
+      onclose();
+    } catch (e: any) {
+      imapTestResult = `Failed to add account: ${e}`;
+    }
+    imapAdding = false;
+  }
+
+  function resetImapForm() {
+    imapEmail = '';
+    imapDisplayName = '';
+    imapPassword = '';
+    imapHost = '';
+    imapPort = 993;
+    smtpHost = '';
+    smtpPort = 587;
+    imapUseTls = true;
+    imapTestResult = '';
+    addAccountTab = 'google';
+  }
   let byoIdError = $derived(
     byoClientId && !byoClientId.trim().endsWith('.apps.googleusercontent.com')
       ? 'Must end with .apps.googleusercontent.com'
@@ -299,6 +386,12 @@
                 </button>
               {:else}
                 <div class="add-account-panel">
+                  <div class="provider-tabs" style="display: flex; gap: 0; margin-bottom: 10px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border);">
+                    <button class="provider-tab" class:active={addAccountTab === 'google'} onclick={() => addAccountTab = 'google'} style="flex: 1; padding: 7px 0; font-size: 12px; border: none; cursor: pointer; background: {addAccountTab === 'google' ? 'var(--accent)' : 'var(--bg-secondary)'}; color: {addAccountTab === 'google' ? 'white' : 'var(--text-secondary)'}; font-weight: 500;">Google</button>
+                    <button class="provider-tab" class:active={addAccountTab === 'imap'} onclick={() => addAccountTab = 'imap'} style="flex: 1; padding: 7px 0; font-size: 12px; border: none; cursor: pointer; background: {addAccountTab === 'imap' ? 'var(--accent)' : 'var(--bg-secondary)'}; color: {addAccountTab === 'imap' ? 'white' : 'var(--text-secondary)'}; font-weight: 500;">IMAP / SMTP</button>
+                  </div>
+
+                  {#if addAccountTab === 'google'}
                   <div class="setting-card">
                     <div class="card-row">
                       <button
@@ -366,7 +459,46 @@
                       {/if}
                     </div>
                   </div>
-                  <button class="btn-cancel-add" onclick={() => { addingAccount = false; showByoFields = false; }}>Cancel</button>
+                  {:else}
+                  <div class="setting-card">
+                    <div class="card-row" style="flex-direction: column; align-items: stretch; gap: 8px;">
+                      <input type="email" class="credential-input" placeholder="Email address" bind:value={imapEmail} onblur={applyImapPreset} />
+                      <input type="text" class="credential-input" placeholder="Display name (optional)" bind:value={imapDisplayName} />
+                      <input type="password" class="credential-input" placeholder="Password or app password" bind:value={imapPassword} />
+                      <div style="display: flex; gap: 6px;">
+                        <input type="text" class="credential-input" placeholder="IMAP host" bind:value={imapHost} style="flex: 2;" />
+                        <input type="number" class="credential-input" placeholder="Port" bind:value={imapPort} style="flex: 1; max-width: 80px;" />
+                      </div>
+                      <div style="display: flex; gap: 6px;">
+                        <input type="text" class="credential-input" placeholder="SMTP host" bind:value={smtpHost} style="flex: 2;" />
+                        <input type="number" class="credential-input" placeholder="Port" bind:value={smtpPort} style="flex: 1; max-width: 80px;" />
+                      </div>
+                      <div style="display: flex; gap: 8px; align-items: center;">
+                        <label style="font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; gap: 4px;">
+                          <input type="checkbox" bind:checked={imapUseTls} /> Use TLS
+                        </label>
+                      </div>
+                      {#if imapTestResult}
+                        <div class="imap-test-result" style="font-size: 11px; padding: 6px 8px; border-radius: 4px; background: {imapTestResult.startsWith('Failed') ? 'var(--bg-danger, #fdd)' : 'var(--bg-success, #dfd)'}; color: {imapTestResult.startsWith('Failed') ? 'var(--text-danger, #c00)' : 'var(--text-success, #060)'};">
+                          {imapTestResult}
+                        </div>
+                      {/if}
+                      <div style="display: flex; gap: 6px; justify-content: flex-end;">
+                        <button
+                          class="add-method-btn"
+                          disabled={imapTesting || !imapEmail || !imapPassword || !imapHost || !smtpHost}
+                          onclick={testImapConnection}
+                        >{imapTesting ? 'Testing...' : 'Test Connection'}</button>
+                        <button
+                          class="add-method-btn primary"
+                          disabled={imapAdding || !imapEmail || !imapPassword || !imapHost || !smtpHost}
+                          onclick={addImapAccount}
+                        >{imapAdding ? 'Adding...' : 'Add Account'}</button>
+                      </div>
+                    </div>
+                  </div>
+                  {/if}
+                  <button class="btn-cancel-add" onclick={() => { addingAccount = false; showByoFields = false; resetImapForm(); }}>Cancel</button>
                 </div>
               {/if}
             </div>

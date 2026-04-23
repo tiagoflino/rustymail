@@ -21,6 +21,22 @@ pub async fn sync_gmail_data(
 
     tracing::info!("Sync started for account {}", account.id);
 
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "imap" {
+        let config = crate::provider::imap::connection::ImapConfig::from_db(pool.inner(), &account.id).await?;
+        let provider = crate::provider::imap::provider::ImapProvider::new(config);
+
+        // Sync folders first
+        let _ = provider.list_folders(pool.inner()).await;
+
+        let folder = label_id.as_deref().unwrap_or("INBOX");
+        let result = provider.sync_folder(pool.inner(), folder).await?;
+        return Ok(SyncResult {
+            new_message_ids: vec![],
+            new_thread_ids: result.updated_thread_ids,
+        });
+    }
+
     crate::gmail_api::fetch_and_store_labels(pool.inner(), &account.id, &account.access_token)
         .await?;
 
@@ -212,6 +228,26 @@ pub async fn ensure_threads_hydrated(
             need_hydration.push(tid.clone());
         }
     }
+
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "imap" {
+        let config = crate::provider::imap::connection::ImapConfig::from_db(pool.inner(), &account.id).await?;
+        let provider = crate::provider::imap::provider::ImapProvider::new(config);
+        for tid in &need_hydration {
+            let msg_ids: Vec<(String,)> = sqlx::query_as(
+                "SELECT id FROM messages WHERE thread_id = ? AND body_html = ''",
+            )
+            .bind(tid)
+            .fetch_all(pool.inner())
+            .await
+            .unwrap_or_default();
+            for (mid,) in msg_ids {
+                let _ = provider.fetch_message_body(pool.inner(), &mid).await;
+            }
+        }
+        return Ok(());
+    }
+
     if !need_hydration.is_empty() {
         tracing::info!("Hydration started for {} threads", need_hydration.len());
         crate::gmail_api::batch_hydrate_threads(

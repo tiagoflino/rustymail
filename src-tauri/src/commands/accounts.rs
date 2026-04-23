@@ -805,6 +805,81 @@ pub struct CredentialConfig {
 }
 
 #[tauri::command]
+pub async fn test_imap_connection(
+    host: String,
+    port: u16,
+    username: String,
+    password: String,
+) -> Result<String, String> {
+    crate::provider::imap::connection::test_connection(&host, port, &username, &password).await
+}
+
+#[tauri::command]
+pub async fn test_smtp_connection(
+    host: String,
+    port: u16,
+    username: String,
+    password: String,
+) -> Result<String, String> {
+    crate::provider::imap::smtp::test_smtp_connection(&host, port, &username, &password).await
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn add_imap_account(
+    app_handle: tauri::AppHandle,
+    email: String,
+    display_name: String,
+    password: String,
+    imap_host: String,
+    imap_port: u16,
+    smtp_host: String,
+    smtp_port: u16,
+    use_tls: bool,
+) -> Result<(), String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+
+    crate::credentials::store_imap_password(&email, &password)?;
+
+    // Deactivate other accounts
+    sqlx::query("UPDATE accounts SET is_active = 0")
+        .execute(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query(
+        "INSERT INTO accounts (id, email, display_name, avatar_url, token_expiry, is_active, created_at, provider_type)
+         VALUES (?, ?, ?, '', 0, 1, ?, 'imap')
+         ON CONFLICT(id) DO UPDATE SET is_active = 1, provider_type = 'imap', display_name = excluded.display_name",
+    )
+    .bind(&email)
+    .bind(&email)
+    .bind(&display_name)
+    .bind(now)
+    .execute(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    sqlx::query(
+        "INSERT INTO imap_config (account_id, imap_host, imap_port, smtp_host, smtp_port, auth_method, use_tls)
+         VALUES (?, ?, ?, ?, ?, 'password', ?)
+         ON CONFLICT(account_id) DO UPDATE SET imap_host=excluded.imap_host, imap_port=excluded.imap_port, smtp_host=excluded.smtp_host, smtp_port=excluded.smtp_port, use_tls=excluded.use_tls",
+    )
+    .bind(&email)
+    .bind(&imap_host)
+    .bind(imap_port as i32)
+    .bind(&smtp_host)
+    .bind(smtp_port as i32)
+    .bind(if use_tls { 1 } else { 0 })
+    .execute(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn get_credential_config(app_handle: tauri::AppHandle) -> Result<CredentialConfig, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let source = determine_credential_source(pool.inner()).await;
