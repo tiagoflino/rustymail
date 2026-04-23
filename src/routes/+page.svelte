@@ -317,7 +317,10 @@
         activeAccount = status.active_account;
         allAccounts = status.accounts;
         try {
-          capabilities = await invoke("get_provider_capabilities", { accountId: status.active_account.id });
+          const caps = await invoke("get_provider_capabilities", { accountId: status.active_account.id }) as ProviderCapabilities | null;
+          if (caps && typeof caps.has_labels === 'boolean') {
+            capabilities = caps;
+          }
         } catch {
           // defaults are already Gmail-like
         }
