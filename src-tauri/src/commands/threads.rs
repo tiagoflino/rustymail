@@ -932,6 +932,10 @@ pub async fn archive_thread(app_handle: tauri::AppHandle, thread_id: String) -> 
         return provider.archive_thread(pool.inner(), &thread_id).await;
     }
 
+    if provider_type == "outlook" {
+        return crate::outlook_api::outlook_archive_thread(pool.inner(), &account.access_token, &thread_id).await;
+    }
+
     crate::gmail_api::modify_thread(
         pool.inner(),
         &account.id,
@@ -956,6 +960,10 @@ pub async fn move_thread_to_trash(
         let config = crate::provider::imap::connection::ImapConfig::from_db(pool.inner(), &account.id).await?;
         let provider = crate::provider::imap::provider::ImapProvider::new(config);
         return provider.trash_thread(pool.inner(), &thread_id).await;
+    }
+
+    if provider_type == "outlook" {
+        return crate::outlook_api::outlook_trash_thread(pool.inner(), &account.access_token, &thread_id).await;
     }
 
     crate::gmail_api::trash_thread(pool.inner(), &account.id, &account.access_token, &thread_id)
@@ -1027,6 +1035,10 @@ pub async fn mark_thread_read_status(
         return provider.mark_read(pool.inner(), &thread_id, is_read).await;
     }
 
+    if provider_type == "outlook" {
+        return crate::outlook_api::outlook_mark_read(pool.inner(), &account.access_token, &thread_id, is_read).await;
+    }
+
     let (add, remove) = if is_read {
         (vec![], vec!["UNREAD".to_string()])
     } else {
@@ -1067,6 +1079,11 @@ pub async fn set_thread_star(
         let provider = crate::provider::imap::provider::ImapProvider::new(config);
         let starred = star_label_id.is_some();
         return provider.set_star(pool.inner(), &thread_id, starred).await;
+    }
+
+    if provider_type == "outlook" {
+        let starred = star_label_id.is_some();
+        return crate::outlook_api::outlook_set_star(pool.inner(), &account.access_token, &thread_id, starred).await;
     }
 
     // Only remove superstars that actually exist in the user's account

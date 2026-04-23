@@ -4,6 +4,7 @@ mod credentials;
 mod db;
 pub mod email_utils;
 mod gmail_api;
+pub mod outlook_api;
 mod page_token_store;
 pub mod provider;
 mod subscription_detector;
@@ -97,6 +98,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             commands::accounts::authenticate_gmail,
+            commands::accounts::authenticate_microsoft,
             commands::accounts::check_auth_status,
             commands::accounts::get_accounts,
             commands::accounts::switch_account,

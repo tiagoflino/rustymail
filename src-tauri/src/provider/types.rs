@@ -33,6 +33,18 @@ impl ProviderCapabilities {
             has_calendar: false,
         }
     }
+
+    pub fn outlook() -> Self {
+        Self {
+            has_labels: false,
+            has_categories: false,
+            has_superstars: false,
+            has_important: false,
+            has_server_threading: true,
+            has_drive_upload: false,
+            has_calendar: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -58,6 +70,7 @@ pub struct Folder {
 pub enum ProviderType {
     Gmail,
     Imap,
+    Outlook,
 }
 
 impl ProviderType {
@@ -65,12 +78,14 @@ impl ProviderType {
         match self {
             ProviderType::Gmail => "gmail",
             ProviderType::Imap => "imap",
+            ProviderType::Outlook => "outlook",
         }
     }
 
     pub fn parse(s: &str) -> Self {
         match s {
             "imap" => ProviderType::Imap,
+            "outlook" => ProviderType::Outlook,
             _ => ProviderType::Gmail,
         }
     }
@@ -79,6 +94,7 @@ impl ProviderType {
         match self {
             ProviderType::Gmail => ProviderCapabilities::gmail(),
             ProviderType::Imap => ProviderCapabilities::imap(),
+            ProviderType::Outlook => ProviderCapabilities::outlook(),
         }
     }
 }
@@ -112,12 +128,26 @@ mod tests {
     }
 
     #[test]
+    fn test_outlook_capabilities() {
+        let caps = ProviderCapabilities::outlook();
+        assert!(!caps.has_labels);
+        assert!(!caps.has_categories);
+        assert!(!caps.has_superstars);
+        assert!(!caps.has_important);
+        assert!(caps.has_server_threading);
+        assert!(!caps.has_drive_upload);
+        assert!(caps.has_calendar);
+    }
+
+    #[test]
     fn test_provider_type_roundtrip() {
         assert_eq!(ProviderType::parse("gmail"), ProviderType::Gmail);
         assert_eq!(ProviderType::parse("imap"), ProviderType::Imap);
+        assert_eq!(ProviderType::parse("outlook"), ProviderType::Outlook);
         assert_eq!(ProviderType::parse("unknown"), ProviderType::Gmail);
         assert_eq!(ProviderType::Gmail.as_str(), "gmail");
         assert_eq!(ProviderType::Imap.as_str(), "imap");
+        assert_eq!(ProviderType::Outlook.as_str(), "outlook");
     }
 
     #[test]

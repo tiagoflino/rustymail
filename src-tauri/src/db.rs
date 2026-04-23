@@ -173,6 +173,13 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         PRIMARY KEY (account_id, folder)
     );
 
+    CREATE TABLE IF NOT EXISTS outlook_sync_state (
+        account_id TEXT NOT NULL,
+        folder_id TEXT NOT NULL,
+        delta_link TEXT,
+        PRIMARY KEY (account_id, folder_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_thread_labels_thread ON thread_labels(thread_id);
     CREATE INDEX IF NOT EXISTS idx_thread_labels_label ON thread_labels(label_id);
     CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
@@ -504,6 +511,22 @@ async fn m014_create_imap_sync_state(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+async fn m015_create_outlook_sync_state(pool: &SqlitePool) -> Result<()> {
+    if !has_table(pool, "outlook_sync_state").await {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS outlook_sync_state (
+                account_id TEXT NOT NULL,
+                folder_id TEXT NOT NULL,
+                delta_link TEXT,
+                PRIMARY KEY (account_id, folder_id)
+            )"
+        )
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
 async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     let applied: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
         .fetch_all(pool)
@@ -569,6 +592,12 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
                 .execute(pool)
                 .await;
         }
+        if has_table(pool, "outlook_sync_state").await {
+            let _ = sqlx::query("INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)")
+                .bind(15i64)
+                .execute(pool)
+                .await;
+        }
         let applied_after: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
             .fetch_all(pool)
             .await
@@ -580,7 +609,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 }
 
 async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()> {
-    for version in 1..=14i64 {
+    for version in 1..=15i64 {
         if !applied.contains(&version) {
             println!("[Migration] Running v{}...", version);
             match version {
@@ -598,6 +627,7 @@ async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()
                 12 => m012_add_provider_type(pool).await?,
                 13 => m013_create_imap_config(pool).await?,
                 14 => m014_create_imap_sync_state(pool).await?,
+                15 => m015_create_outlook_sync_state(pool).await?,
                 _ => {}
             }
             sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
@@ -791,7 +821,7 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
             .fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 14);
+        assert_eq!(count, 15);
     }
 
     #[tokio::test]

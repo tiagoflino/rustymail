@@ -58,6 +58,14 @@ pub async fn send_message(
         return provider.send_message(&msg).await;
     }
 
+    if provider_type == "outlook" {
+        let attachments = match attachment_paths {
+            Some(ref paths) if !paths.is_empty() => crate::email_utils::read_attachment_files(paths)?,
+            _ => vec![],
+        };
+        return crate::outlook_api::outlook_send_message(&account.access_token, &to, &subject, &body, &attachments).await;
+    }
+
     let attachments = match attachment_paths {
         Some(ref paths) if !paths.is_empty() => crate::email_utils::read_attachment_files(paths)?,
         _ => vec![],

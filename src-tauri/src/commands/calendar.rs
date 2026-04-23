@@ -10,6 +10,10 @@ pub async fn get_events(
 ) -> Result<Vec<CalendarEvent>, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "outlook" {
+        return crate::outlook_api::outlook_get_events(&account.access_token, &time_min, &time_max).await;
+    }
     crate::calendar_api::get_events(&account.access_token, &time_min, &time_max).await
 }
 
@@ -21,6 +25,11 @@ pub async fn create_event(
     tracing::info!("Calendar event created");
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "outlook" {
+        return crate::outlook_api::outlook_create_event(&account.access_token, &event).await
+            .map_err(|e| { tracing::error!("Outlook Calendar API error: {}", e); e });
+    }
     crate::calendar_api::create_event(&account.access_token, &event).await
         .map_err(|e| { tracing::error!("Calendar API error: {}", e); e })
 }
@@ -34,6 +43,11 @@ pub async fn update_event(
     tracing::info!("Calendar event updated: {}", event_id);
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "outlook" {
+        return crate::outlook_api::outlook_update_event(&account.access_token, &event_id, &event).await
+            .map_err(|e| { tracing::error!("Outlook Calendar API error: {}", e); e });
+    }
     crate::calendar_api::update_event(&account.access_token, &event_id, &event).await
         .map_err(|e| { tracing::error!("Calendar API error: {}", e); e })
 }
@@ -46,6 +60,11 @@ pub async fn delete_event(
     tracing::info!("Calendar event deleted: {}", event_id);
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "outlook" {
+        return crate::outlook_api::outlook_delete_event(&account.access_token, &event_id).await
+            .map_err(|e| { tracing::error!("Outlook Calendar API error: {}", e); e });
+    }
     crate::calendar_api::delete_event(&account.access_token, &event_id).await
         .map_err(|e| { tracing::error!("Calendar API error: {}", e); e })
 }

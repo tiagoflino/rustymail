@@ -55,13 +55,32 @@ pub(crate) async fn get_active_account(pool: &sqlx::SqlitePool) -> Result<Active
         .await
         .map_err(|e| format!("No active account found: {}", e))?;
 
-    if row.provider_type != "gmail" {
+    if row.provider_type == "imap" {
         let access_token = crate::credentials::get_access_token(&row.id).unwrap_or_default();
         return Ok(ActiveAccountFull {
             id: row.id,
             access_token,
             refresh_token: None,
             token_expiry: None,
+        });
+    }
+
+    if row.provider_type == "outlook" {
+        let now = chrono::Utc::now().timestamp();
+        let expiry = row.token_expiry.unwrap_or(0);
+        if expiry > 0 && expiry - 300 < now {
+            let token_to_use = crate::credentials::get_refresh_token(&row.id).unwrap_or_default();
+            if !token_to_use.is_empty() {
+                let _ = refresh_microsoft_token(pool, &row.id, &token_to_use).await;
+            }
+        }
+        let access_token = crate::credentials::get_access_token(&row.id).unwrap_or_default();
+        let refresh_token = crate::credentials::get_refresh_token(&row.id).ok();
+        return Ok(ActiveAccountFull {
+            id: row.id,
+            access_token,
+            refresh_token,
+            token_expiry: row.token_expiry,
         });
     }
 
@@ -111,13 +130,32 @@ pub(crate) async fn get_account_by_id(pool: &sqlx::SqlitePool, account_id: &str)
         .await
         .map_err(|e| format!("Account parameter not found: {}", e))?;
 
-    if row.provider_type != "gmail" {
+    if row.provider_type == "imap" {
         let access_token = crate::credentials::get_access_token(&row.id).unwrap_or_default();
         return Ok(ActiveAccountFull {
             id: row.id,
             access_token,
             refresh_token: None,
             token_expiry: None,
+        });
+    }
+
+    if row.provider_type == "outlook" {
+        let now = chrono::Utc::now().timestamp();
+        let expiry = row.token_expiry.unwrap_or(0);
+        if expiry > 0 && expiry - 300 < now {
+            let token_to_use = crate::credentials::get_refresh_token(&row.id).unwrap_or_default();
+            if !token_to_use.is_empty() {
+                let _ = refresh_microsoft_token(pool, &row.id, &token_to_use).await;
+            }
+        }
+        let access_token = crate::credentials::get_access_token(&row.id).unwrap_or_default();
+        let refresh_token = crate::credentials::get_refresh_token(&row.id).ok();
+        return Ok(ActiveAccountFull {
+            id: row.id,
+            access_token,
+            refresh_token,
+            token_expiry: row.token_expiry,
         });
     }
 
@@ -894,6 +932,282 @@ pub async fn get_credential_config(app_handle: tauri::AppHandle) -> Result<Crede
         has_custom_credentials: source == "custom",
         default_source: source,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Microsoft OAuth2 flow (public client with PKCE, no client_secret)
+// ---------------------------------------------------------------------------
+
+#[cfg(not(debug_assertions))]
+fn get_microsoft_client_id() -> Result<String, String> {
+    Ok(env!("RUSTYMAIL_MICROSOFT_CLIENT_ID").to_string())
+}
+
+#[cfg(debug_assertions)]
+fn get_microsoft_client_id() -> Result<String, String> {
+    env::var("RUSTYMAIL_MICROSOFT_CLIENT_ID")
+        .map(|v| v.trim().to_string())
+        .map_err(|_| "RUSTYMAIL_MICROSOFT_CLIENT_ID not found in environment".to_string())
+}
+
+const MICROSOFT_SCOPES: &str = "openid offline_access Mail.ReadWrite Mail.Send Calendars.ReadWrite Contacts.Read";
+
+pub async fn start_microsoft_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String> {
+    tracing::info!("Microsoft OAuth flow started");
+    let client_id = get_microsoft_client_id()?;
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| e.to_string())?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    let redirect_url = format!("http://127.0.0.1:{}", port);
+
+    let client = BasicClient::new(ClientId::new(client_id.clone()))
+        .set_auth_uri(AuthUrl::new("https://login.microsoftonline.com/common/oauth2/v2.0/authorize".to_string()).unwrap())
+        .set_token_uri(TokenUrl::new("https://login.microsoftonline.com/common/oauth2/v2.0/token".to_string()).unwrap())
+        .set_redirect_uri(RedirectUrl::new(redirect_url.clone()).unwrap());
+
+    let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+
+    let mut auth_request = client
+        .authorize_url(CsrfToken::new_random);
+
+    for scope in MICROSOFT_SCOPES.split_whitespace() {
+        auth_request = auth_request.add_scope(oauth2::Scope::new(scope.to_string()));
+    }
+
+    let (auth_url, csrf_token) = auth_request
+        .set_pkce_challenge(pkce_challenge)
+        .add_extra_param("response_mode", "query")
+        .url();
+
+    match tauri_plugin_opener::open_url(auth_url.as_str(), None::<&str>) {
+        Ok(_) => tracing::info!("Microsoft OAuth browser opened"),
+        Err(e) => {
+            tracing::error!("Microsoft OAuth failed to open browser: {}", e);
+            return Err(format!("Failed to open browser: {}", e));
+        }
+    }
+
+    tracing::info!("Microsoft OAuth waiting for callback");
+    let (mut stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
+    let mut reader = BufReader::new(&mut stream);
+    let mut request_line = String::new();
+    reader
+        .read_line(&mut request_line)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut code = String::new();
+    let mut state = String::new();
+    let mut error_param = String::new();
+
+    if request_line.starts_with("GET") {
+        let parts: Vec<&str> = request_line.split_whitespace().collect();
+        if parts.len() > 1 {
+            let path = parts[1];
+            if let Some(query) = path.split('?').nth(1) {
+                for param in query.split('&') {
+                    let mut kv = param.split('=');
+                    if let (Some(k), Some(v)) = (kv.next(), kv.next()) {
+                        if k == "code" {
+                            code = v.to_string();
+                        } else if k == "state" {
+                            state = v.to_string();
+                        } else if k == "error" {
+                            error_param = v.to_string();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !error_param.is_empty() {
+        tracing::warn!("Microsoft OAuth cancelled or denied: {}", error_param);
+        let response = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body style='font-family:-apple-system,system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;color:#333;'><div style='text-align:center'><h2>Authentication Cancelled</h2><p>You did not approve the required permissions. You can close this tab and return to Rustymail.</p></div></body></html>";
+        let _ = stream.write_all(response.as_bytes()).await;
+        return Err(format!("Microsoft authentication was cancelled or denied: {}", error_param));
+    }
+
+    if code.is_empty() {
+        let response = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body style='font-family:-apple-system,system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;color:#333;'><div style='text-align:center'><h2>Authentication Failed</h2><p>No authorization code received. You can close this tab and return to Rustymail.</p></div></body></html>";
+        let _ = stream.write_all(response.as_bytes()).await;
+        return Err("No authorization code received from Microsoft.".to_string());
+    }
+
+    let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body style='font-family:-apple-system,system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;color:#333;'><div style='text-align:center'><h2>Authentication successful!</h2><p>You can close this tab and return to Rustymail.</p></div></body></html>";
+    let _ = stream.write_all(response.as_bytes()).await;
+
+    if state != *csrf_token.secret() {
+        return Err("CSRF token mismatch".to_string());
+    }
+
+    tracing::info!("Microsoft OAuth exchanging code for tokens");
+    let http_client = reqwest::ClientBuilder::new()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
+    // Public client: no client_secret, use PKCE only
+    let token_result = client
+        .exchange_code(AuthorizationCode::new(code))
+        .set_pkce_verifier(pkce_verifier)
+        .request_async(&http_client)
+        .await
+        .map_err(|e| {
+            tracing::error!("Microsoft OAuth token exchange failed: {}", e);
+            e.to_string()
+        })?;
+
+    let access_token = token_result.access_token().secret().to_string();
+    let refresh_token = token_result
+        .refresh_token()
+        .map(|r| r.secret().clone())
+        .unwrap_or_default();
+    let expires_in = token_result
+        .expires_in()
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(3500);
+
+    tracing::info!("Microsoft tokens acquired, fetching profile");
+
+    // Fetch profile from Graph API
+    let graph_client = reqwest::Client::new();
+    let (email, display_name) = match graph_client
+        .get("https://graph.microsoft.com/v1.0/me")
+        .header("Authorization", format!("Bearer {}", &access_token))
+        .send()
+        .await
+    {
+        Ok(res) => {
+            if let Ok(body) = res.json::<serde_json::Value>().await {
+                let mail = body["mail"]
+                    .as_str()
+                    .or_else(|| body["userPrincipalName"].as_str())
+                    .unwrap_or("unknown@outlook.com")
+                    .to_string();
+                let name = body["displayName"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
+                (mail, name)
+            } else {
+                ("unknown@outlook.com".to_string(), String::new())
+            }
+        }
+        Err(_) => ("unknown@outlook.com".to_string(), String::new()),
+    };
+
+    // Fetch avatar (may 404, that's fine)
+    let avatar_url = match graph_client
+        .get("https://graph.microsoft.com/v1.0/me/photo/$value")
+        .header("Authorization", format!("Bearer {}", &access_token))
+        .send()
+        .await
+    {
+        Ok(res) if res.status().is_success() => {
+            if let Ok(bytes) = res.bytes().await {
+                let b64 = base64::encode(&bytes);
+                format!("data:image/jpeg;base64,{}", b64)
+            } else {
+                String::new()
+            }
+        }
+        _ => String::new(),
+    };
+
+    let account_id = email.clone();
+    tracing::info!("Microsoft OAuth flow completed for {}", account_id);
+
+    crate::credentials::store_tokens(&account_id, &access_token, &refresh_token)?;
+
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let _ = sqlx::query("UPDATE accounts SET is_active = 0")
+        .execute(pool.inner())
+        .await;
+
+    let sql = "INSERT INTO accounts (id, email, display_name, avatar_url, token_expiry, is_active, created_at, provider_type)
+               VALUES (?, ?, ?, ?, ?, 1, ?, 'outlook')
+               ON CONFLICT(id) DO UPDATE SET
+                 email = excluded.email,
+                 display_name = excluded.display_name,
+                 avatar_url = excluded.avatar_url,
+                 token_expiry = excluded.token_expiry,
+                 is_active = 1,
+                 provider_type = 'outlook'";
+    sqlx::query(sql)
+        .bind(&account_id)
+        .bind(&email)
+        .bind(&display_name)
+        .bind(&avatar_url)
+        .bind(chrono::Utc::now().timestamp() + expires_in)
+        .bind(chrono::Utc::now().timestamp())
+        .execute(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+async fn refresh_microsoft_token(
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
+    refresh_token: &str,
+) -> Result<(), String> {
+    tracing::info!("Microsoft token refresh for {}", account_id);
+    let client_id = get_microsoft_client_id()?;
+
+    let client = reqwest::Client::new();
+    let res = client
+        .post("https://login.microsoftonline.com/common/oauth2/v2.0/token")
+        .form(&[
+            ("client_id", client_id.as_str()),
+            ("refresh_token", refresh_token),
+            ("grant_type", "refresh_token"),
+            ("scope", MICROSOFT_SCOPES),
+        ])
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !res.status().is_success() {
+        let error_body: serde_json::Value = res.json().await.unwrap_or_default();
+        let error_code = error_body["error"].as_str().unwrap_or("");
+        if error_code == "invalid_grant" {
+            tracing::warn!("Microsoft token refresh invalid_grant for {}", account_id);
+            let _ = crate::credentials::delete_tokens(account_id);
+            return Err("invalid_grant: Please re-authenticate your Microsoft account.".to_string());
+        }
+        tracing::error!("Microsoft token refresh failed for {}: {}", account_id, error_body);
+        return Err(format!("Microsoft token refresh failed: {}", error_body));
+    }
+
+    let body: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+    let new_access_token = body["access_token"].as_str().unwrap_or_default();
+    let new_refresh_token = body["refresh_token"].as_str().unwrap_or(refresh_token);
+    let expires_in = body["expires_in"].as_i64().unwrap_or(3500);
+    let new_expiry = chrono::Utc::now().timestamp() + expires_in;
+
+    crate::credentials::update_access_token(account_id, new_access_token)?;
+    // Microsoft returns rotating refresh tokens
+    if new_refresh_token != refresh_token {
+        crate::credentials::store_tokens(account_id, new_access_token, new_refresh_token)?;
+    }
+
+    sqlx::query("UPDATE accounts SET token_expiry = ? WHERE id = ?")
+        .bind(new_expiry)
+        .bind(account_id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn authenticate_microsoft(app_handle: tauri::AppHandle) -> Result<(), String> {
+    start_microsoft_oauth_flow(app_handle).await
 }
 
 #[cfg(test)]

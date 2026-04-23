@@ -40,6 +40,16 @@ pub async fn sync_gmail_data(
         });
     }
 
+    if provider_type == "outlook" {
+        crate::outlook_api::fetch_and_store_outlook_folders(pool.inner(), &account.id, &account.access_token).await?;
+        let folder = label_id.as_deref().unwrap_or("inbox");
+        let delta = crate::outlook_api::outlook_delta_sync(pool.inner(), &account.id, &account.access_token, folder).await?;
+        return Ok(SyncResult {
+            new_message_ids: vec![],
+            new_thread_ids: delta.new_thread_ids,
+        });
+    }
+
     crate::gmail_api::fetch_and_store_labels(pool.inner(), &account.id, &account.access_token)
         .await?;
 
@@ -246,6 +256,27 @@ pub async fn ensure_threads_hydrated(
             .unwrap_or_default();
             for (mid,) in msg_ids {
                 let _ = provider.fetch_message_body(pool.inner(), &mid).await;
+            }
+        }
+        return Ok(());
+    }
+
+    if provider_type == "outlook" {
+        for tid in &need_hydration {
+            let msg_ids: Vec<(String,)> = sqlx::query_as(
+                "SELECT id FROM messages WHERE thread_id = ? AND body_html = ''",
+            )
+            .bind(tid)
+            .fetch_all(pool.inner())
+            .await
+            .unwrap_or_default();
+            for (mid,) in msg_ids {
+                let _ = crate::outlook_api::fetch_outlook_message_body(
+                    pool.inner(),
+                    &account.access_token,
+                    &mid,
+                )
+                .await;
             }
         }
         return Ok(());

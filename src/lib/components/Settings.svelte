@@ -46,7 +46,7 @@
 
   let activeTab = $state("accounts");
   let addingAccount = $state(false);
-  let addAccountTab = $state<'google' | 'imap'>('google');
+  let addAccountTab = $state<'google' | 'outlook' | 'imap'>('google');
   let showByoFields = $state(false);
   let byoClientId = $state('');
   let byoClientSecret = $state('');
@@ -404,6 +404,7 @@
                 <div class="add-account-panel">
                   <div class="provider-tabs" style="display: flex; gap: 0; margin-bottom: 10px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border);">
                     <button class="provider-tab" class:active={addAccountTab === 'google'} onclick={() => addAccountTab = 'google'} style="flex: 1; padding: 7px 0; font-size: 12px; border: none; cursor: pointer; background: {addAccountTab === 'google' ? 'var(--accent)' : 'var(--bg-secondary)'}; color: {addAccountTab === 'google' ? 'white' : 'var(--text-secondary)'}; font-weight: 500;">Google</button>
+                    <button class="provider-tab" class:active={addAccountTab === 'outlook'} onclick={() => addAccountTab = 'outlook'} style="flex: 1; padding: 7px 0; font-size: 12px; border: none; cursor: pointer; background: {addAccountTab === 'outlook' ? 'var(--accent)' : 'var(--bg-secondary)'}; color: {addAccountTab === 'outlook' ? 'white' : 'var(--text-secondary)'}; font-weight: 500;">Outlook</button>
                     <button class="provider-tab" class:active={addAccountTab === 'imap'} onclick={() => addAccountTab = 'imap'} style="flex: 1; padding: 7px 0; font-size: 12px; border: none; cursor: pointer; background: {addAccountTab === 'imap' ? 'var(--accent)' : 'var(--bg-secondary)'}; color: {addAccountTab === 'imap' ? 'white' : 'var(--text-secondary)'}; font-weight: 500;">IMAP / SMTP</button>
                   </div>
 
@@ -473,6 +474,21 @@
                           </div>
                         </div>
                       {/if}
+                    </div>
+                  </div>
+                  {:else if addAccountTab === 'outlook'}
+                  <div class="setting-card">
+                    <div class="card-row">
+                      <button
+                        class="add-method-btn primary"
+                        onclick={() => { addingAccount = false; invoke("authenticate_microsoft"); }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M11.5 3v8.5H3V3h8.5zm1 0H21v8.5h-8.5V3zM3 12.5h8.5V21H3v-8.5zm9.5 0H21V21h-8.5v-8.5z" fill="#F25022"/><path d="M12.5 3H21v8.5h-8.5V3z" fill="#7FBA00"/><path d="M3 12.5h8.5V21H3v-8.5z" fill="#00A4EF"/><path d="M12.5 12.5H21V21h-8.5v-8.5z" fill="#FFB900"/></svg>
+                        Sign in with Microsoft
+                      </button>
+                    </div>
+                    <div class="card-row last">
+                      <span class="setting-hint" style="font-size: 11px; color: var(--text-tertiary);">Works with Outlook.com, Hotmail, Live, and Microsoft 365 accounts</span>
                     </div>
                   </div>
                   {:else}
