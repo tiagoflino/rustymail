@@ -2,8 +2,10 @@ mod commands;
 pub mod calendar_api;
 mod credentials;
 mod db;
+pub mod email_utils;
 mod gmail_api;
 mod page_token_store;
+pub mod provider;
 mod subscription_detector;
 mod tray;
 
@@ -99,6 +101,7 @@ pub fn run() {
             commands::accounts::switch_account,
             commands::accounts::remove_account,
             commands::accounts::get_credential_config,
+            commands::accounts::get_provider_capabilities,
             commands::settings::get_settings,
             commands::settings::get_setting,
             commands::settings::update_setting,

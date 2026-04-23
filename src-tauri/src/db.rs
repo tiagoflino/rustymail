@@ -15,7 +15,8 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         token_expiry INTEGER,
         is_active INTEGER DEFAULT 1,
         created_at INTEGER,
-        credential_source TEXT DEFAULT 'builtin'
+        credential_source TEXT DEFAULT 'builtin',
+        provider_type TEXT DEFAULT 'gmail'
     );
 
     CREATE TABLE IF NOT EXISTS labels (
@@ -151,6 +152,25 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         body_html TEXT NOT NULL DEFAULT '',
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS imap_config (
+        account_id TEXT PRIMARY KEY,
+        imap_host TEXT NOT NULL,
+        imap_port INTEGER NOT NULL DEFAULT 993,
+        smtp_host TEXT NOT NULL,
+        smtp_port INTEGER NOT NULL DEFAULT 587,
+        auth_method TEXT NOT NULL DEFAULT 'password',
+        use_tls INTEGER NOT NULL DEFAULT 1
+    );
+
+    CREATE TABLE IF NOT EXISTS imap_sync_state (
+        account_id TEXT NOT NULL,
+        folder TEXT NOT NULL,
+        uid_validity INTEGER,
+        highest_uid INTEGER,
+        highest_modseq INTEGER,
+        PRIMARY KEY (account_id, folder)
     );
 
     CREATE INDEX IF NOT EXISTS idx_thread_labels_thread ON thread_labels(thread_id);
@@ -438,6 +458,52 @@ async fn m011_create_templates(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+async fn m012_add_provider_type(pool: &SqlitePool) -> Result<()> {
+    if !has_column(pool, "accounts", "provider_type").await {
+        sqlx::query("ALTER TABLE accounts ADD COLUMN provider_type TEXT DEFAULT 'gmail'")
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
+async fn m013_create_imap_config(pool: &SqlitePool) -> Result<()> {
+    if !has_table(pool, "imap_config").await {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS imap_config (
+                account_id TEXT PRIMARY KEY,
+                imap_host TEXT NOT NULL,
+                imap_port INTEGER NOT NULL DEFAULT 993,
+                smtp_host TEXT NOT NULL,
+                smtp_port INTEGER NOT NULL DEFAULT 587,
+                auth_method TEXT NOT NULL DEFAULT 'password',
+                use_tls INTEGER NOT NULL DEFAULT 1
+            )"
+        )
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
+async fn m014_create_imap_sync_state(pool: &SqlitePool) -> Result<()> {
+    if !has_table(pool, "imap_sync_state").await {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS imap_sync_state (
+                account_id TEXT NOT NULL,
+                folder TEXT NOT NULL,
+                uid_validity INTEGER,
+                highest_uid INTEGER,
+                highest_modseq INTEGER,
+                PRIMARY KEY (account_id, folder)
+            )"
+        )
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
 async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     let applied: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
         .fetch_all(pool)
@@ -485,6 +551,24 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
                 .execute(pool)
                 .await;
         }
+        if has_column(pool, "accounts", "provider_type").await {
+            let _ = sqlx::query("INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)")
+                .bind(12i64)
+                .execute(pool)
+                .await;
+        }
+        if has_table(pool, "imap_config").await {
+            let _ = sqlx::query("INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)")
+                .bind(13i64)
+                .execute(pool)
+                .await;
+        }
+        if has_table(pool, "imap_sync_state").await {
+            let _ = sqlx::query("INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)")
+                .bind(14i64)
+                .execute(pool)
+                .await;
+        }
         let applied_after: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
             .fetch_all(pool)
             .await
@@ -496,7 +580,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 }
 
 async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()> {
-    for version in 1..=11i64 {
+    for version in 1..=14i64 {
         if !applied.contains(&version) {
             println!("[Migration] Running v{}...", version);
             match version {
@@ -511,6 +595,9 @@ async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()
                 9 => m009_create_ai_summary_cache(pool).await?,
                 10 => m010_create_scheduled_sends(pool).await?,
                 11 => m011_create_templates(pool).await?,
+                12 => m012_add_provider_type(pool).await?,
+                13 => m013_create_imap_config(pool).await?,
+                14 => m014_create_imap_sync_state(pool).await?,
                 _ => {}
             }
             sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
@@ -704,7 +791,7 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
             .fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 11);
+        assert_eq!(count, 14);
     }
 
     #[tokio::test]
@@ -806,5 +893,120 @@ mod tests {
             .fetch_one(&pool).await.unwrap();
         assert_eq!(row.0, "Meeting Follow-up");
         assert_eq!(row.1, "Re: Our Meeting");
+    }
+
+    #[tokio::test]
+    async fn test_provider_type_column_exists() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO accounts (id, email, display_name, is_active, created_at, provider_type) VALUES (?, ?, ?, 1, 0, 'imap')"
+        ).bind("acc1").bind("user@outlook.com").bind("Test User")
+        .execute(&pool).await.unwrap();
+
+        let pt: String = sqlx::query_scalar("SELECT provider_type FROM accounts WHERE id = 'acc1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(pt, "imap");
+    }
+
+    #[tokio::test]
+    async fn test_provider_type_defaults_to_gmail() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO accounts (id, email, display_name, is_active, created_at) VALUES (?, ?, ?, 1, 0)"
+        ).bind("acc1").bind("user@gmail.com").bind("Gmail User")
+        .execute(&pool).await.unwrap();
+
+        let pt: String = sqlx::query_scalar(
+            "SELECT COALESCE(provider_type, 'gmail') FROM accounts WHERE id = 'acc1'"
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(pt, "gmail");
+    }
+
+    #[tokio::test]
+    async fn test_imap_config_table_exists() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+
+        let result: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='imap_config'"
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(result.0, 1);
+    }
+
+    #[tokio::test]
+    async fn test_imap_config_insert_and_query() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO accounts (id, email, display_name, is_active, created_at, provider_type) VALUES (?, ?, ?, 1, 0, 'imap')"
+        ).bind("acc1").bind("user@outlook.com").bind("Test")
+        .execute(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO imap_config (account_id, imap_host, imap_port, smtp_host, smtp_port, auth_method, use_tls) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        ).bind("acc1").bind("outlook.office365.com").bind(993)
+        .bind("smtp.office365.com").bind(587)
+        .bind("password").bind(1)
+        .execute(&pool).await.unwrap();
+
+        let row: (String, i32, String, i32) = sqlx::query_as(
+            "SELECT imap_host, imap_port, smtp_host, smtp_port FROM imap_config WHERE account_id = 'acc1'"
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(row.0, "outlook.office365.com");
+        assert_eq!(row.1, 993);
+        assert_eq!(row.2, "smtp.office365.com");
+        assert_eq!(row.3, 587);
+    }
+
+    #[tokio::test]
+    async fn test_imap_sync_state_table_exists() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+
+        let result: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='imap_sync_state'"
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(result.0, 1);
+    }
+
+    #[tokio::test]
+    async fn test_imap_sync_state_insert_and_query() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO imap_sync_state (account_id, folder, uid_validity, highest_uid, highest_modseq) VALUES (?, ?, ?, ?, ?)"
+        ).bind("acc1").bind("INBOX").bind(12345i64).bind(500i64).bind(100i64)
+        .execute(&pool).await.unwrap();
+
+        let row: (i64, i64, i64) = sqlx::query_as(
+            "SELECT uid_validity, highest_uid, highest_modseq FROM imap_sync_state WHERE account_id = 'acc1' AND folder = 'INBOX'"
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(row.0, 12345);
+        assert_eq!(row.1, 500);
+        assert_eq!(row.2, 100);
+    }
+
+    #[tokio::test]
+    async fn test_imap_sync_state_multi_folder() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+
+        for folder in &["INBOX", "Sent", "Drafts"] {
+            sqlx::query(
+                "INSERT INTO imap_sync_state (account_id, folder, uid_validity, highest_uid) VALUES (?, ?, ?, ?)"
+            ).bind("acc1").bind(folder).bind(1i64).bind(10i64)
+            .execute(&pool).await.unwrap();
+        }
+
+        let count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM imap_sync_state WHERE account_id = 'acc1'"
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(count.0, 3);
     }
 }

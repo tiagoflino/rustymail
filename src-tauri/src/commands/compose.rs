@@ -38,7 +38,7 @@ pub async fn send_message(
         .map_err(|e| e.to_string())?;
 
     let attachments = match attachment_paths {
-        Some(ref paths) if !paths.is_empty() => crate::gmail_api::read_attachment_files(paths)?,
+        Some(ref paths) if !paths.is_empty() => crate::email_utils::read_attachment_files(paths)?,
         _ => vec![],
     };
 
@@ -160,7 +160,7 @@ pub async fn save_draft(
         .map_err(|e| e.to_string())?;
 
     let attachments = match attachment_paths {
-        Some(ref paths) if !paths.is_empty() => crate::gmail_api::read_attachment_files(paths)?,
+        Some(ref paths) if !paths.is_empty() => crate::email_utils::read_attachment_files(paths)?,
         _ => vec![],
     };
 

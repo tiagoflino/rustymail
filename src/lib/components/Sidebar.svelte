@@ -45,6 +45,7 @@
     selectedLabelId: Writable<string>;
     snoozedCount?: number;
     scheduledCount?: number;
+    showCalendarToggle?: boolean;
     oncompose: () => void;
     onsync: () => void;
     onthemecycle: () => void;
@@ -71,6 +72,7 @@
     selectedLabelId,
     snoozedCount = 0,
     scheduledCount = 0,
+    showCalendarToggle = true,
     oncompose,
     onsync,
     onthemecycle,
@@ -169,6 +171,7 @@
     >
       <span class="icon">{@html iconPlus}</span><span class="sidebar-text"> Compose</span>
     </button>
+    {#if showCalendarToggle}
     <button
       class="btn-sidebar sidebar-calendar-btn"
       onclick={ontogglecalendar}
@@ -176,6 +179,7 @@
     >
       {@html iconCalendar}
     </button>
+    {/if}
     <button
       class="btn-sidebar sidebar-subscriptions-btn"
       onclick={ontogglesubscriptions}

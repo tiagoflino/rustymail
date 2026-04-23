@@ -67,6 +67,17 @@
     avatar_url: string;
     is_active: boolean;
     credential_source?: string;
+    provider_type?: string;
+  }
+
+  interface ProviderCapabilities {
+    has_labels: boolean;
+    has_categories: boolean;
+    has_superstars: boolean;
+    has_important: boolean;
+    has_server_threading: boolean;
+    has_drive_upload: boolean;
+    has_calendar: boolean;
   }
 
   const labels = writable<LocalLabel[]>([]);
@@ -77,6 +88,15 @@
 
   let activeAccount = $state<AccountInfo | null>(null);
   let allAccounts = $state<AccountInfo[]>([]);
+  let capabilities = $state<ProviderCapabilities>({
+    has_labels: true,
+    has_categories: true,
+    has_superstars: true,
+    has_important: true,
+    has_server_threading: true,
+    has_drive_upload: true,
+    has_calendar: true,
+  });
   let showSettings = $state(false);
   let isLoading = $state(false);
   let isLoadingThreads = $state(false);
@@ -296,6 +316,11 @@
         isAuthenticated.set(true);
         activeAccount = status.active_account;
         allAccounts = status.accounts;
+        try {
+          capabilities = await invoke("get_provider_capabilities", { accountId: status.active_account.id });
+        } catch {
+          // defaults are already Gmail-like
+        }
         appState = "authenticated";
       } else {
         appState = allAccounts.length > 0 ? "authenticated" : "onboarding";
@@ -1809,6 +1834,7 @@
       oncompose={() => openCompose()}
       onsync={() => performSync(true)}
       onthemecycle={cycleTheme}
+      showCalendarToggle={capabilities.has_calendar}
       ontogglecalendar={() => viewMode = viewMode === "calendar" ? "mail" : "calendar"}
       ontogglesubscriptions={() => viewMode = viewMode === "subscriptions" ? "mail" : "subscriptions"}
       onsettings={() => (showSettings = true)}
@@ -1833,7 +1859,7 @@
         activeLabelName={getActiveLabelName()}
         {searchQuery}
         {isSearching}
-        showCategoryTabs={$selectedLabelId === "INBOX"}
+        showCategoryTabs={$selectedLabelId === "INBOX" && capabilities.has_categories}
         {selectedCategory}
         unifiedIndicator={unifiedIndicatorSetting}
         {allAccounts}

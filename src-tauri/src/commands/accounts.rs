@@ -20,12 +20,13 @@ pub(crate) struct ActiveAccountFull {
 struct ActiveAccountRow {
     id: String,
     token_expiry: Option<i64>,
+    provider_type: String,
 }
 
 #[allow(dead_code)] // used in tests
 pub(crate) async fn get_active_account_row(pool: &sqlx::SqlitePool) -> Result<(String, Option<i64>), String> {
     let row = sqlx::query_as::<_, ActiveAccountRow>(
-        "SELECT id, token_expiry FROM accounts WHERE is_active = 1 LIMIT 1"
+        "SELECT id, token_expiry, COALESCE(provider_type, 'gmail') as provider_type FROM accounts WHERE is_active = 1 LIMIT 1"
     )
         .fetch_one(pool)
         .await
@@ -48,11 +49,21 @@ pub(crate) async fn check_auth_status_db(pool: &sqlx::SqlitePool) -> Result<Opti
 
 pub(crate) async fn get_active_account(pool: &sqlx::SqlitePool) -> Result<ActiveAccountFull, String> {
     let row = sqlx::query_as::<_, ActiveAccountRow>(
-        "SELECT id, token_expiry FROM accounts WHERE is_active = 1 LIMIT 1"
+        "SELECT id, token_expiry, COALESCE(provider_type, 'gmail') as provider_type FROM accounts WHERE is_active = 1 LIMIT 1"
     )
         .fetch_one(pool)
         .await
         .map_err(|e| format!("No active account found: {}", e))?;
+
+    if row.provider_type != "gmail" {
+        let access_token = crate::credentials::get_access_token(&row.id).unwrap_or_default();
+        return Ok(ActiveAccountFull {
+            id: row.id,
+            access_token,
+            refresh_token: None,
+            token_expiry: None,
+        });
+    }
 
     let now = chrono::Utc::now().timestamp();
     let expiry = row.token_expiry.unwrap_or(0);
@@ -60,7 +71,7 @@ pub(crate) async fn get_active_account(pool: &sqlx::SqlitePool) -> Result<Active
         let token_to_use = crate::credentials::get_refresh_token(&row.id).unwrap_or_default();
         if !token_to_use.is_empty() && refresh_and_update(pool, &row.id, &token_to_use).await.is_ok() {
             let refreshed = sqlx::query_as::<_, ActiveAccountRow>(
-                "SELECT id, token_expiry FROM accounts WHERE is_active = 1 LIMIT 1"
+                "SELECT id, token_expiry, COALESCE(provider_type, 'gmail') as provider_type FROM accounts WHERE is_active = 1 LIMIT 1"
             )
                 .fetch_one(pool)
                 .await
@@ -93,12 +104,22 @@ pub(crate) async fn get_active_account(pool: &sqlx::SqlitePool) -> Result<Active
 
 pub(crate) async fn get_account_by_id(pool: &sqlx::SqlitePool, account_id: &str) -> Result<ActiveAccountFull, String> {
     let row = sqlx::query_as::<_, ActiveAccountRow>(
-        "SELECT id, token_expiry FROM accounts WHERE id = ? LIMIT 1"
+        "SELECT id, token_expiry, COALESCE(provider_type, 'gmail') as provider_type FROM accounts WHERE id = ? LIMIT 1"
     )
         .bind(account_id)
         .fetch_one(pool)
         .await
         .map_err(|e| format!("Account parameter not found: {}", e))?;
+
+    if row.provider_type != "gmail" {
+        let access_token = crate::credentials::get_access_token(&row.id).unwrap_or_default();
+        return Ok(ActiveAccountFull {
+            id: row.id,
+            access_token,
+            refresh_token: None,
+            token_expiry: None,
+        });
+    }
 
     let now = chrono::Utc::now().timestamp();
     let expiry = row.token_expiry.unwrap_or(0);
@@ -106,7 +127,7 @@ pub(crate) async fn get_account_by_id(pool: &sqlx::SqlitePool, account_id: &str)
         let token_to_use = crate::credentials::get_refresh_token(&row.id).unwrap_or_default();
         if !token_to_use.is_empty() && refresh_and_update(pool, &row.id, &token_to_use).await.is_ok() {
             let refreshed = sqlx::query_as::<_, ActiveAccountRow>(
-                "SELECT id, token_expiry FROM accounts WHERE id = ? LIMIT 1"
+                "SELECT id, token_expiry, COALESCE(provider_type, 'gmail') as provider_type FROM accounts WHERE id = ? LIMIT 1"
             )
                 .bind(account_id)
                 .fetch_one(pool)
@@ -436,6 +457,7 @@ pub struct AccountInfo {
     pub avatar_url: String,
     pub is_active: bool,
     pub credential_source: String,
+    pub provider_type: String,
 }
 
 #[derive(serde::Serialize)]
@@ -458,9 +480,10 @@ pub async fn check_auth_status(app_handle: tauri::AppHandle) -> Result<AuthStatu
         token_expiry: Option<i64>,
         is_active: Option<i32>,
         credential_source: String,
+        provider_type: String,
     }
 
-    let all_accounts: Vec<AccountRow> = sqlx::query_as("SELECT id, email, display_name, avatar_url, token_expiry, is_active, COALESCE(credential_source, 'builtin') as credential_source FROM accounts")
+    let all_accounts: Vec<AccountRow> = sqlx::query_as("SELECT id, email, display_name, avatar_url, token_expiry, is_active, COALESCE(credential_source, 'builtin') as credential_source, COALESCE(provider_type, 'gmail') as provider_type FROM accounts")
         .fetch_all(pool.inner())
         .await
         .map_err(|e| e.to_string())?;
@@ -482,6 +505,7 @@ pub async fn check_auth_status(app_handle: tauri::AppHandle) -> Result<AuthStatu
             avatar_url: a.avatar_url.clone().unwrap_or_default(),
             is_active: a.is_active.unwrap_or(0) == 1,
             credential_source: a.credential_source.clone(),
+            provider_type: a.provider_type.clone(),
         })
         .collect();
 
@@ -497,6 +521,19 @@ pub async fn check_auth_status(app_handle: tauri::AppHandle) -> Result<AuthStatu
             &all_accounts[0]
         }
     };
+
+    if active.provider_type != "gmail" {
+        let active_info = accounts_info
+            .iter()
+            .find(|a| a.is_active)
+            .cloned()
+            .unwrap_or_else(|| accounts_info[0].clone());
+        return Ok(AuthStatus {
+            authenticated: true,
+            active_account: Some(active_info),
+            accounts: accounts_info,
+        });
+    }
 
     let now = chrono::Utc::now().timestamp();
     let expiry = active.token_expiry.unwrap_or(0);
@@ -637,9 +674,10 @@ pub(crate) async fn get_accounts_inner(pool: &sqlx::SqlitePool) -> Result<Vec<Ac
         avatar_url: Option<String>,
         is_active: Option<i32>,
         credential_source: String,
+        provider_type: String,
     }
 
-    let rows: Vec<Row> = sqlx::query_as("SELECT id, email, display_name, avatar_url, is_active, COALESCE(credential_source, 'builtin') as credential_source FROM accounts ORDER BY created_at ASC")
+    let rows: Vec<Row> = sqlx::query_as("SELECT id, email, display_name, avatar_url, is_active, COALESCE(credential_source, 'builtin') as credential_source, COALESCE(provider_type, 'gmail') as provider_type FROM accounts ORDER BY created_at ASC")
         .fetch_all(pool)
         .await
         .map_err(|e| e.to_string())?;
@@ -653,14 +691,44 @@ pub(crate) async fn get_accounts_inner(pool: &sqlx::SqlitePool) -> Result<Vec<Ac
             avatar_url: r.avatar_url.unwrap_or_default(),
             is_active: r.is_active.unwrap_or(0) == 1,
             credential_source: r.credential_source,
+            provider_type: r.provider_type,
         })
         .collect())
+}
+
+pub(crate) async fn get_provider_type(pool: &sqlx::SqlitePool, account_id: &str) -> String {
+    sqlx::query_scalar::<_, String>(
+        "SELECT COALESCE(provider_type, 'gmail') FROM accounts WHERE id = ?"
+    )
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| "gmail".to_string())
 }
 
 #[tauri::command]
 pub async fn get_accounts(app_handle: tauri::AppHandle) -> Result<Vec<AccountInfo>, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     get_accounts_inner(pool.inner()).await
+}
+
+#[tauri::command]
+pub async fn get_provider_capabilities(
+    app_handle: tauri::AppHandle,
+    account_id: Option<String>,
+) -> Result<crate::provider::types::ProviderCapabilities, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let id = match account_id {
+        Some(id) => id,
+        None => {
+            let account = get_active_account(pool.inner()).await?;
+            account.id
+        }
+    };
+    let pt = get_provider_type(pool.inner(), &id).await;
+    Ok(crate::provider::types::ProviderType::parse(&pt).capabilities())
 }
 
 pub(crate) async fn switch_account_inner(pool: &sqlx::SqlitePool, account_id: &str) -> Result<(), String> {

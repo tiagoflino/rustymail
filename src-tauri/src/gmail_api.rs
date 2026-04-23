@@ -161,108 +161,9 @@ pub struct SyncDelta {
     pub new_history_id: String,
 }
 
-fn sanitize_email_html(raw: &str) -> String {
-    if raw.is_empty() {
-        return String::new();
-    }
-
-    let mut result = raw.to_string();
-
-    // Step 1: Strip document-level wrappers (emails are fragments, not full pages)
-    let strip_patterns: &[&str] = &[
-        r"(?i)<!DOCTYPE[^>]*>",
-        r"(?is)<title[^>]*>.*?</title>",
-        r"(?i)<(html|head|body)[^>]*>",
-        r"(?i)</(html|head|body)>",
-        r"(?i)<meta[^>]*/?>",
-        r"(?i)<base[^>]*>",
-    ];
-    for pat in strip_patterns {
-        let re = regex_lite::Regex::new(pat).unwrap();
-        result = re.replace_all(&result, "").to_string();
-    }
-
-    // Step 2: Strip script tags and their content (loop to catch nested/obfuscated attempts)
-    let script_re = regex_lite::Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap();
-    loop {
-        let cleaned = script_re.replace_all(&result, "").to_string();
-        if cleaned == result {
-            break;
-        }
-        result = cleaned;
-    }
-    // Also strip any orphan <script> opening/closing tags left from obfuscation
-    let orphan_script_re = regex_lite::Regex::new(r"(?i)</?script[^>]*>").unwrap();
-    result = orphan_script_re.replace_all(&result, "").to_string();
-
-    // Step 3: Strip event handler attributes (on*)
-    let event_re = regex_lite::Regex::new(r#"(?i)\s+on\w+\s*=\s*"[^"]*""#).unwrap();
-    result = event_re.replace_all(&result, "").to_string();
-    let event_re2 = regex_lite::Regex::new(r"(?i)\s+on\w+\s*=\s*'[^']*'").unwrap();
-    result = event_re2.replace_all(&result, "").to_string();
-
-    // Step 4: Strip javascript: URLs
-    let js_url_re = regex_lite::Regex::new(r#"(?i)href\s*=\s*"javascript:[^"]*""#).unwrap();
-    result = js_url_re.replace_all(&result, r#"href="""#).to_string();
-    let js_url_re2 = regex_lite::Regex::new(r"(?i)href\s*=\s*'javascript:[^']*'").unwrap();
-    result = js_url_re2.replace_all(&result, "href=''").to_string();
-
-    // Step 5: Strip iframe/object/embed/applet/form tags and their content
-    let dangerous_tags: &[&str] = &[
-        r"(?is)<iframe[^>]*>.*?</iframe>",
-        r"(?i)<iframe[^>]*/?>",
-        r"(?is)<object[^>]*>.*?</object>",
-        r"(?i)<object[^>]*/?>",
-        r"(?is)<embed[^>]*>.*?</embed>",
-        r"(?i)<embed[^>]*/?>",
-        r"(?is)<applet[^>]*>.*?</applet>",
-        r"(?i)<applet[^>]*/?>",
-        r"(?is)<form[^>]*>.*?</form>",
-        r"(?i)<form[^>]*/?>",
-        r"(?i)<input[^>]*/?>",
-        r"(?i)<button[^>]*>.*?</button>",
-    ];
-    for pat in dangerous_tags {
-        let re = regex_lite::Regex::new(pat).unwrap();
-        result = re.replace_all(&result, "").to_string();
-    }
-
-    result
-}
-
-#[derive(Debug)]
-pub struct AttachmentFile {
-    pub filename: String,
-    pub mime_type: String,
-    pub data: Vec<u8>,
-}
-
-pub fn read_attachment_files(paths: &[String]) -> Result<Vec<AttachmentFile>, String> {
-    const MAX_TOTAL_SIZE: u64 = 25 * 1024 * 1024;
-    let mut files = Vec::new();
-    let mut total_size: u64 = 0;
-
-    for path_str in paths {
-        let path = std::path::Path::new(path_str);
-        let metadata = std::fs::metadata(path)
-            .map_err(|e| format!("Cannot read {}: {}", path.display(), e))?;
-        total_size += metadata.len();
-        if total_size > MAX_TOTAL_SIZE {
-            return Err("Total attachment size exceeds Gmail's 25MB limit.".to_string());
-        }
-        let data = std::fs::read(path)
-            .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-        let filename = path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("attachment")
-            .to_string();
-        let mime_type = mime_guess::from_path(path)
-            .first_or_octet_stream()
-            .to_string();
-        files.push(AttachmentFile { filename, mime_type, data });
-    }
-    Ok(files)
-}
+use crate::email_utils::{
+    sanitize_email_html, AttachmentFile, build_mime_message, mime_to_gmail_raw,
+};
 
 fn extract_body(part: &MessagePart, target_mime_type: &str) -> Option<String> {
     if part.mime_type == target_mime_type {
@@ -1578,36 +1479,8 @@ pub async fn upload_to_drive(
     Ok(format!("https://drive.google.com/file/d/{}/view?usp=sharing", file_id))
 }
 
-/// Parse an RFC 5322-ish address like `Display Name <email@example.com>` or
-/// just `email@example.com` into a lettre `Mailbox`. Display names containing
-/// emoji or other non-ASCII are supported because we handle them ourselves
-/// rather than delegating to `Mailbox::from_str`.
-fn parse_to_mailbox(raw: &str) -> Result<lettre::message::Mailbox, String> {
-    use lettre::message::Mailbox;
-    use lettre::Address;
-    use std::str::FromStr;
-
-    let raw = raw.trim();
-    if let (Some(start), Some(end)) = (raw.find('<'), raw.rfind('>')) {
-        let email_part = raw[start + 1..end].trim();
-        let display_part = raw[..start].trim().trim_matches('"').trim();
-        let address = Address::from_str(email_part)
-            .map_err(|e| format!("Invalid email address '{}': {}", email_part, e))?;
-        Ok(if display_part.is_empty() {
-            Mailbox::new(None, address)
-        } else {
-            Mailbox::new(Some(display_part.to_string()), address)
-        })
-    } else {
-        // No angle brackets — treat the whole thing as a plain email address
-        let address =
-            Address::from_str(raw).map_err(|e| format!("Invalid To address '{}': {}", raw, e))?;
-        Ok(Mailbox::new(None, address))
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
-fn build_mime_message(
+fn build_gmail_raw_message(
     from: &str,
     to: &str,
     subject: &str,
@@ -1617,82 +1490,8 @@ fn build_mime_message(
     allow_empty_to: bool,
     attachments: &[AttachmentFile],
 ) -> Result<String, String> {
-    use lettre::message::{header::ContentType, Mailbox, Message};
-    use std::str::FromStr;
-
-    let from_mailbox = Mailbox::from_str(from).map_err(|_| "Invalid From address")?;
-
-    // Parse all comma-separated recipient addresses, each potentially containing
-    // a display name with emoji or other non-ASCII characters.
-    let recipients: Vec<lettre::message::Mailbox> = to
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(parse_to_mailbox)
-        .collect::<Result<_, _>>()?;
-
-    let mut builder = Message::builder()
-        .from(from_mailbox.clone())
-        .subject(subject);
-
-    if recipients.is_empty() {
-        if allow_empty_to {
-            // Dummy envelope to satisfy lettre's validation
-            // Gmail API ignores the envelope when saving a draft/sending raw
-            // but lettre requires at least one recipient in the envelope.
-            let from_addr = from_mailbox.email.clone();
-            let envelope = lettre::address::Envelope::new(Some(from_addr.clone()), vec![from_addr])
-                .map_err(|e| e.to_string())?;
-            builder = builder.envelope(envelope);
-        } else {
-            return Err(
-                "No valid recipients. Please specify at least one recipient to send.".to_string(),
-            );
-        }
-    } else {
-        for mailbox in recipients {
-            builder = builder.to(mailbox);
-        }
-    }
-
-    if let Some(irt) = in_reply_to {
-        if !irt.is_empty() {
-            builder = builder.header(lettre::message::header::InReplyTo::from(irt.to_string()));
-        }
-    }
-    if let Some(refs) = references {
-        if !refs.is_empty() {
-            builder = builder.header(lettre::message::header::References::from(refs.to_string()));
-        }
-    }
-
-    let email = if attachments.is_empty() {
-        builder
-            .header(ContentType::TEXT_HTML)
-            .body(body.to_string())
-            .map_err(|e| e.to_string())?
-    } else {
-        use lettre::message::{MultiPart, SinglePart, Attachment as LettreAttachment};
-
-        let html_part = SinglePart::builder()
-            .header(ContentType::TEXT_HTML)
-            .body(body.to_string());
-
-        let mut multipart = MultiPart::mixed().singlepart(html_part);
-
-        for att in attachments {
-            let content_type = ContentType::parse(&att.mime_type)
-                .unwrap_or(ContentType::parse("application/octet-stream").unwrap());
-            let attachment_part = LettreAttachment::new(att.filename.clone())
-                .body(att.data.clone(), content_type);
-            multipart = multipart.singlepart(attachment_part);
-        }
-
-        builder.multipart(multipart).map_err(|e| e.to_string())?
-    };
-
-    let formatted = email.formatted();
-    Ok(base64::encode_config(formatted, base64::URL_SAFE_NO_PAD))
+    let msg = build_mime_message(from, to, subject, body, in_reply_to, references, allow_empty_to, attachments)?;
+    Ok(mime_to_gmail_raw(&msg))
 }
 
 pub async fn send_draft(
@@ -1731,7 +1530,7 @@ pub async fn send_message(
     references: Option<&str>,
     attachments: &[AttachmentFile],
 ) -> Result<(), String> {
-    let raw = build_mime_message(
+    let raw = build_gmail_raw_message(
         account_email,
         to,
         subject,
@@ -1778,7 +1577,7 @@ pub async fn save_draft(
     draft_id: Option<&str>,
     attachments: &[AttachmentFile],
 ) -> Result<String, String> {
-    let raw = build_mime_message(
+    let raw = build_gmail_raw_message(
         account_email,
         to,
         subject,
@@ -2020,32 +1819,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_to_mailbox() {
-        // Plain email
-        let m1 = parse_to_mailbox("test@example.com").unwrap();
-        assert_eq!(m1.name, None);
-        assert_eq!(m1.email.to_string(), "test@example.com");
-
-        // Display name with angle brackets
-        let m2 = parse_to_mailbox("John Doe <john@example.com>").unwrap();
-        assert_eq!(m2.name, Some("John Doe".to_string()));
-        assert_eq!(m2.email.to_string(), "john@example.com");
-
-        // Display name with quotes
-        let m3 = parse_to_mailbox("\"Jane Doe\" <jane@example.com>").unwrap();
-        assert_eq!(m3.name, Some("Jane Doe".to_string()));
-        assert_eq!(m3.email.to_string(), "jane@example.com");
-
-        // Display name with emoji (the initially failing case)
-        let m4 = parse_to_mailbox("🇦🇺Fernandinha <fernanda@example.com>").unwrap();
-        assert_eq!(m4.name, Some("🇦🇺Fernandinha".to_string()));
-        assert_eq!(m4.email.to_string(), "fernanda@example.com");
-    }
-
-    #[test]
-    fn test_build_mime_message() {
+    fn test_build_gmail_raw_message() {
         // Single recipient
-        let res = build_mime_message(
+        let res = build_gmail_raw_message(
             "me@test.com",
             "you@test.com",
             "Hi",
@@ -2067,7 +1843,7 @@ mod tests {
         assert!(mime.contains("Body"));
 
         // Multiple recipients with emoji
-        let res2 = build_mime_message(
+        let res2 = build_gmail_raw_message(
             "me@test.com",
             "🇦🇺Fernandinha <fernanda@test.com>, \"Bob\" <bob@test.com>, plain@test.com",
             "Multi Test",
@@ -2175,130 +1951,13 @@ mod tests {
         assert_eq!(labels.0, 2);
     }
 
-    #[test]
-    fn test_sanitize_strips_script_tags() {
-        let input = r#"<p>Hello</p><script>alert('xss')</script><p>World</p>"#;
-        let result = sanitize_email_html(input);
-        assert!(!result.contains("<script>"));
-        assert!(!result.contains("alert"));
-        assert!(result.contains("<p>Hello</p>"));
-        assert!(result.contains("<p>World</p>"));
-    }
-
-    #[test]
-    fn test_sanitize_strips_event_handlers() {
-        let input = r#"<img src="https://example.com/img.png" onerror="alert('xss')" onclick="steal()">"#;
-        let result = sanitize_email_html(input);
-        assert!(!result.contains("onerror"));
-        assert!(!result.contains("onclick"));
-        assert!(result.contains("src=\"https://example.com/img.png\""));
-    }
-
-    #[test]
-    fn test_sanitize_strips_iframe_and_object() {
-        let input = r#"<p>Before</p><iframe src="https://evil.com"></iframe><object data="hack.swf"></object><p>After</p>"#;
-        let result = sanitize_email_html(input);
-        assert!(!result.contains("<iframe"));
-        assert!(!result.contains("<object"));
-        assert!(result.contains("Before"));
-        assert!(result.contains("After"));
-    }
-
-    #[test]
-    fn test_sanitize_preserves_email_tables() {
-        let input = "<table width=\"600\" cellpadding=\"0\" cellspacing=\"0\" bgcolor=\"white\">\
-            <tr><td align=\"center\" valign=\"top\" style=\"padding:10px\">\
-            <img src=\"https://example.com/logo.png\" width=\"200\" height=\"50\" alt=\"Logo\">\
-            </td></tr></table>";
-        let result = sanitize_email_html(input);
-        assert!(result.contains("<table"), "table tag missing");
-        assert!(result.contains("width=\"600\""), "table width missing");
-        assert!(result.contains("cellpadding=\"0\""), "cellpadding missing");
-        assert!(result.contains("<td"), "td tag missing");
-        assert!(result.contains("align=\"center\""), "align missing");
-        assert!(result.contains("<img"), "img tag missing");
-        assert!(result.contains("width=\"200\""), "img width missing");
-    }
-
-    #[test]
-    fn test_sanitize_preserves_links() {
-        let input = r#"<a href="https://example.com" target="_blank">Click</a>"#;
-        let result = sanitize_email_html(input);
-        assert!(result.contains("href=\"https://example.com\""));
-        assert!(result.contains("target=\"_blank\""));
-        assert!(result.contains("Click"));
-    }
-
-    #[test]
-    fn test_sanitize_inlines_style_rules_and_keeps_style_tag() {
-        let input = r#"<style>.header { color: red; }</style><div class="header">Hi</div>"#;
-        let result = sanitize_email_html(input);
-        // css-inline converts rules to inline styles but keeps <style> tags
-        // for @font-face, @media, etc. that can't be inlined
-        assert!(result.contains("color"), "inlined style should be preserved on element");
-        assert!(result.contains("Hi"));
-    }
-
-    #[test]
-    fn test_sanitize_strips_form_elements() {
-        let input = r#"<form action="https://evil.com"><input type="text" name="password"><button>Submit</button></form>"#;
-        let result = sanitize_email_html(input);
-        assert!(!result.contains("<form"));
-        assert!(!result.contains("<input"));
-        assert!(!result.contains("<button"));
-    }
-
-    #[test]
-    fn test_sanitize_empty_input() {
-        assert_eq!(sanitize_email_html(""), "");
-    }
-
-    #[test]
-    fn test_sanitize_strips_javascript_urls() {
-        let input = r#"<a href="javascript:alert('xss')">Click me</a>"#;
-        let result = sanitize_email_html(input);
-        assert!(!result.contains("javascript:"));
-    }
-
-    #[test]
-    fn test_sanitize_preserves_mailto_links() {
-        let input = r#"<a href="mailto:test@example.com">Email us</a>"#;
-        let result = sanitize_email_html(input);
-        assert!(result.contains("mailto:test@example.com"));
-    }
-
-    #[test]
-    fn test_sanitize_preserves_http_and_https_images() {
-        let input = r#"<img src="http://example.com/logo.png" alt="Logo"><img src="https://example.com/banner.jpg" alt="Banner">"#;
-        let result = sanitize_email_html(input);
-        assert!(result.contains("http://example.com/logo.png"), "http image src lost: {}", result);
-        assert!(result.contains("https://example.com/banner.jpg"), "https image src lost: {}", result);
-    }
-
-    #[test]
-    fn test_sanitize_preserves_css_url_properties() {
-        // The regex sanitizer does not strip CSS url() properties — it only targets
-        // script injection vectors. CSS background-image passes through unchanged.
-        let input = r#"<td style="background-image:url(https://example.com/bg.png)">content</td>"#;
-        let result = sanitize_email_html(input);
-        assert!(result.contains("background-image"), "background-image should be preserved: {}", result);
-        assert!(result.contains("content"));
-    }
-
-    #[test]
-    fn test_sanitize_preserves_td_background_attr() {
-        let input = r#"<table><tr><td background="https://example.com/bg.png">content</td></tr></table>"#;
-        let result = sanitize_email_html(input);
-        assert!(result.contains("background="), "td background attribute lost: {}", result);
-    }
-
     // ---------------------------------------------------------------
-    // Additional build_mime_message tests
+    // Gmail-specific MIME encoding tests
     // ---------------------------------------------------------------
 
     #[test]
     fn test_build_mime_message_with_in_reply_to_and_references() {
-        let res = build_mime_message(
+        let res = build_gmail_raw_message(
             "me@test.com",
             "you@test.com",
             "Re: Hello",
@@ -2327,7 +1986,7 @@ mod tests {
 
     #[test]
     fn test_build_mime_message_allow_empty_to_draft_mode() {
-        let res = build_mime_message(
+        let res = build_gmail_raw_message(
             "me@test.com",
             "",
             "Draft subject",
@@ -2342,7 +2001,7 @@ mod tests {
 
     #[test]
     fn test_build_mime_message_reject_empty_to_send_mode() {
-        let res = build_mime_message(
+        let res = build_gmail_raw_message(
             "me@test.com",
             "",
             "Subject",
@@ -2360,7 +2019,7 @@ mod tests {
 
     #[test]
     fn test_build_mime_message_unicode_subject() {
-        let res = build_mime_message(
+        let res = build_gmail_raw_message(
             "me@test.com",
             "you@test.com",
             "日本語のメール件名 🎉",
@@ -2463,65 +2122,6 @@ mod tests {
             parts: None,
         };
         assert_eq!(extract_body(&part, "text/html"), None);
-    }
-
-    // ---------------------------------------------------------------
-    // Additional sanitize_email_html tests
-    // ---------------------------------------------------------------
-
-    #[test]
-    fn test_sanitize_strips_base_tag() {
-        let input = r#"<html><head><base href="https://evil.com/"></head><body><p>Content</p></body></html>"#;
-        let result = sanitize_email_html(input);
-        assert!(
-            !result.contains("<base"),
-            "base tag should be stripped: {}",
-            result
-        );
-        assert!(result.contains("Content"));
-    }
-
-    #[test]
-    fn test_sanitize_preserves_data_uri_img() {
-        let input = r#"<img src="data:image/png;base64,iVBORw0KGgo=" alt="inline">"#;
-        let result = sanitize_email_html(input);
-        assert!(
-            result.contains("data:image/png;base64,iVBORw0KGgo="),
-            "data URI should be preserved: {}",
-            result
-        );
-    }
-
-    #[test]
-    fn test_sanitize_preserves_inline_style_attr() {
-        let input = r#"<div style="color: red; font-size: 14px;">Styled</div>"#;
-        let result = sanitize_email_html(input);
-        assert!(
-            result.contains("style="),
-            "inline style should be preserved: {}",
-            result
-        );
-        assert!(result.contains("color"));
-        assert!(result.contains("Styled"));
-    }
-
-    #[test]
-    fn test_sanitize_strips_nested_obfuscated_scripts() {
-        let input = r#"<div><scr<script>ipt>alert('xss')</scr</script>ipt></div>"#;
-        let result = sanitize_email_html(input);
-        assert!(
-            !result.contains("<script"),
-            "no executable script tags should remain: {}",
-            result
-        );
-    }
-
-    #[test]
-    fn test_sanitize_strips_svg_script() {
-        let input = r#"<svg><script>alert('xss')</script></svg>"#;
-        let result = sanitize_email_html(input);
-        assert!(!result.contains("<script"));
-        assert!(!result.contains("alert"));
     }
 
     // ---------------------------------------------------------------
@@ -3838,7 +3438,7 @@ mod tests {
             mime_type: "text/plain".to_string(),
             data: b"Hello attachment".to_vec(),
         };
-        let res = build_mime_message(
+        let res = build_gmail_raw_message(
             "me@test.com",
             "you@test.com",
             "With attachment",
@@ -3870,7 +3470,7 @@ mod tests {
             mime_type: "image/png".to_string(),
             data: vec![0x89, 0x50, 0x4E, 0x47],
         };
-        let res = build_mime_message(
+        let res = build_gmail_raw_message(
             "me@test.com",
             "you@test.com",
             "Two files",
@@ -3891,7 +3491,7 @@ mod tests {
 
     #[test]
     fn test_build_mime_message_no_attachments_unchanged() {
-        let res = build_mime_message(
+        let res = build_gmail_raw_message(
             "me@test.com",
             "you@test.com",
             "No attachments",
@@ -3908,47 +3508,6 @@ mod tests {
         // Single-part should NOT contain multipart
         assert!(!mime.contains("multipart/mixed"));
         assert!(mime.contains("text/html"));
-    }
-
-    #[test]
-    fn test_read_attachment_files_valid() {
-        let dir = tempdir().unwrap();
-        let file_path = dir.path().join("test.txt");
-        std::fs::write(&file_path, "hello world").unwrap();
-
-        let result = read_attachment_files(&[file_path.to_string_lossy().to_string()]);
-        assert!(result.is_ok());
-        let files = result.unwrap();
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].filename, "test.txt");
-        assert_eq!(files[0].data, b"hello world");
-        assert_eq!(files[0].mime_type, "text/plain");
-    }
-
-    #[test]
-    fn test_read_attachment_files_size_limit() {
-        let dir = tempdir().unwrap();
-        let file_path = dir.path().join("big.bin");
-        // Create a file just over 25MB
-        let data = vec![0u8; 26 * 1024 * 1024];
-        std::fs::write(&file_path, &data).unwrap();
-
-        let result = read_attachment_files(&[file_path.to_string_lossy().to_string()]);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("25MB"));
-    }
-
-    #[test]
-    fn test_read_attachment_files_nonexistent() {
-        let result = read_attachment_files(&["/nonexistent/file.txt".to_string()]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_read_attachment_files_empty() {
-        let result = read_attachment_files(&[]);
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_empty());
     }
 
     // ---------------------------------------------------------------
