@@ -24,13 +24,16 @@ pub async fn sync_gmail_data(
     let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
     if provider_type == "imap" {
         let config = crate::provider::imap::connection::ImapConfig::from_db(pool.inner(), &account.id).await?;
-        let provider = crate::provider::imap::provider::ImapProvider::new(config);
+        let provider = crate::provider::imap::provider::ImapProvider::new(config.clone());
 
-        // Sync folders first
         let _ = provider.list_folders(pool.inner()).await;
 
         let folder = label_id.as_deref().unwrap_or("INBOX");
         let result = provider.sync_folder(pool.inner(), folder).await?;
+
+        let idle_manager = app_handle.state::<crate::provider::imap::idle::IdleManager>();
+        idle_manager.start_for_account(config, app_handle.clone()).await;
+
         return Ok(SyncResult {
             new_message_ids: vec![],
             new_thread_ids: result.updated_thread_ids,

@@ -1,7 +1,9 @@
+pub mod autodiscover;
 pub mod connection;
-pub mod threading;
 pub mod folders;
-pub mod sync;
-pub mod smtp;
+pub mod idle;
 pub mod operations;
 pub mod provider;
+pub mod smtp;
+pub mod sync;
+pub mod threading;

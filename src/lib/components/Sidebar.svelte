@@ -46,6 +46,7 @@
     snoozedCount?: number;
     scheduledCount?: number;
     showCalendarToggle?: boolean;
+    connectionState?: string;
     oncompose: () => void;
     onsync: () => void;
     onthemecycle: () => void;
@@ -73,6 +74,7 @@
     snoozedCount = 0,
     scheduledCount = 0,
     showCalendarToggle = true,
+    connectionState = '',
     oncompose,
     onsync,
     onthemecycle,
@@ -106,7 +108,7 @@
       class="account-switcher"
       onclick={() => (showAccountDropdown = !showAccountDropdown)}
     >
-      <div class="account-avatar-small">
+      <div class="account-avatar-small" style="position: relative;">
         {#if activeAccount?.avatar_url}
           <img
             src={activeAccount.avatar_url}
@@ -116,6 +118,13 @@
           />
         {:else}
           <span class="avatar-placeholder-sm">{@html iconUser}</span>
+        {/if}
+        {#if connectionState}
+          <span
+            class="connection-dot"
+            title={connectionState === 'connected' ? 'Connected' : connectionState === 'reconnecting' ? 'Reconnecting...' : 'Disconnected'}
+            style="position: absolute; bottom: 0; right: 0; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--bg-primary); background: {connectionState === 'connected' ? '#34c759' : connectionState === 'reconnecting' ? '#ff9f0a' : '#ff3b30'};"
+          ></span>
         {/if}
       </div>
       <div class="account-text">

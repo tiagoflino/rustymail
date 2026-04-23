@@ -103,6 +103,7 @@
   let showCompose = $state(false);
   let showCommandPalette = $state(false);
   let viewMode = $state<"mail" | "calendar" | "subscriptions">("mail");
+  let imapConnectionState = $state<string>("");
   let snoozePopoverOpen = $state(false);
   let batchSnoozeOpen = $state(false);
   let labelPickerOpen = $state(false);
@@ -1724,6 +1725,13 @@
     listen("tray-check-mail", async () => {
       await performSync(true);
     }).then((fn) => (unlistenTrayCheckMail = fn));
+    listen("imap-new-mail", async () => {
+      await performSync(false);
+    });
+    listen("imap-connection-state", (event: any) => {
+      const { account_id, state } = event.payload;
+      imapConnectionState = state;
+    });
 
     // Quit confirmation — fetch fresh counts from backend (not stale component state)
     listen("quit-requested", async () => {
@@ -1838,6 +1846,7 @@
       onsync={() => performSync(true)}
       onthemecycle={cycleTheme}
       showCalendarToggle={capabilities.has_calendar}
+      connectionState={activeAccount?.provider_type === 'imap' ? imapConnectionState : ''}
       ontogglecalendar={() => viewMode = viewMode === "calendar" ? "mail" : "calendar"}
       ontogglesubscriptions={() => viewMode = viewMode === "subscriptions" ? "mail" : "subscriptions"}
       onsettings={() => (showSettings = true)}

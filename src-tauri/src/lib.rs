@@ -58,6 +58,7 @@ pub fn run() {
             let pool_clone = pool.clone();
             handle.manage(pool);
             handle.manage(page_token_store::PageTokenStore::new());
+            handle.manage(provider::imap::idle::IdleManager::new());
             #[cfg(feature = "premium")]
             {
                 let engine = rustymail_premium::llm::engine::LlmEngine::new(
@@ -105,6 +106,7 @@ pub fn run() {
             commands::accounts::test_imap_connection,
             commands::accounts::test_smtp_connection,
             commands::accounts::add_imap_account,
+            commands::accounts::autodiscover_imap,
             commands::settings::get_settings,
             commands::settings::get_setting,
             commands::settings::update_setting,

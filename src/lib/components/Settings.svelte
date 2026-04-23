@@ -78,14 +78,30 @@
     'pm.me': { imap_host: '127.0.0.1', imap_port: 1143, smtp_host: '127.0.0.1', smtp_port: 1025 },
   };
 
-  function applyImapPreset() {
+  async function applyImapPreset() {
     const domain = imapEmail.split('@')[1]?.toLowerCase();
-    if (domain && IMAP_PRESETS[domain]) {
+    if (!domain) return;
+
+    if (IMAP_PRESETS[domain]) {
       const preset = IMAP_PRESETS[domain];
       imapHost = preset.imap_host;
       imapPort = preset.imap_port;
       smtpHost = preset.smtp_host;
       smtpPort = preset.smtp_port;
+      return;
+    }
+
+    try {
+      const discovered: any = await invoke('autodiscover_imap', { email: imapEmail });
+      if (discovered) {
+        imapHost = discovered.imap_host;
+        imapPort = discovered.imap_port;
+        smtpHost = discovered.smtp_host;
+        smtpPort = discovered.smtp_port;
+        imapUseTls = discovered.use_tls;
+      }
+    } catch {
+      // auto-discover failed, user fills manually
     }
   }
 

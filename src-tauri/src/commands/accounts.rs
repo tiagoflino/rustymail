@@ -824,6 +824,13 @@ pub async fn test_smtp_connection(
     crate::provider::imap::smtp::test_smtp_connection(&host, port, &username, &password).await
 }
 
+#[tauri::command]
+pub async fn autodiscover_imap(
+    email: String,
+) -> Result<crate::provider::imap::autodiscover::DiscoveredConfig, String> {
+    crate::provider::imap::autodiscover::discover_settings(&email).await
+}
+
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn add_imap_account(

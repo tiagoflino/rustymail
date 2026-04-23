@@ -62,9 +62,6 @@ impl ImapConfig {
 }
 
 pub async fn connect(config: &ImapConfig) -> Result<ImapSession, String> {
-    let password = crate::credentials::get_imap_password(&config.account_id)
-        .map_err(|e| format!("Failed to get IMAP password: {}", e))?;
-
     let addr = (config.imap_host.as_str(), config.imap_port);
     let tcp = TcpStream::connect(addr)
         .await
@@ -79,13 +76,39 @@ pub async fn connect(config: &ImapConfig) -> Result<ImapSession, String> {
         .map_err(|e| format!("TLS handshake failed: {}", e))?;
 
     let client = async_imap::Client::new(tls_stream);
-    let session = client
-        .login(&config.username, &password)
-        .await
-        .map_err(|e| format!("IMAP login failed: {}", e.0))?;
 
-    tracing::info!("IMAP connected to {} as {}", config.imap_host, config.username);
+    let session = if config.auth_method == "oauth2" {
+        let access_token = crate::credentials::get_access_token(&config.account_id)
+            .map_err(|e| format!("Failed to get OAuth2 token: {}", e))?;
+        let auth_string = format!(
+            "user={}\x01auth=Bearer {}\x01\x01",
+            config.username, access_token
+        );
+        client
+            .authenticate("XOAUTH2", XOAuth2Authenticator(auth_string))
+            .await
+            .map_err(|e| format!("XOAUTH2 auth failed: {}", e.0))?
+    } else {
+        let password = crate::credentials::get_imap_password(&config.account_id)
+            .map_err(|e| format!("Failed to get IMAP password: {}", e))?;
+        client
+            .login(&config.username, &password)
+            .await
+            .map_err(|e| format!("IMAP login failed: {}", e.0))?
+    };
+
+    tracing::info!("IMAP connected to {} as {} ({})", config.imap_host, config.username, config.auth_method);
     Ok(session)
+}
+
+struct XOAuth2Authenticator(String);
+
+impl async_imap::Authenticator for XOAuth2Authenticator {
+    type Response = String;
+
+    fn process(&mut self, _challenge: &[u8]) -> Self::Response {
+        self.0.clone()
+    }
 }
 
 pub async fn test_connection(
