@@ -99,6 +99,7 @@
     has_calendar: false,
   });
   let showSettings = $state(false);
+  let showAddAccount = $state(false);
   let isLoading = $state(false);
   let isLoadingThreads = $state(false);
   let showCompose = $state(false);
@@ -1969,7 +1970,7 @@
       ontogglecollapse={toggleSidebar}
       onselectlabel={selectLabel}
       onswitchaccount={switchAccount}
-      onaddaccount={addAccount}
+      onaddaccount={() => { showSettings = true; showAddAccount = true; }}
     />
 
     {#if viewMode === "mail"}
@@ -2056,9 +2057,11 @@
 
   <Settings
     bind:show={showSettings}
+    initialAddAccount={showAddAccount}
     accounts={allAccounts}
     onclose={async () => {
       showSettings = false;
+      showAddAccount = false;
       checkAndSetupSync();
       await refreshAccountState();
       await performSync(true);

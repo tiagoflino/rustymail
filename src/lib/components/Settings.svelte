@@ -14,6 +14,7 @@
 
   interface SettingsProps {
     show: boolean;
+    initialAddAccount?: boolean;
     accounts: Array<{
       id: string;
       email: string;
@@ -35,6 +36,7 @@
 
   let {
     show = $bindable(false),
+    initialAddAccount = false,
     accounts = [],
     onclose = () => {},
     onAccountSwitch = () => {},
@@ -154,6 +156,10 @@
   $effect(() => {
     if (show) {
       loadSettings();
+      if (initialAddAccount) {
+        activeTab = "accounts";
+        addingAccount = true;
+      }
     }
   });
 
