@@ -247,3 +247,41 @@ impl IdleManager {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_idle_manager_new() {
+        let manager = IdleManager::new();
+        let handles = manager.handles.lock().await;
+        assert!(handles.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_idle_manager_stop_nonexistent() {
+        let manager = IdleManager::new();
+        manager.stop_for_account("nonexistent-account").await;
+        let handles = manager.handles.lock().await;
+        assert!(handles.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_idle_manager_stop_all_empty() {
+        let manager = IdleManager::new();
+        manager.stop_all().await;
+        let handles = manager.handles.lock().await;
+        assert!(handles.is_empty());
+    }
+
+    #[test]
+    fn test_idle_manager_default() {
+        let manager = IdleManager::default();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let handles = manager.handles.lock().await;
+            assert!(handles.is_empty());
+        });
+    }
+}

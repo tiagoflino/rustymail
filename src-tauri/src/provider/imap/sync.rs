@@ -387,3 +387,86 @@ async fn save_sync_state(
     .map_err(|e| e.to_string())?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::SqliteConnectOptions;
+    use std::str::FromStr;
+
+    async fn test_pool() -> sqlx::SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .create_if_missing(true);
+        let pool = sqlx::SqlitePool::connect_with(options).await.unwrap();
+        crate::db::apply_schema(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn test_get_sync_state_none() {
+        let pool = test_pool().await;
+        let state = get_sync_state(&pool, "acc1", "INBOX").await;
+        assert!(state.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_save_and_get_sync_state() {
+        let pool = test_pool().await;
+        save_sync_state(&pool, "acc1", "INBOX", 12345, 500).await.unwrap();
+        let state = get_sync_state(&pool, "acc1", "INBOX").await;
+        assert!(state.is_some());
+        let state = state.unwrap();
+        assert_eq!(state.uid_validity, 12345);
+        assert_eq!(state.highest_uid, 500);
+    }
+
+    #[tokio::test]
+    async fn test_save_sync_state_updates() {
+        let pool = test_pool().await;
+        save_sync_state(&pool, "acc1", "INBOX", 12345, 500).await.unwrap();
+        save_sync_state(&pool, "acc1", "INBOX", 12345, 750).await.unwrap();
+
+        let state = get_sync_state(&pool, "acc1", "INBOX").await.unwrap();
+        assert_eq!(state.uid_validity, 12345);
+        assert_eq!(state.highest_uid, 750);
+    }
+
+    #[tokio::test]
+    async fn test_save_sync_state_multi_folder() {
+        let pool = test_pool().await;
+        save_sync_state(&pool, "acc1", "INBOX", 100, 50).await.unwrap();
+        save_sync_state(&pool, "acc1", "Sent", 200, 30).await.unwrap();
+        save_sync_state(&pool, "acc1", "Drafts", 300, 10).await.unwrap();
+
+        let inbox = get_sync_state(&pool, "acc1", "INBOX").await.unwrap();
+        assert_eq!(inbox.uid_validity, 100);
+        assert_eq!(inbox.highest_uid, 50);
+
+        let sent = get_sync_state(&pool, "acc1", "Sent").await.unwrap();
+        assert_eq!(sent.uid_validity, 200);
+        assert_eq!(sent.highest_uid, 30);
+
+        let drafts = get_sync_state(&pool, "acc1", "Drafts").await.unwrap();
+        assert_eq!(drafts.uid_validity, 300);
+        assert_eq!(drafts.highest_uid, 10);
+    }
+
+    #[tokio::test]
+    async fn test_sync_state_different_accounts() {
+        let pool = test_pool().await;
+        save_sync_state(&pool, "acc1", "INBOX", 100, 50).await.unwrap();
+        save_sync_state(&pool, "acc2", "INBOX", 200, 80).await.unwrap();
+
+        let acc1 = get_sync_state(&pool, "acc1", "INBOX").await.unwrap();
+        assert_eq!(acc1.uid_validity, 100);
+        assert_eq!(acc1.highest_uid, 50);
+
+        let acc2 = get_sync_state(&pool, "acc2", "INBOX").await.unwrap();
+        assert_eq!(acc2.uid_validity, 200);
+        assert_eq!(acc2.highest_uid, 80);
+
+        let acc3 = get_sync_state(&pool, "acc3", "INBOX").await;
+        assert!(acc3.is_none());
+    }
+}

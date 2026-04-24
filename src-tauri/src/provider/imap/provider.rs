@@ -412,3 +412,225 @@ async fn find_special_folder(pool: &sqlx::SqlitePool, account_id: &str, label_id
     .ok()
     .flatten()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::test_helpers::setup_test_db;
+
+    #[tokio::test]
+    async fn test_get_thread_message_uids_empty() {
+        let pool = setup_test_db().await;
+        let uids = get_thread_message_uids(&pool, "nonexistent-thread").await.unwrap();
+        assert!(uids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_thread_message_uids_parses_imap_ids() {
+        let pool = setup_test_db().await;
+        sqlx::query(
+            "INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES (?, ?, '', '', 0)",
+        )
+        .bind("t1").bind("acc1")
+        .execute(&pool).await.unwrap();
+
+        for uid in [10u32, 20, 30] {
+            let msg_id = format!("imap:acc1:INBOX:{}", uid);
+            sqlx::query(
+                "INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments) VALUES (?, ?, ?, '', '', '', '', 0, '', '', 0)",
+            )
+            .bind(&msg_id).bind("t1").bind("acc1")
+            .execute(&pool).await.unwrap();
+        }
+
+        let mut uids = get_thread_message_uids(&pool, "t1").await.unwrap();
+        uids.sort();
+        assert_eq!(uids, vec![10, 20, 30]);
+    }
+
+    #[tokio::test]
+    async fn test_get_thread_message_uids_ignores_non_imap_ids() {
+        let pool = setup_test_db().await;
+        sqlx::query(
+            "INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES (?, ?, '', '', 0)",
+        )
+        .bind("t1").bind("acc1")
+        .execute(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments) VALUES (?, ?, ?, '', '', '', '', 0, '', '', 0)",
+        )
+        .bind("18a3f5b2c1d0e9f8").bind("t1").bind("acc1")
+        .execute(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments) VALUES (?, ?, ?, '', '', '', '', 0, '', '', 0)",
+        )
+        .bind("outlook:AAMkAG1").bind("t1").bind("acc1")
+        .execute(&pool).await.unwrap();
+
+        let uids = get_thread_message_uids(&pool, "t1").await.unwrap();
+        assert!(uids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_thread_folder_extracts_folder() {
+        let pool = setup_test_db().await;
+        sqlx::query(
+            "INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES (?, ?, '', '', 0)",
+        )
+        .bind("t1").bind("acc1")
+        .execute(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments) VALUES (?, ?, ?, '', '', '', '', 0, '', '', 0)",
+        )
+        .bind("imap:acc1:INBOX:123").bind("t1").bind("acc1")
+        .execute(&pool).await.unwrap();
+
+        let folder = get_thread_folder(&pool, "t1").await.unwrap();
+        assert_eq!(folder, "INBOX");
+    }
+
+    #[tokio::test]
+    async fn test_get_thread_folder_no_messages() {
+        let pool = setup_test_db().await;
+        sqlx::query(
+            "INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES (?, ?, '', '', 0)",
+        )
+        .bind("t1").bind("acc1")
+        .execute(&pool).await.unwrap();
+
+        let result = get_thread_folder(&pool, "t1").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("No messages in thread"));
+    }
+
+    #[tokio::test]
+    async fn test_find_special_folder_found() {
+        let pool = setup_test_db().await;
+        sqlx::query(
+            "INSERT INTO labels (id, account_id, name, type) VALUES (?, ?, ?, 'system')",
+        )
+        .bind("TRASH").bind("acc1").bind("Deleted Items")
+        .execute(&pool).await.unwrap();
+
+        let result = find_special_folder(&pool, "acc1", "TRASH").await;
+        assert_eq!(result, Some("Deleted Items".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_find_special_folder_not_found() {
+        let pool = setup_test_db().await;
+        let result = find_special_folder(&pool, "acc1", "TRASH").await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_thread_messages_with_rfc_ids() {
+        let pool = setup_test_db().await;
+        sqlx::query(
+            "INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES (?, ?, '', '', 0)",
+        )
+        .bind("t1").bind("acc1")
+        .execute(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments, rfc_message_id) VALUES (?, ?, ?, '', '', '', '', 0, '', '', 0, ?)",
+        )
+        .bind("imap:acc1:INBOX:100").bind("t1").bind("acc1").bind("<msg1@example.com>")
+        .execute(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments, rfc_message_id) VALUES (?, ?, ?, '', '', '', '', 0, '', '', 0, ?)",
+        )
+        .bind("imap:acc1:INBOX:200").bind("t1").bind("acc1").bind("<msg2@example.com>")
+        .execute(&pool).await.unwrap();
+
+        let result = get_thread_messages_with_rfc_ids(&pool, "t1").await.unwrap();
+        assert_eq!(result.len(), 2);
+
+        let (uid1, id1, rfc1) = &result[0];
+        assert_eq!(*uid1, 100);
+        assert_eq!(id1, "imap:acc1:INBOX:100");
+        assert_eq!(rfc1.as_deref(), Some("<msg1@example.com>"));
+
+        let (uid2, id2, rfc2) = &result[1];
+        assert_eq!(*uid2, 200);
+        assert_eq!(id2, "imap:acc1:INBOX:200");
+        assert_eq!(rfc2.as_deref(), Some("<msg2@example.com>"));
+    }
+
+    #[tokio::test]
+    async fn test_update_message_ids_after_move() {
+        let pool = setup_test_db().await;
+        sqlx::query(
+            "INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES (?, ?, '', '', 0)",
+        )
+        .bind("t1").bind("acc1")
+        .execute(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments, rfc_message_id) VALUES (?, ?, ?, '', '', '', '', 0, '', '', 0, ?)",
+        )
+        .bind("imap:acc1:INBOX:100").bind("t1").bind("acc1").bind("<msg1@example.com>")
+        .execute(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments, rfc_message_id) VALUES (?, ?, ?, '', '', '', '', 0, '', '', 0, ?)",
+        )
+        .bind("imap:acc1:INBOX:200").bind("t1").bind("acc1").bind("<msg2@example.com>")
+        .execute(&pool).await.unwrap();
+
+        let old_messages = vec![
+            (100u32, "imap:acc1:INBOX:100".to_string(), Some("<msg1@example.com>".to_string())),
+            (200u32, "imap:acc1:INBOX:200".to_string(), Some("<msg2@example.com>".to_string())),
+        ];
+        let new_mappings = vec![
+            ("<msg1@example.com>".to_string(), 501u32),
+            ("<msg2@example.com>".to_string(), 502u32),
+        ];
+
+        update_message_ids_after_move(&pool, "acc1", "Trash", &old_messages, &new_mappings)
+            .await
+            .unwrap();
+
+        let ids: Vec<(String,)> = sqlx::query_as("SELECT id FROM messages WHERE thread_id = 't1' ORDER BY id")
+            .fetch_all(&pool).await.unwrap();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.iter().any(|(id,)| id == "imap:acc1:Trash:501"));
+        assert!(ids.iter().any(|(id,)| id == "imap:acc1:Trash:502"));
+    }
+
+    #[tokio::test]
+    async fn test_update_message_ids_after_move_no_match() {
+        let pool = setup_test_db().await;
+        sqlx::query(
+            "INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES (?, ?, '', '', 0)",
+        )
+        .bind("t1").bind("acc1")
+        .execute(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments, rfc_message_id) VALUES (?, ?, ?, '', '', '', '', 0, '', '', 0, ?)",
+        )
+        .bind("imap:acc1:INBOX:100").bind("t1").bind("acc1").bind("<msg1@example.com>")
+        .execute(&pool).await.unwrap();
+
+        let old_messages = vec![
+            (100u32, "imap:acc1:INBOX:100".to_string(), Some("<msg1@example.com>".to_string())),
+        ];
+        let new_mappings = vec![
+            ("<nonexistent@example.com>".to_string(), 999u32),
+        ];
+
+        update_message_ids_after_move(&pool, "acc1", "Trash", &old_messages, &new_mappings)
+            .await
+            .unwrap();
+
+        let ids: Vec<(String,)> = sqlx::query_as("SELECT id FROM messages WHERE thread_id = 't1'")
+            .fetch_all(&pool).await.unwrap();
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0].0, "imap:acc1:INBOX:100");
+    }
+}

@@ -303,4 +303,77 @@ mod tests {
 
         assert_eq!(accounts.len(), 2);
     }
+
+    #[tokio::test]
+    async fn test_scheduled_sends_multi_provider() {
+        let pool = setup_test_db().await;
+        let now = chrono::Utc::now().timestamp();
+
+        sqlx::query(
+            "INSERT INTO accounts (id, email, display_name, is_active, created_at, provider_type) VALUES (?, ?, ?, 1, 0, 'gmail')"
+        ).bind("gmail_acc").bind("user@gmail.com").bind("Gmail User")
+        .execute(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO accounts (id, email, display_name, is_active, created_at, provider_type) VALUES (?, ?, ?, 1, 0, 'imap')"
+        ).bind("imap_acc").bind("user@imap.com").bind("IMAP User")
+        .execute(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO accounts (id, email, display_name, is_active, created_at, provider_type) VALUES (?, ?, ?, 1, 0, 'outlook')"
+        ).bind("outlook_acc").bind("user@outlook.com").bind("Outlook User")
+        .execute(&pool).await.unwrap();
+
+        for (acc, draft) in [("gmail_acc", "gmail_draft"), ("imap_acc", "imap_draft"), ("outlook_acc", "outlook:draft1")] {
+            sqlx::query(
+                "INSERT INTO scheduled_sends (account_id, draft_id, to_recipients, subject, send_at, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+            ).bind(acc).bind(draft).bind("a@b.com").bind("Test").bind(now + 3600).bind(now)
+            .execute(&pool).await.unwrap();
+        }
+
+        let all: Vec<super::ScheduledSendInfo> = sqlx::query_as(
+            "SELECT id, account_id, draft_id, thread_id, to_recipients, subject, send_at, created_at FROM scheduled_sends ORDER BY account_id"
+        ).fetch_all(&pool).await.unwrap();
+
+        assert_eq!(all.len(), 3);
+        let account_ids: Vec<&str> = all.iter().map(|s| s.account_id.as_str()).collect();
+        assert!(account_ids.contains(&"gmail_acc"));
+        assert!(account_ids.contains(&"imap_acc"));
+        assert!(account_ids.contains(&"outlook_acc"));
+    }
+
+    #[tokio::test]
+    async fn test_scheduled_send_imap_has_body_available() {
+        let pool = setup_test_db().await;
+        let now = chrono::Utc::now().timestamp();
+
+        sqlx::query(
+            "INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES (?, ?, '', '', 0)",
+        )
+        .bind("t1").bind("imap_acc")
+        .execute(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments) VALUES (?, ?, ?, '', '', 'Draft Subject', '', ?, '', '<p>Draft body</p>', 0)",
+        )
+        .bind("imap_draft_1").bind("t1").bind("imap_acc").bind(now)
+        .execute(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO scheduled_sends (account_id, draft_id, to_recipients, subject, send_at, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+        ).bind("imap_acc").bind("imap_draft_1").bind("recipient@test.com").bind("Draft Subject").bind(now + 3600).bind(now)
+        .execute(&pool).await.unwrap();
+
+        let body_html: String = sqlx::query_scalar(
+            "SELECT COALESCE(body_html, '') FROM messages WHERE id = ? OR thread_id = ? LIMIT 1"
+        )
+        .bind("imap_draft_1").bind("imap_draft_1")
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
+        assert_eq!(body_html, "<p>Draft body</p>");
+    }
 }

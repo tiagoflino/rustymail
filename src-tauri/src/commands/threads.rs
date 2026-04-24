@@ -2074,4 +2074,122 @@ mod tests {
         let json = serde_json::to_string(&result).unwrap();
         assert_eq!(json, "{\"succeeded\":0,\"failed_ids\":[]}");
     }
+
+    #[tokio::test]
+    async fn test_unified_threads_mixed_providers() {
+        let pool = setup_test_db().await;
+
+        insert_account(&pool, "gmail_acc", "user@gmail.com", "Gmail User", 1, 1000).await;
+        insert_account(&pool, "imap_acc", "user@imap.com", "IMAP User", 1, 1000).await;
+        insert_account(&pool, "outlook_acc", "user@outlook.com", "Outlook User", 1, 1000).await;
+
+        insert_thread(&pool, "18a3f5b2c1d0e9f8", "gmail_acc").await;
+        insert_message(&pool, "gm1", "18a3f5b2c1d0e9f8", "gmail_acc", "Alice <alice@gmail.com>", "", "Gmail Thread", 3000).await;
+
+        insert_thread(&pool, "imap:imap_acc:t1", "imap_acc").await;
+        insert_message(&pool, "imap:imap_acc:INBOX:100", "imap:imap_acc:t1", "imap_acc", "Bob <bob@imap.com>", "", "IMAP Thread", 2000).await;
+
+        insert_thread(&pool, "outlook:outlook_acc:conv1", "outlook_acc").await;
+        insert_message(&pool, "outlook:OAMk1", "outlook:outlook_acc:conv1", "outlook_acc", "Carol <carol@outlook.com>", "", "Outlook Thread", 1000).await;
+
+        let account_ids = vec![
+            "gmail_acc".to_string(),
+            "imap_acc".to_string(),
+            "outlook_acc".to_string(),
+        ];
+
+        let threads = get_unified_threads_inner(&pool, &account_ids, None, None, 0, 50)
+            .await
+            .unwrap();
+
+        assert_eq!(threads.len(), 3);
+        assert_eq!(threads[0].id, "18a3f5b2c1d0e9f8");
+        assert_eq!(threads[0].internal_date, 3000);
+        assert_eq!(threads[1].id, "imap:imap_acc:t1");
+        assert_eq!(threads[1].internal_date, 2000);
+        assert_eq!(threads[2].id, "outlook:outlook_acc:conv1");
+        assert_eq!(threads[2].internal_date, 1000);
+    }
+
+    #[tokio::test]
+    async fn test_unified_threads_category_filtering_ignores_non_gmail() {
+        let pool = setup_test_db().await;
+
+        insert_account(&pool, "gmail_acc", "user@gmail.com", "Gmail", 1, 1000).await;
+        insert_account(&pool, "imap_acc", "user@imap.com", "IMAP", 1, 1000).await;
+
+        insert_thread(&pool, "gt1", "gmail_acc").await;
+        insert_message(&pool, "gm1", "gt1", "gmail_acc", "sender@gmail.com", "", "Gmail Primary", 2000).await;
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('gt1', 'INBOX')")
+            .execute(&pool).await.unwrap();
+
+        insert_thread(&pool, "gt2", "gmail_acc").await;
+        insert_message(&pool, "gm2", "gt2", "gmail_acc", "social@gmail.com", "", "Gmail Social", 1500).await;
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('gt2', 'INBOX')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('gt2', 'CATEGORY_SOCIAL')")
+            .execute(&pool).await.unwrap();
+
+        insert_thread(&pool, "it1", "imap_acc").await;
+        insert_message(&pool, "im1", "it1", "imap_acc", "sender@imap.com", "", "IMAP Inbox", 3000).await;
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES ('it1', 'INBOX')")
+            .execute(&pool).await.unwrap();
+
+        let account_ids = vec!["gmail_acc".to_string(), "imap_acc".to_string()];
+
+        let primary = get_unified_threads_inner(&pool, &account_ids, Some("INBOX"), Some(ThreadCategory::Primary), 0, 50)
+            .await
+            .unwrap();
+
+        assert_eq!(primary.len(), 2);
+        assert!(primary.iter().any(|t| t.id == "gt1"));
+        assert!(primary.iter().any(|t| t.id == "it1"));
+        assert!(!primary.iter().any(|t| t.id == "gt2"));
+    }
+
+    #[tokio::test]
+    async fn test_unified_thread_count_mixed() {
+        let pool = setup_test_db().await;
+
+        insert_account(&pool, "acc1", "a@a.com", "A", 1, 1000).await;
+        insert_account(&pool, "acc2", "b@b.com", "B", 1, 1000).await;
+
+        for i in 0..3 {
+            let tid = format!("t1_{}", i);
+            let mid = format!("m1_{}", i);
+            insert_thread(&pool, &tid, "acc1").await;
+            insert_message(&pool, &mid, &tid, "acc1", "s@t.com", "", "Sub", (i * 1000) as i64).await;
+        }
+
+        for i in 0..2 {
+            let tid = format!("t2_{}", i);
+            let mid = format!("m2_{}", i);
+            insert_thread(&pool, &tid, "acc2").await;
+            insert_message(&pool, &mid, &tid, "acc2", "s@t.com", "", "Sub", (i * 1000) as i64).await;
+        }
+
+        let account_ids = vec!["acc1".to_string(), "acc2".to_string()];
+        let result = get_unified_thread_count_inner(&pool, &account_ids, None, None)
+            .await
+            .unwrap();
+        assert_eq!(result.count, 5);
+        assert!(!result.has_more_remote);
+    }
+
+    #[tokio::test]
+    async fn test_batch_result_includes_all_providers() {
+        let result = BatchResult {
+            succeeded: 3,
+            failed_ids: vec![
+                "18a3f5b2c1d0e9f8".to_string(),
+                "imap:acc1:INBOX:t1".to_string(),
+                "outlook:acc2:conv1".to_string(),
+            ],
+        };
+        assert_eq!(result.succeeded, 3);
+        assert_eq!(result.failed_ids.len(), 3);
+        assert!(result.failed_ids.iter().any(|id| !id.contains(':')));
+        assert!(result.failed_ids.iter().any(|id| id.starts_with("imap:")));
+        assert!(result.failed_ids.iter().any(|id| id.starts_with("outlook:")));
+    }
 }

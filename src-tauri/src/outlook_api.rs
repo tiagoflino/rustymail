@@ -2064,4 +2064,420 @@ mod tests {
 
         std::env::remove_var("TEST_GRAPH_API_BASE");
     }
+
+    #[tokio::test]
+    async fn test_outlook_star_via_mock() {
+        let _guard = MOCK_ENV_LOCK.lock().unwrap();
+        let server = httpmock::MockServer::start();
+        std::env::set_var(
+            "TEST_GRAPH_API_BASE",
+            format!("http://{}", server.address()),
+        );
+
+        let pool = setup_test_db().await;
+
+        sqlx::query(
+            "INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES (?, ?, '', '', 0)",
+        )
+        .bind("outlook:acc1:conv-star")
+        .bind("acc1")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments) VALUES (?, ?, ?, '', '', '', '', 0, '', '', 0)",
+        )
+        .bind("outlook:AAMkStar1")
+        .bind("outlook:acc1:conv-star")
+        .bind("acc1")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::PATCH)
+                .path("/v1.0/me/messages/AAMkStar1");
+            then.status(200)
+                .header("Content-Type", "application/json")
+                .body(r#"{"id": "AAMkStar1"}"#);
+        });
+
+        outlook_set_star(&pool, "test-token", "outlook:acc1:conv-star", true)
+            .await
+            .unwrap();
+
+        mock.assert();
+
+        let label_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM thread_labels WHERE thread_id = 'outlook:acc1:conv-star' AND label_id = 'STARRED'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(label_count, 1);
+
+        std::env::remove_var("TEST_GRAPH_API_BASE");
+    }
+
+    #[tokio::test]
+    async fn test_outlook_archive_via_mock() {
+        let _guard = MOCK_ENV_LOCK.lock().unwrap();
+        let server = httpmock::MockServer::start();
+        std::env::set_var(
+            "TEST_GRAPH_API_BASE",
+            format!("http://{}", server.address()),
+        );
+
+        let pool = setup_test_db().await;
+
+        sqlx::query(
+            "INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES (?, ?, '', '', 0)",
+        )
+        .bind("outlook:acc1:conv-archive")
+        .bind("acc1")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments) VALUES (?, ?, ?, '', '', '', '', 0, '', '', 0)",
+        )
+        .bind("outlook:AAMkArchive1")
+        .bind("outlook:acc1:conv-archive")
+        .bind("acc1")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES (?, 'INBOX')")
+            .bind("outlook:acc1:conv-archive")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/v1.0/me/messages/AAMkArchive1/move");
+            then.status(201)
+                .header("Content-Type", "application/json")
+                .body(r#"{"id": "AAMkArchive1"}"#);
+        });
+
+        outlook_archive_thread(&pool, "test-token", "outlook:acc1:conv-archive")
+            .await
+            .unwrap();
+
+        mock.assert();
+
+        let inbox_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM thread_labels WHERE thread_id = 'outlook:acc1:conv-archive' AND label_id = 'INBOX'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(inbox_count, 0);
+
+        std::env::remove_var("TEST_GRAPH_API_BASE");
+    }
+
+    #[tokio::test]
+    async fn test_outlook_untrash_via_mock() {
+        let _guard = MOCK_ENV_LOCK.lock().unwrap();
+        let server = httpmock::MockServer::start();
+        std::env::set_var(
+            "TEST_GRAPH_API_BASE",
+            format!("http://{}", server.address()),
+        );
+
+        let pool = setup_test_db().await;
+
+        sqlx::query(
+            "INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES (?, ?, '', '', 0)",
+        )
+        .bind("outlook:acc1:conv-untrash")
+        .bind("acc1")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments) VALUES (?, ?, ?, '', '', '', '', 0, '', '', 0)",
+        )
+        .bind("outlook:AAMkUntrash1")
+        .bind("outlook:acc1:conv-untrash")
+        .bind("acc1")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query("INSERT INTO thread_labels (thread_id, label_id) VALUES (?, 'TRASH')")
+            .bind("outlook:acc1:conv-untrash")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/v1.0/me/messages/AAMkUntrash1/move");
+            then.status(201)
+                .header("Content-Type", "application/json")
+                .body(r#"{"id": "AAMkUntrash1"}"#);
+        });
+
+        outlook_untrash_thread(&pool, "test-token", "outlook:acc1:conv-untrash")
+            .await
+            .unwrap();
+
+        mock.assert();
+
+        let trash_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM thread_labels WHERE thread_id = 'outlook:acc1:conv-untrash' AND label_id = 'TRASH'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(trash_count, 0);
+
+        let inbox_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM thread_labels WHERE thread_id = 'outlook:acc1:conv-untrash' AND label_id = 'INBOX'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(inbox_count, 1);
+
+        std::env::remove_var("TEST_GRAPH_API_BASE");
+    }
+
+    #[tokio::test]
+    async fn test_outlook_save_draft_via_mock() {
+        let _guard = MOCK_ENV_LOCK.lock().unwrap();
+        let server = httpmock::MockServer::start();
+        std::env::set_var(
+            "TEST_GRAPH_API_BASE",
+            format!("http://{}", server.address()),
+        );
+
+        let pool = setup_test_db().await;
+
+        sqlx::query(
+            "INSERT INTO accounts (id, email, display_name, is_active, created_at, provider_type) VALUES (?, ?, ?, 1, 0, 'outlook')"
+        ).bind("acc1").bind("user@outlook.com").bind("Test User")
+        .execute(&pool).await.unwrap();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/v1.0/me/messages");
+            then.status(201)
+                .header("Content-Type", "application/json")
+                .body(r#"{"id": "AAMkNewDraft123"}"#);
+        });
+
+        let draft_id = outlook_save_draft(
+            &pool,
+            "test-token",
+            "recipient@test.com",
+            "Draft Subject",
+            "<p>Draft body</p>",
+            None,
+        )
+        .await
+        .unwrap();
+
+        mock.assert();
+        assert_eq!(draft_id, "outlook:AAMkNewDraft123");
+
+        std::env::remove_var("TEST_GRAPH_API_BASE");
+    }
+
+    #[tokio::test]
+    async fn test_outlook_send_draft_via_mock() {
+        let _guard = MOCK_ENV_LOCK.lock().unwrap();
+        let server = httpmock::MockServer::start();
+        std::env::set_var(
+            "TEST_GRAPH_API_BASE",
+            format!("http://{}", server.address()),
+        );
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/v1.0/me/messages/AAMkDraft456/send");
+            then.status(202);
+        });
+
+        outlook_send_draft("test-token", "outlook:AAMkDraft456")
+            .await
+            .unwrap();
+
+        mock.assert();
+
+        std::env::remove_var("TEST_GRAPH_API_BASE");
+    }
+
+    #[tokio::test]
+    async fn test_outlook_delete_draft_via_mock() {
+        let _guard = MOCK_ENV_LOCK.lock().unwrap();
+        let server = httpmock::MockServer::start();
+        std::env::set_var(
+            "TEST_GRAPH_API_BASE",
+            format!("http://{}", server.address()),
+        );
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::DELETE)
+                .path("/v1.0/me/messages/AAMkDraft789");
+            then.status(204);
+        });
+
+        outlook_delete_draft("test-token", "outlook:AAMkDraft789")
+            .await
+            .unwrap();
+
+        mock.assert();
+
+        std::env::remove_var("TEST_GRAPH_API_BASE");
+    }
+
+    #[tokio::test]
+    async fn test_outlook_download_attachment_via_mock() {
+        let _guard = MOCK_ENV_LOCK.lock().unwrap();
+        let server = httpmock::MockServer::start();
+        std::env::set_var(
+            "TEST_GRAPH_API_BASE",
+            format!("http://{}", server.address()),
+        );
+
+        let file_content = b"Hello, World!";
+        let encoded = base64::encode(file_content);
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/v1.0/me/messages/AAMkMsg1/attachments/att-001");
+            then.status(200)
+                .header("Content-Type", "application/json")
+                .body(format!(r#"{{"contentBytes": "{}"}}"#, encoded));
+        });
+
+        let data = outlook_download_attachment(
+            "test-token",
+            "outlook:AAMkMsg1",
+            "att-001",
+        )
+        .await
+        .unwrap();
+
+        mock.assert();
+        assert_eq!(data, file_content);
+
+        std::env::remove_var("TEST_GRAPH_API_BASE");
+    }
+
+    #[tokio::test]
+    async fn test_outlook_get_events_via_mock() {
+        let _guard = MOCK_ENV_LOCK.lock().unwrap();
+        let server = httpmock::MockServer::start();
+        std::env::set_var(
+            "TEST_GRAPH_API_BASE",
+            format!("http://{}", server.address()),
+        );
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/v1.0/me/calendarView");
+            then.status(200)
+                .header("Content-Type", "application/json")
+                .body(
+                    r#"{
+                    "value": [
+                        {
+                            "id": "event-001",
+                            "subject": "Team Standup",
+                            "start": {"dateTime": "2024-03-01T09:00:00", "timeZone": "UTC"},
+                            "end": {"dateTime": "2024-03-01T09:30:00", "timeZone": "UTC"},
+                            "location": {"displayName": "Room 1"},
+                            "bodyPreview": "Daily standup meeting"
+                        },
+                        {
+                            "id": "event-002",
+                            "subject": "Lunch",
+                            "start": {"dateTime": "2024-03-01T12:00:00", "timeZone": "UTC"},
+                            "end": {"dateTime": "2024-03-01T13:00:00", "timeZone": "UTC"},
+                            "location": {"displayName": ""},
+                            "bodyPreview": ""
+                        }
+                    ]
+                }"#,
+                );
+        });
+
+        let events = outlook_get_events(
+            "test-token",
+            "2024-03-01T00:00:00Z",
+            "2024-03-02T00:00:00Z",
+        )
+        .await
+        .unwrap();
+
+        mock.assert();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].id, "event-001");
+        assert_eq!(events[0].summary.as_deref(), Some("Team Standup"));
+        assert_eq!(events[0].location.as_deref(), Some("Room 1"));
+        assert_eq!(events[1].id, "event-002");
+        assert_eq!(events[1].summary.as_deref(), Some("Lunch"));
+
+        std::env::remove_var("TEST_GRAPH_API_BASE");
+    }
+
+    #[tokio::test]
+    async fn test_outlook_create_event_via_mock() {
+        let _guard = MOCK_ENV_LOCK.lock().unwrap();
+        let server = httpmock::MockServer::start();
+        std::env::set_var(
+            "TEST_GRAPH_API_BASE",
+            format!("http://{}", server.address()),
+        );
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/v1.0/me/events");
+            then.status(201)
+                .header("Content-Type", "application/json")
+                .body(
+                    r#"{
+                    "id": "new-event-001",
+                    "subject": "New Meeting",
+                    "start": {"dateTime": "2024-03-15T14:00:00", "timeZone": "UTC"},
+                    "end": {"dateTime": "2024-03-15T15:00:00", "timeZone": "UTC"}
+                }"#,
+                );
+        });
+
+        let new_event = crate::calendar_api::NewCalendarEvent {
+            summary: Some("New Meeting".to_string()),
+            description: Some("Discuss project".to_string()),
+            location: Some("Conference Room".to_string()),
+            start: Some(crate::calendar_api::CalendarDateTime {
+                date: None,
+                date_time: Some("2024-03-15T14:00:00".to_string()),
+                time_zone: Some("UTC".to_string()),
+            }),
+            end: Some(crate::calendar_api::CalendarDateTime {
+                date: None,
+                date_time: Some("2024-03-15T15:00:00".to_string()),
+                time_zone: Some("UTC".to_string()),
+            }),
+        };
+
+        let created = outlook_create_event("test-token", &new_event)
+            .await
+            .unwrap();
+
+        mock.assert();
+        assert_eq!(created.id, "new-event-001");
+        assert_eq!(created.summary.as_deref(), Some("New Meeting"));
+
+        std::env::remove_var("TEST_GRAPH_API_BASE");
+    }
 }
