@@ -11,6 +11,9 @@ pub async fn get_events(
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
     let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "imap" {
+        return Ok(vec![]);
+    }
     if provider_type == "outlook" {
         return crate::outlook_api::outlook_get_events(&account.access_token, &time_min, &time_max).await;
     }
@@ -26,6 +29,9 @@ pub async fn create_event(
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
     let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "imap" {
+        return Err("Calendar is not available for IMAP accounts".to_string());
+    }
     if provider_type == "outlook" {
         return crate::outlook_api::outlook_create_event(&account.access_token, &event).await
             .map_err(|e| { tracing::error!("Outlook Calendar API error: {}", e); e });
@@ -44,6 +50,9 @@ pub async fn update_event(
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
     let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "imap" {
+        return Err("Calendar is not available for IMAP accounts".to_string());
+    }
     if provider_type == "outlook" {
         return crate::outlook_api::outlook_update_event(&account.access_token, &event_id, &event).await
             .map_err(|e| { tracing::error!("Outlook Calendar API error: {}", e); e });
@@ -61,6 +70,9 @@ pub async fn delete_event(
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
     let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "imap" {
+        return Err("Calendar is not available for IMAP accounts".to_string());
+    }
     if provider_type == "outlook" {
         return crate::outlook_api::outlook_delete_event(&account.access_token, &event_id).await
             .map_err(|e| { tracing::error!("Outlook Calendar API error: {}", e); e });

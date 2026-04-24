@@ -23,7 +23,7 @@ pub fn read_attachment_files(paths: &[String]) -> Result<Vec<AttachmentFile>, St
             .map_err(|e| format!("Cannot read {}: {}", path.display(), e))?;
         total_size += metadata.len();
         if total_size > MAX_TOTAL_ATTACHMENT_SIZE {
-            return Err("Total attachment size exceeds Gmail's 25MB limit.".to_string());
+            return Err("Total attachment size exceeds the 25MB limit.".to_string());
         }
         let data = std::fs::read(path)
             .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;

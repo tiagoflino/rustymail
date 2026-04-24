@@ -207,40 +207,47 @@ pub async fn search_messages(
     let mut all_thread_ids = search_messages_local(pool.inner(), &account.id, &query).await?;
     let mut seen: std::collections::HashSet<String> = all_thread_ids.iter().cloned().collect();
 
-    // Gmail API search with the full original query (already supports operators)
-    let api_ids = search_gmail_api(&account.access_token, &query).await;
-    for tid in api_ids {
-        if seen.insert(tid.clone()) {
-            all_thread_ids.push(tid);
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+
+    // Gmail API search with the full original query (only for Gmail accounts)
+    if provider_type == "gmail" {
+        let api_ids = search_gmail_api(&account.access_token, &query).await;
+        for tid in api_ids {
+            if seen.insert(tid.clone()) {
+                all_thread_ids.push(tid);
+            }
         }
     }
 
-    let mut need_hydrate: Vec<String> = Vec::new();
-    for tid in &all_thread_ids {
-        #[derive(sqlx::FromRow)]
-        struct C { cnt: i32 }
-        let cnt =
-            sqlx::query_as::<_, C>("SELECT COUNT(*) as cnt FROM messages WHERE thread_id = ?")
-                .bind(tid)
-                .fetch_one(pool.inner())
-                .await
-                .map(|r| r.cnt)
-                .unwrap_or(0);
-        if cnt == 0 {
-            let _ = sqlx::query("INSERT OR IGNORE INTO threads (id, account_id, snippet, history_id, unread) VALUES (?, ?, '', '', 0)")
-                .bind(tid).bind(&account.id)
-                .execute(pool.inner()).await;
-            need_hydrate.push(tid.clone());
+    // Hydrate threads that exist only as IDs (Gmail-specific)
+    if provider_type == "gmail" {
+        let mut need_hydrate: Vec<String> = Vec::new();
+        for tid in &all_thread_ids {
+            #[derive(sqlx::FromRow)]
+            struct C { cnt: i32 }
+            let cnt =
+                sqlx::query_as::<_, C>("SELECT COUNT(*) as cnt FROM messages WHERE thread_id = ?")
+                    .bind(tid)
+                    .fetch_one(pool.inner())
+                    .await
+                    .map(|r| r.cnt)
+                    .unwrap_or(0);
+            if cnt == 0 {
+                let _ = sqlx::query("INSERT OR IGNORE INTO threads (id, account_id, snippet, history_id, unread) VALUES (?, ?, '', '', 0)")
+                    .bind(tid).bind(&account.id)
+                    .execute(pool.inner()).await;
+                need_hydrate.push(tid.clone());
+            }
         }
-    }
-    if !need_hydrate.is_empty() {
-        crate::gmail_api::batch_hydrate_threads(
-            pool.inner(),
-            &account.id,
-            &account.access_token,
-            need_hydrate,
-        )
-        .await;
+        if !need_hydrate.is_empty() {
+            crate::gmail_api::batch_hydrate_threads(
+                pool.inner(),
+                &account.id,
+                &account.access_token,
+                need_hydrate,
+            )
+            .await;
+        }
     }
 
     fetch_threads_by_ids(pool.inner(), &all_thread_ids, &account.id).await

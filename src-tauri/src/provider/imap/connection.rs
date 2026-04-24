@@ -101,7 +101,7 @@ pub async fn connect(config: &ImapConfig) -> Result<ImapSession, String> {
     Ok(session)
 }
 
-struct XOAuth2Authenticator(String);
+pub struct XOAuth2Authenticator(pub String);
 
 impl async_imap::Authenticator for XOAuth2Authenticator {
     type Response = String;

@@ -21,6 +21,18 @@ pub async fn get_upcoming_events(
 ) -> Result<Vec<crate::calendar_api::CalendarEvent>, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
+
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "imap" {
+        return Ok(vec![]);
+    }
+    if provider_type == "outlook" {
+        let now = chrono::Utc::now();
+        let start = now.to_rfc3339();
+        let end = (now + chrono::Duration::days(7)).to_rfc3339();
+        return crate::outlook_api::outlook_get_events(&account.access_token, &start, &end).await;
+    }
+
     crate::calendar_api::get_upcoming_events(&account.access_token).await
 }
 

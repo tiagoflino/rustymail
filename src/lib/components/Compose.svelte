@@ -19,6 +19,8 @@
     initialDraftId = null,
     accountId = null,
     onDraftSaved = (id: string | null) => {},
+    hasDriveUpload = false,
+    providerType = "gmail",
   }: {
     onClose: () => void;
     initialTo?: string;
@@ -31,6 +33,8 @@
     initialDraftId?: string | null;
     accountId?: string | null;
     onDraftSaved?: (id: string | null) => void;
+    hasDriveUpload?: boolean;
+    providerType?: string;
   } = $props();
 
   let isMinimized = $state(false);
@@ -87,19 +91,26 @@
       }
       const newTotal = totalAttachmentSize + size;
       if (newTotal > MAX_ATTACHMENT_SIZE) {
-        // Offer Drive upload for oversized files
-        const filePath = p;
         const fileName = name;
         const fileSize = size;
-        addToast(
-          `"${fileName}" (${formatSize(fileSize)}) exceeds 25MB limit. Upload to Google Drive?`,
-          "info",
-          0,
-          {
-            label: "Upload",
-            onClick: () => handleDriveUpload(filePath, fileName, fileSize),
-          }
-        );
+        if (hasDriveUpload) {
+          const filePath = p;
+          addToast(
+            `"${fileName}" (${formatSize(fileSize)}) exceeds 25MB limit. Upload to Google Drive?`,
+            "info",
+            0,
+            {
+              label: "Upload",
+              onClick: () => handleDriveUpload(filePath, fileName, fileSize),
+            }
+          );
+        } else {
+          addToast(
+            `"${fileName}" (${formatSize(fileSize)}) exceeds the 25MB attachment limit.`,
+            "error",
+            5000
+          );
+        }
         continue;
       }
       if (!attachments.some((a) => a.path === p)) {
@@ -814,12 +825,14 @@
           <div class="schedule-backdrop" onclick={() => { showScheduleMenu = false; showDatePicker = false; }} role="presentation"></div>
         {/if}
         <div class="send-split">
-          <button class="send-btn" disabled={isSending} onclick={send}>
+          <button class="send-btn" class:send-btn-full={providerType !== 'gmail'} disabled={isSending} onclick={send}>
             {isSending ? "Sending..." : "Send"}
           </button>
+          {#if providerType === 'gmail'}
           <button class="send-dropdown" disabled={isSending} onclick={(e) => { e.stopPropagation(); showScheduleMenu = !showScheduleMenu; }} title="Schedule Send">
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
           </button>
+          {/if}
           {#if showScheduleMenu}
             <div class="schedule-menu">
               <div class="schedule-header">Schedule Send</div>
@@ -1221,6 +1234,9 @@
   .send-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+  .send-btn-full {
+    border-radius: var(--radius-pill);
   }
   .send-dropdown {
     display: flex;

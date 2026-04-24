@@ -104,23 +104,90 @@ pub async fn check_scheduled_sends(
             }
         };
 
-        let sends: Vec<(i64, String, String)> = sqlx::query_as(
-            "SELECT id, draft_id, subject FROM scheduled_sends WHERE account_id = ? AND send_at <= ?"
+        let provider_type = super::accounts::get_provider_type(pool.inner(), account_id).await;
+
+        #[derive(sqlx::FromRow)]
+        struct ScheduledRow {
+            id: i64,
+            draft_id: String,
+            subject: String,
+            to_recipients: String,
+        }
+
+        let sends: Vec<ScheduledRow> = sqlx::query_as(
+            "SELECT id, draft_id, subject, to_recipients FROM scheduled_sends WHERE account_id = ? AND send_at <= ?"
         ).bind(account_id).bind(now).fetch_all(pool.inner()).await.map_err(|e| e.to_string())?;
 
-        for (id, draft_id, subject) in &sends {
-            match crate::gmail_api::send_draft(&account.access_token, draft_id).await {
+        for send_row in &sends {
+            let send_result = if provider_type == "imap" {
+                // IMAP: build and send via SMTP
+                let config_result = crate::provider::imap::connection::ImapConfig::from_db(pool.inner(), account_id).await;
+                match config_result {
+                    Ok(config) => {
+                        let provider = crate::provider::imap::provider::ImapProvider::new(config);
+                        #[derive(sqlx::FromRow)]
+                        struct EmailRow { email: String }
+                        let email_row = sqlx::query_as::<_, EmailRow>("SELECT email FROM accounts WHERE id = ?")
+                            .bind(account_id)
+                            .fetch_one(pool.inner())
+                            .await
+                            .map_err(|e| e.to_string());
+                        match email_row {
+                            Ok(row) => {
+                                let body_html: String = sqlx::query_scalar(
+                                    "SELECT COALESCE(body_html, '') FROM messages WHERE id = ? OR thread_id = ? LIMIT 1"
+                                )
+                                .bind(&send_row.draft_id).bind(&send_row.draft_id)
+                                .fetch_optional(pool.inner())
+                                .await
+                                .ok()
+                                .flatten()
+                                .unwrap_or_default();
+
+                                let msg = crate::email_utils::build_mime_message(
+                                    &row.email,
+                                    &send_row.to_recipients,
+                                    &send_row.subject,
+                                    &body_html,
+                                    None,
+                                    None,
+                                    false,
+                                    &[],
+                                );
+                                match msg {
+                                    Ok(message) => provider.send_message(&message).await,
+                                    Err(e) => Err(e),
+                                }
+                            }
+                            Err(e) => Err(e),
+                        }
+                    }
+                    Err(e) => Err(e),
+                }
+            } else if provider_type == "outlook" {
+                crate::outlook_api::outlook_send_draft(&account.access_token, &send_row.draft_id).await
+            } else {
+                crate::gmail_api::send_draft(&account.access_token, &send_row.draft_id).await
+            };
+
+            match send_result {
                 Ok(()) => {
-                    tracing::info!("Scheduled send fired: '{}' (draft {})", subject, draft_id);
-                    sent_subjects.push(subject.clone());
+                    tracing::info!("Scheduled send fired: '{}' (draft {})", send_row.subject, send_row.draft_id);
+                    sent_subjects.push(send_row.subject.clone());
+                    // Only remove on success for non-Gmail; Gmail drafts are consumed by send_draft
+                    let _ = sqlx::query("DELETE FROM scheduled_sends WHERE id = ?")
+                        .bind(send_row.id).execute(pool.inner()).await;
                 }
                 Err(e) => {
-                    tracing::error!("Failed to send scheduled draft {}: {}", draft_id, e);
+                    tracing::error!("Failed to send scheduled draft {}: {}", send_row.draft_id, e);
+                    if provider_type == "gmail" {
+                        // Gmail draft is consumed on attempt, remove regardless
+                        let _ = sqlx::query("DELETE FROM scheduled_sends WHERE id = ?")
+                            .bind(send_row.id).execute(pool.inner()).await;
+                    }
+                    // For IMAP/Outlook, leave the row for retry
                 }
             }
-            // Remove from table regardless (draft gone or sent)
-            let _ = sqlx::query("DELETE FROM scheduled_sends WHERE id = ?")
-                .bind(id).execute(pool.inner()).await;
         }
     }
 

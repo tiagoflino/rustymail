@@ -56,7 +56,8 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         internal_date INTEGER,
         body_plain TEXT,
         body_html TEXT,
-        has_attachments INTEGER
+        has_attachments INTEGER,
+        rfc_message_id TEXT
     );
 
     CREATE TABLE IF NOT EXISTS attachments (
@@ -527,6 +528,15 @@ async fn m015_create_outlook_sync_state(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+async fn m016_add_rfc_message_id(pool: &SqlitePool) -> Result<()> {
+    if !has_column(pool, "messages", "rfc_message_id").await {
+        sqlx::query("ALTER TABLE messages ADD COLUMN rfc_message_id TEXT")
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
 async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     let applied: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
         .fetch_all(pool)
@@ -598,6 +608,12 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
                 .execute(pool)
                 .await;
         }
+        if has_column(pool, "messages", "rfc_message_id").await {
+            let _ = sqlx::query("INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)")
+                .bind(16i64)
+                .execute(pool)
+                .await;
+        }
         let applied_after: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
             .fetch_all(pool)
             .await
@@ -609,7 +625,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 }
 
 async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()> {
-    for version in 1..=15i64 {
+    for version in 1..=16i64 {
         if !applied.contains(&version) {
             println!("[Migration] Running v{}...", version);
             match version {
@@ -628,6 +644,7 @@ async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()
                 13 => m013_create_imap_config(pool).await?,
                 14 => m014_create_imap_sync_state(pool).await?,
                 15 => m015_create_outlook_sync_state(pool).await?,
+                16 => m016_add_rfc_message_id(pool).await?,
                 _ => {}
             }
             sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
@@ -821,7 +838,7 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
             .fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 15);
+        assert_eq!(count, 16);
     }
 
     #[tokio::test]
@@ -1038,5 +1055,27 @@ mod tests {
             "SELECT COUNT(*) FROM imap_sync_state WHERE account_id = 'acc1'"
         ).fetch_one(&pool).await.unwrap();
         assert_eq!(count.0, 3);
+    }
+
+    #[tokio::test]
+    async fn test_rfc_message_id_column_exists() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        // Verify column exists via pragma
+        let has_col = has_column(&pool, "messages", "rfc_message_id").await;
+        assert!(has_col, "messages table should have rfc_message_id column");
+
+        // Verify we can insert and read the column
+        sqlx::query(
+            "INSERT INTO messages (id, thread_id, account_id, sender, subject, internal_date, rfc_message_id) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind("m1").bind("t1").bind("acc1").bind("test@test.com").bind("Test").bind(1000i64).bind("<abc@example.com>")
+        .execute(&pool).await.unwrap();
+
+        let rfc_id: Option<String> = sqlx::query_scalar("SELECT rfc_message_id FROM messages WHERE id = 'm1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(rfc_id, Some("<abc@example.com>".to_string()));
     }
 }

@@ -900,6 +900,49 @@ pub async fn outlook_trash_thread(
 }
 
 // ---------------------------------------------------------------------------
+// 7b. Untrash thread (move from deleted items back to inbox)
+// ---------------------------------------------------------------------------
+
+pub async fn outlook_untrash_thread(
+    pool: &SqlitePool,
+    access_token: &str,
+    thread_id: &str,
+) -> Result<(), String> {
+    let msg_ids = get_outlook_thread_messages(pool, thread_id).await?;
+    let client = Client::new();
+    for graph_id in &msg_ids {
+        let body = serde_json::json!({"destinationId": "inbox"});
+        let res = graph_request(
+            &client,
+            reqwest::Method::POST,
+            &format!("/v1.0/me/messages/{}/move", graph_id),
+            access_token,
+        )
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+        if !res.status().is_success() {
+            return Err(format!("Failed to untrash Outlook message {}: {}", graph_id, res.status()));
+        }
+    }
+
+    // Update local DB
+    sqlx::query("DELETE FROM thread_labels WHERE thread_id = ? AND label_id = 'TRASH'")
+        .bind(thread_id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?, 'INBOX')")
+        .bind(thread_id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // 8. Send message
 // ---------------------------------------------------------------------------
 

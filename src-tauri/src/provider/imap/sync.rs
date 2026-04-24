@@ -107,9 +107,10 @@ async fn full_folder_sync(
     }
 
     let thread_groups = group_into_threads(account_id, &headers);
+    let special_use = crate::provider::folder_mapping::detect_special_use_from_name(folder);
     let label_id = crate::provider::folder_mapping::imap_folder_to_label_id(
         folder,
-        None,
+        special_use.as_ref(),
     );
 
     let mut new_thread_ids = Vec::new();
@@ -148,9 +149,9 @@ async fn full_folder_sync(
                 let msg_id = format!("imap:{}:{}:{}", account_id, folder, uid);
 
                 sqlx::query(
-                    "INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments)
-                     VALUES (?, ?, ?, ?, ?, ?, '', ?, '', '', 0)
-                     ON CONFLICT(id) DO NOTHING",
+                    "INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments, rfc_message_id)
+                     VALUES (?, ?, ?, ?, ?, ?, '', ?, '', '', 0, ?)
+                     ON CONFLICT(id) DO UPDATE SET rfc_message_id = COALESCE(excluded.rfc_message_id, messages.rfc_message_id)",
                 )
                 .bind(&msg_id)
                 .bind(&group.thread_id)
@@ -159,9 +160,19 @@ async fn full_folder_sync(
                 .bind(&hdr.recipients)
                 .bind(&hdr.subject)
                 .bind(hdr.date)
+                .bind(hdr.message_id.as_deref())
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| e.to_string())?;
+
+                sqlx::query(
+                    "INSERT OR REPLACE INTO messages_fts(rowid, sender, subject, body_plain)
+                     SELECT rowid, sender, subject, body_plain FROM messages WHERE id = ?",
+                )
+                .bind(&msg_id)
+                .execute(&mut *tx)
+                .await
+                .ok();
             }
         }
 
@@ -259,7 +270,8 @@ async fn incremental_sync(
     }
 
     let thread_groups = group_into_threads(account_id, &headers);
-    let label_id = crate::provider::folder_mapping::imap_folder_to_label_id(folder, None);
+    let special_use = crate::provider::folder_mapping::detect_special_use_from_name(folder);
+    let label_id = crate::provider::folder_mapping::imap_folder_to_label_id(folder, special_use.as_ref());
 
     let mut updated_ids = Vec::new();
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
@@ -294,9 +306,9 @@ async fn incremental_sync(
             if let Some(hdr) = headers.iter().find(|h| h.uid == uid) {
                 let msg_id = format!("imap:{}:{}:{}", account_id, folder, uid);
                 sqlx::query(
-                    "INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments)
-                     VALUES (?, ?, ?, ?, ?, ?, '', ?, '', '', 0)
-                     ON CONFLICT(id) DO NOTHING",
+                    "INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_plain, body_html, has_attachments, rfc_message_id)
+                     VALUES (?, ?, ?, ?, ?, ?, '', ?, '', '', 0, ?)
+                     ON CONFLICT(id) DO UPDATE SET rfc_message_id = COALESCE(excluded.rfc_message_id, messages.rfc_message_id)",
                 )
                 .bind(&msg_id)
                 .bind(&group.thread_id)
@@ -305,9 +317,19 @@ async fn incremental_sync(
                 .bind(&hdr.recipients)
                 .bind(&hdr.subject)
                 .bind(hdr.date)
+                .bind(hdr.message_id.as_deref())
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| e.to_string())?;
+
+                sqlx::query(
+                    "INSERT OR REPLACE INTO messages_fts(rowid, sender, subject, body_plain)
+                     SELECT rowid, sender, subject, body_plain FROM messages WHERE id = ?",
+                )
+                .bind(&msg_id)
+                .execute(&mut *tx)
+                .await
+                .ok();
             }
         }
 

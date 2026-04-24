@@ -620,7 +620,7 @@
     border-radius: 12px;
     border: 1px solid rgba(0, 0, 0, 0.04);
   }
-  :global(body.test-dark) .unified-section {
+  :global([data-theme="dark"]) .unified-section {
     background: rgba(255, 255, 255, 0.03);
     border-color: rgba(255, 255, 255, 0.05);
   }

@@ -102,9 +102,6 @@ async fn run_idle_session(
     app_handle: &tauri::AppHandle,
     shutdown: &Arc<AtomicBool>,
 ) -> Result<(), String> {
-    let password = crate::credentials::get_imap_password(&config.account_id)
-        .map_err(|e| format!("Failed to get IMAP password: {}", e))?;
-
     let addr = (config.imap_host.as_str(), config.imap_port);
     let tcp = TcpStream::connect(addr)
         .await
@@ -119,10 +116,25 @@ async fn run_idle_session(
         .map_err(|e| format!("TLS handshake failed: {}", e))?;
 
     let client = async_imap::Client::new(tls_stream);
-    let mut session = client
-        .login(&config.username, &password)
-        .await
-        .map_err(|e| format!("Login failed: {}", e.0))?;
+    let mut session = if config.auth_method == "oauth2" {
+        let access_token = crate::credentials::get_access_token(&config.account_id)
+            .map_err(|e| format!("Failed to get OAuth2 token: {}", e))?;
+        let auth_string = format!(
+            "user={}\x01auth=Bearer {}\x01\x01",
+            config.username, access_token
+        );
+        client
+            .authenticate("XOAUTH2", super::connection::XOAuth2Authenticator(auth_string))
+            .await
+            .map_err(|e| format!("XOAUTH2 auth failed: {}", e.0))?
+    } else {
+        let password = crate::credentials::get_imap_password(&config.account_id)
+            .map_err(|e| format!("Failed to get IMAP password: {}", e))?;
+        client
+            .login(&config.username, &password)
+            .await
+            .map_err(|e| format!("Login failed: {}", e.0))?
+    };
 
     session
         .select("INBOX")

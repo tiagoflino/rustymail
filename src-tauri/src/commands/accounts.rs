@@ -795,26 +795,34 @@ pub async fn switch_account(
 pub(crate) async fn remove_account_inner(pool: &sqlx::SqlitePool, account_id: &str) -> Result<(), String> {
     tracing::info!("Account removed: {}", account_id);
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM thread_labels WHERE thread_id IN (SELECT id FROM threads WHERE account_id = ?)")
+        .bind(account_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM message_labels WHERE message_id IN (SELECT id FROM messages WHERE account_id = ?)")
+        .bind(account_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM attachments WHERE message_id IN (SELECT id FROM messages WHERE account_id = ?)")
+        .bind(account_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
     sqlx::query("DELETE FROM messages WHERE account_id = ?")
-        .bind(account_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
+        .bind(account_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
     sqlx::query("DELETE FROM threads WHERE account_id = ?")
-        .bind(account_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
+        .bind(account_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
     sqlx::query("DELETE FROM labels WHERE account_id = ?")
-        .bind(account_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
+        .bind(account_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM snoozed_threads WHERE account_id = ?")
+        .bind(account_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM scheduled_sends WHERE account_id = ?")
+        .bind(account_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM subscriptions WHERE account_id = ?")
+        .bind(account_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM imap_config WHERE account_id = ?")
+        .bind(account_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM imap_sync_state WHERE account_id = ?")
+        .bind(account_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM outlook_sync_state WHERE account_id = ?")
+        .bind(account_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM history_state WHERE account_id = ?")
+        .bind(account_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
     sqlx::query("DELETE FROM accounts WHERE id = ?")
-        .bind(account_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
+        .bind(account_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
     tx.commit().await.map_err(|e| e.to_string())?;
 
     let _ = sqlx::query("UPDATE accounts SET is_active = 1 WHERE rowid = (SELECT MIN(rowid) FROM accounts WHERE is_active = 0)")
@@ -830,6 +838,9 @@ pub async fn remove_account(
     account_id: String,
 ) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
+
+    let idle_manager = app_handle.state::<crate::provider::imap::idle::IdleManager>();
+    idle_manager.stop_for_account(&account_id).await;
 
     let _ = crate::credentials::delete_tokens(&account_id);
 

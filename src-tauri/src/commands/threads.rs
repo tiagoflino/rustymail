@@ -739,6 +739,35 @@ pub async fn fetch_label_threads(
         Some(id) => super::accounts::get_account_by_id(pool.inner(), &id).await?,
         None => get_active_account(pool.inner()).await?,
     };
+
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "imap" {
+        let config = crate::provider::imap::connection::ImapConfig::from_db(pool.inner(), &account.id).await?;
+        let provider = crate::provider::imap::provider::ImapProvider::new(config);
+        let folder = match label_id.as_str() {
+            "INBOX" => "INBOX".to_string(),
+            "SENT" => "Sent".to_string(),
+            "DRAFT" => "Drafts".to_string(),
+            "TRASH" => "Trash".to_string(),
+            "SPAM" => "Junk".to_string(),
+            other => other.strip_prefix("imap:").unwrap_or(other).to_string(),
+        };
+        provider.sync_folder(pool.inner(), &folder).await?;
+        return Ok(false);
+    }
+    if provider_type == "outlook" {
+        let folder = match label_id.as_str() {
+            "INBOX" => "inbox",
+            "SENT" => "sentitems",
+            "DRAFT" => "drafts",
+            "TRASH" => "deleteditems",
+            "SPAM" => "junkemail",
+            _ => "inbox",
+        };
+        crate::outlook_api::outlook_delta_sync(pool.inner(), &account.id, &account.access_token, folder).await?;
+        return Ok(false);
+    }
+
     let token_store = app_handle.state::<crate::page_token_store::PageTokenStore>();
     let store_key = format!("{}:{}", account.id, label_id);
     let current_token = token_store.get(&store_key);
@@ -805,6 +834,13 @@ pub async fn fetch_category_threads(
         Some(id) => super::accounts::get_account_by_id(pool.inner(), &id).await?,
         None => get_active_account(pool.inner()).await?,
     };
+
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type != "gmail" {
+        // Categories are Gmail-only; non-Gmail providers don't have them
+        return Ok(false);
+    }
+
     let token_store = app_handle.state::<crate::page_token_store::PageTokenStore>();
     let store_key = format!("{}:category:{}", account.id, category.to_lowercase());
     let current_token = token_store.get(&store_key);
@@ -977,6 +1013,17 @@ pub async fn untrash_thread(
 ) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
+
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "imap" {
+        let config = crate::provider::imap::connection::ImapConfig::from_db(pool.inner(), &account.id).await?;
+        let provider = crate::provider::imap::provider::ImapProvider::new(config);
+        return provider.untrash_thread(pool.inner(), &thread_id).await;
+    }
+    if provider_type == "outlook" {
+        return crate::outlook_api::outlook_untrash_thread(pool.inner(), &account.access_token, &thread_id).await;
+    }
+
     crate::gmail_api::untrash_thread(&account.access_token, &thread_id).await?;
     sqlx::query(
         "INSERT INTO threads (id, account_id, snippet, history_id, unread) VALUES (?, ?, '', '', 0) ON CONFLICT(id) DO NOTHING"
@@ -1152,6 +1199,14 @@ pub async fn toggle_thread_important(
 ) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
+
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type != "gmail" {
+        // Important label is Gmail-only; just update locally for safety
+        toggle_important_local(pool.inner(), &thread_id, important).await?;
+        return Ok(());
+    }
+
     let (add, remove) = if important {
         (vec!["IMPORTANT".to_string()], vec![])
     } else {
@@ -1231,19 +1286,34 @@ pub async fn batch_archive_threads(
     tracing::info!("Batch archive: {} threads", thread_ids.len());
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
     let mut succeeded = 0usize;
     let mut failed_ids = Vec::new();
     for tid in &thread_ids {
-        match crate::gmail_api::modify_thread(
-            pool.inner(),
-            &account.id,
-            &account.access_token,
-            tid,
-            vec![],
-            vec!["INBOX".to_string()],
-        )
-        .await
-        {
+        let result = if provider_type == "imap" {
+            // TODO: reuse a single IMAP connection across the batch for performance
+            let config = crate::provider::imap::connection::ImapConfig::from_db(pool.inner(), &account.id).await;
+            match config {
+                Ok(config) => {
+                    let provider = crate::provider::imap::provider::ImapProvider::new(config);
+                    provider.archive_thread(pool.inner(), tid).await
+                }
+                Err(e) => Err(e),
+            }
+        } else if provider_type == "outlook" {
+            crate::outlook_api::outlook_archive_thread(pool.inner(), &account.access_token, tid).await
+        } else {
+            crate::gmail_api::modify_thread(
+                pool.inner(),
+                &account.id,
+                &account.access_token,
+                tid,
+                vec![],
+                vec!["INBOX".to_string()],
+            )
+            .await
+        };
+        match result {
             Ok(()) => succeeded += 1,
             Err(_) => failed_ids.push(tid.clone()),
         }
@@ -1265,17 +1335,31 @@ pub async fn batch_trash_threads(
     tracing::info!("Batch trash: {} threads", thread_ids.len());
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
     let mut succeeded = 0usize;
     let mut failed_ids = Vec::new();
     for tid in &thread_ids {
-        match crate::gmail_api::trash_thread(
-            pool.inner(),
-            &account.id,
-            &account.access_token,
-            tid,
-        )
-        .await
-        {
+        let result = if provider_type == "imap" {
+            let config = crate::provider::imap::connection::ImapConfig::from_db(pool.inner(), &account.id).await;
+            match config {
+                Ok(config) => {
+                    let provider = crate::provider::imap::provider::ImapProvider::new(config);
+                    provider.trash_thread(pool.inner(), tid).await
+                }
+                Err(e) => Err(e),
+            }
+        } else if provider_type == "outlook" {
+            crate::outlook_api::outlook_trash_thread(pool.inner(), &account.access_token, tid).await
+        } else {
+            crate::gmail_api::trash_thread(
+                pool.inner(),
+                &account.id,
+                &account.access_token,
+                tid,
+            )
+            .await
+        };
+        match result {
             Ok(()) => succeeded += 1,
             Err(_) => failed_ids.push(tid.clone()),
         }
@@ -1297,24 +1381,38 @@ pub async fn batch_mark_read_status(
 ) -> Result<BatchResult, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
-    let (add, remove) = if is_read {
-        (vec![], vec!["UNREAD".to_string()])
-    } else {
-        (vec!["UNREAD".to_string()], vec![])
-    };
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
     let mut succeeded = 0usize;
     let mut failed_ids = Vec::new();
     for tid in &thread_ids {
-        match crate::gmail_api::modify_thread(
-            pool.inner(),
-            &account.id,
-            &account.access_token,
-            tid,
-            add.clone(),
-            remove.clone(),
-        )
-        .await
-        {
+        let result = if provider_type == "imap" {
+            let config = crate::provider::imap::connection::ImapConfig::from_db(pool.inner(), &account.id).await;
+            match config {
+                Ok(config) => {
+                    let provider = crate::provider::imap::provider::ImapProvider::new(config);
+                    provider.mark_read(pool.inner(), tid, is_read).await
+                }
+                Err(e) => Err(e),
+            }
+        } else if provider_type == "outlook" {
+            crate::outlook_api::outlook_mark_read(pool.inner(), &account.access_token, tid, is_read).await
+        } else {
+            let (add, remove) = if is_read {
+                (vec![], vec!["UNREAD".to_string()])
+            } else {
+                (vec!["UNREAD".to_string()], vec![])
+            };
+            crate::gmail_api::modify_thread(
+                pool.inner(),
+                &account.id,
+                &account.access_token,
+                tid,
+                add,
+                remove,
+            )
+            .await
+        };
+        match result {
             Ok(()) => succeeded += 1,
             Err(_) => failed_ids.push(tid.clone()),
         }
@@ -1333,24 +1431,38 @@ pub async fn batch_star_threads(
 ) -> Result<BatchResult, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
-    let (add, remove) = if starred {
-        (vec!["STARRED".to_string()], vec![])
-    } else {
-        (vec![], vec!["STARRED".to_string()])
-    };
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
     let mut succeeded = 0usize;
     let mut failed_ids = Vec::new();
     for tid in &thread_ids {
-        match crate::gmail_api::modify_thread(
-            pool.inner(),
-            &account.id,
-            &account.access_token,
-            tid,
-            add.clone(),
-            remove.clone(),
-        )
-        .await
-        {
+        let result = if provider_type == "imap" {
+            let config = crate::provider::imap::connection::ImapConfig::from_db(pool.inner(), &account.id).await;
+            match config {
+                Ok(config) => {
+                    let provider = crate::provider::imap::provider::ImapProvider::new(config);
+                    provider.set_star(pool.inner(), tid, starred).await
+                }
+                Err(e) => Err(e),
+            }
+        } else if provider_type == "outlook" {
+            crate::outlook_api::outlook_set_star(pool.inner(), &account.access_token, tid, starred).await
+        } else {
+            let (add, remove) = if starred {
+                (vec!["STARRED".to_string()], vec![])
+            } else {
+                (vec![], vec!["STARRED".to_string()])
+            };
+            crate::gmail_api::modify_thread(
+                pool.inner(),
+                &account.id,
+                &account.access_token,
+                tid,
+                add,
+                remove,
+            )
+            .await
+        };
+        match result {
             Ok(()) => succeeded += 1,
             Err(_) => failed_ids.push(tid.clone()),
         }
@@ -1370,6 +1482,12 @@ pub async fn batch_move_to_label(
 ) -> Result<BatchResult, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
+
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type != "gmail" {
+        return Err("Move to label is not supported for this provider".to_string());
+    }
+
     let mut succeeded = 0usize;
     let mut failed_ids = Vec::new();
     for tid in &thread_ids {
