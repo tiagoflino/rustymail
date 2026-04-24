@@ -115,7 +115,7 @@ pub fn group_into_threads(account_id: &str, messages: &[ParsedMessageHeaders]) -
         });
     }
 
-    groups.sort_by(|a, b| b.latest_date.cmp(&a.latest_date));
+    groups.sort_by_key(|g| std::cmp::Reverse(g.latest_date));
     groups
 }
 
