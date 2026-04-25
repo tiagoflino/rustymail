@@ -1322,7 +1322,7 @@
 
   async function checkScheduledSends() {
     try {
-      const sent: string[] = await invoke("check_scheduled_sends");
+      const sent: string[] = (await invoke("check_scheduled_sends")) ?? [];
       if (sent.length > 0) {
         for (const subject of sent) {
           addToast(`Scheduled email sent: ${subject}`, "success", 5000);
