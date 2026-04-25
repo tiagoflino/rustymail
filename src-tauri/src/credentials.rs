@@ -2,6 +2,7 @@ use keyring::Entry;
 
 const SERVICE_ACCESS: &str = "rustymail-access";
 const SERVICE_REFRESH: &str = "rustymail-refresh";
+const SERVICE_IMAP_PASSWORD: &str = "rustymail-imap-password";
 
 fn map_keyring_error(e: keyring::Error) -> String {
     if cfg!(target_os = "linux") {
@@ -53,10 +54,22 @@ pub fn update_access_token(account_id: &str, access_token: &str) -> Result<(), S
         .map_err(map_keyring_error)
 }
 
+pub fn store_imap_password(account_id: &str, password: &str) -> Result<(), String> {
+    entry(SERVICE_IMAP_PASSWORD, account_id)?
+        .set_password(password)
+        .map_err(map_keyring_error)
+}
+
+pub fn get_imap_password(account_id: &str) -> Result<String, String> {
+    entry(SERVICE_IMAP_PASSWORD, account_id)?
+        .get_password()
+        .map_err(map_keyring_error)
+}
+
 pub fn delete_tokens(account_id: &str) -> Result<(), String> {
-    // Ignore errors on delete — token may not exist
     let _ = entry(SERVICE_ACCESS, account_id).and_then(|e| e.delete_password().map_err(map_keyring_error));
     let _ = entry(SERVICE_REFRESH, account_id).and_then(|e| e.delete_password().map_err(map_keyring_error));
+    let _ = entry(SERVICE_IMAP_PASSWORD, account_id).and_then(|e| e.delete_password().map_err(map_keyring_error));
     Ok(())
 }
 

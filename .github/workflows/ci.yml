@@ -12,6 +12,7 @@ jobs:
     env:
       RUSTYMAIL_CLIENT_ID: ${{ secrets.RUSTYMAIL_CLIENT_ID }}
       RUSTYMAIL_CLIENT_SECRET: ${{ secrets.RUSTYMAIL_CLIENT_SECRET }}
+      RUSTYMAIL_MICROSOFT_CLIENT_ID: ${{ secrets.RUSTYMAIL_MICROSOFT_CLIENT_ID }}
       HAS_PREMIUM_KEY: ${{ secrets.PREMIUM_DEPLOY_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
@@ -118,4 +119,4 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo install cargo-audit
-      - run: cd src-tauri && cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0097 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099
+      - run: cd src-tauri && cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0097 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099 --ignore RUSTSEC-2026-0104

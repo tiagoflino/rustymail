@@ -90,6 +90,9 @@
     onbatchmovetolabel: (ids: string[], labelId: string) => void;
     isSnoozedView?: boolean;
     isTrashView?: boolean;
+    hasSuperstars?: boolean;
+    hasImportant?: boolean;
+    accountProviderTypes?: Record<string, string>;
   }
 
   let {
@@ -129,6 +132,9 @@
     onbatchmovetolabel,
     isSnoozedView = false,
     isTrashView = false,
+    hasSuperstars = false,
+    hasImportant = false,
+    accountProviderTypes = {},
   }: Props = $props();
 
   let searchInput = $state("");
@@ -466,6 +472,9 @@
       </div>
     {:else}
       {#each $threads as thread (thread.id)}
+        {@const threadProvider = accountProviderTypes[thread.account_id]}
+        {@const effectiveHasSuperstars = threadProvider ? threadProvider === 'gmail' : hasSuperstars}
+        {@const effectiveHasImportant = threadProvider ? threadProvider === 'gmail' : hasImportant}
         <div
           class="thread-item {thread.unread > 0
             ? 'unread'
@@ -517,14 +526,23 @@
             </div>
             <button
               class="thread-star {thread.starred ? 'starred' : ''}"
-              style={thread.star_type ? `color: ${getStarColor(thread.star_type)};` : ''}
+              style={effectiveHasSuperstars && thread.star_type ? `color: ${getStarColor(thread.star_type)};` : ''}
               onclick={(e) => {
                 e.stopPropagation();
-                ontogglestar(thread.id, thread.star_type ?? null);
+                if (effectiveHasSuperstars) {
+                  ontogglestar(thread.id, thread.star_type ?? null);
+                } else {
+                  ontogglestar(thread.id, thread.starred ? (thread.star_type || null) : null);
+                }
               }}
             >
-              {@html getStarIcon(thread.star_type ?? null)}
+              {#if effectiveHasSuperstars}
+                {@html getStarIcon(thread.star_type ?? null)}
+              {:else}
+                {@html getStarIcon(thread.starred ? "YELLOW_STAR" : null)}
+              {/if}
             </button>
+            {#if effectiveHasImportant}
             <button
               class="thread-important {thread.important ? 'active' : ''}"
               onclick={(e) => {
@@ -535,6 +553,7 @@
             >
               <span class="important-icon">{@html thread.important ? iconImportantArrowFilled : iconImportantArrow}</span>
             </button>
+            {/if}
             <div class="thread-unread-dot"></div>
           </div>
           <div class="thread-content">
@@ -1074,7 +1093,7 @@
     border: 1.5px solid rgba(255, 255, 255, 0.4);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
   }
-  :global(body.test-dark) .unified-color-dot {
+  :global([data-theme="dark"]) .unified-color-dot {
     border-color: rgba(255, 255, 255, 0.12);
   }
   .unified-badge {

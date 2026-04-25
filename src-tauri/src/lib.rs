@@ -2,8 +2,11 @@ mod commands;
 pub mod calendar_api;
 mod credentials;
 mod db;
+pub mod email_utils;
 mod gmail_api;
+pub mod outlook_api;
 mod page_token_store;
+pub mod provider;
 mod subscription_detector;
 mod tray;
 
@@ -56,6 +59,7 @@ pub fn run() {
             let pool_clone = pool.clone();
             handle.manage(pool);
             handle.manage(page_token_store::PageTokenStore::new());
+            handle.manage(provider::imap::idle::IdleManager::new());
             #[cfg(feature = "premium")]
             {
                 let engine = rustymail_premium::llm::engine::LlmEngine::new(
@@ -94,11 +98,17 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             commands::accounts::authenticate_gmail,
+            commands::accounts::authenticate_microsoft,
             commands::accounts::check_auth_status,
             commands::accounts::get_accounts,
             commands::accounts::switch_account,
             commands::accounts::remove_account,
             commands::accounts::get_credential_config,
+            commands::accounts::get_provider_capabilities,
+            commands::accounts::test_imap_connection,
+            commands::accounts::test_smtp_connection,
+            commands::accounts::add_imap_account,
+            commands::accounts::autodiscover_imap,
             commands::settings::get_settings,
             commands::settings::get_setting,
             commands::settings::update_setting,
