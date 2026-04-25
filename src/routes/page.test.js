@@ -25,6 +25,9 @@ vi.mock('$lib/components/LinkSafetyDialog.svelte', () => ({
 vi.mock('$lib/components/Subscriptions.svelte', () => ({
     default: vi.fn(() => ({ type: 'Subscriptions' }))
 }));
+vi.mock('$lib/components/ImapAccountForm.svelte', () => ({
+    default: vi.fn(() => ({ type: 'ImapAccountForm' }))
+}));
 
 describe('+page.svelte', () => {
     beforeEach(() => {
@@ -42,11 +45,11 @@ describe('+page.svelte', () => {
     it('renders onboarding when not authenticated', async () => {
         render(Page);
 
-        // Should show "Rustymail" title from onboarding
         await waitFor(() => {
-            expect(screen.getByText('Rustymail')).toBeInTheDocument();
+            expect(screen.getByText('Welcome to Rustymail')).toBeInTheDocument();
         });
         expect(screen.getByText('Sign in with Google')).toBeInTheDocument();
+        expect(screen.getByText('Sign in with Microsoft')).toBeInTheDocument();
     });
 
     it('renders app container when authenticated', async () => {

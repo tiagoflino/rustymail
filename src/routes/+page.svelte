@@ -30,6 +30,7 @@
   } from "$lib/components/icons";
   import { availableSuperstars } from "$lib/stores/superstars";
   import { getNextStar } from "$lib/components/starIcons";
+  import ImapAccountForm from "$lib/components/ImapAccountForm.svelte";
   import Settings from "$lib/components/Settings.svelte";
   import Compose from "$lib/components/Compose.svelte";
   import FullCalendar from "$lib/components/FullCalendar.svelte";
@@ -67,6 +68,17 @@
     avatar_url: string;
     is_active: boolean;
     credential_source?: string;
+    provider_type?: string;
+  }
+
+  interface ProviderCapabilities {
+    has_labels: boolean;
+    has_categories: boolean;
+    has_superstars: boolean;
+    has_important: boolean;
+    has_server_threading: boolean;
+    has_drive_upload: boolean;
+    has_calendar: boolean;
   }
 
   const labels = writable<LocalLabel[]>([]);
@@ -77,12 +89,23 @@
 
   let activeAccount = $state<AccountInfo | null>(null);
   let allAccounts = $state<AccountInfo[]>([]);
+  let capabilities = $state<ProviderCapabilities>({
+    has_labels: false,
+    has_categories: false,
+    has_superstars: false,
+    has_important: false,
+    has_server_threading: false,
+    has_drive_upload: false,
+    has_calendar: false,
+  });
   let showSettings = $state(false);
+  let showAddAccount = $state(false);
   let isLoading = $state(false);
   let isLoadingThreads = $state(false);
   let showCompose = $state(false);
   let showCommandPalette = $state(false);
   let viewMode = $state<"mail" | "calendar" | "subscriptions">("mail");
+  let imapConnectionStates = $state<Record<string, string>>({});
   let snoozePopoverOpen = $state(false);
   let batchSnoozeOpen = $state(false);
   let labelPickerOpen = $state(false);
@@ -97,6 +120,10 @@
   let pendingLinkUrl = $state<string | null>(null);
   let pendingLinkAnalysis = $state<LinkAnalysis | null>(null);
   const iframeWindows = new Map<Window, HTMLIFrameElement>();
+
+  let accountProviderMap = $derived(
+    Object.fromEntries(allAccounts.map(a => [a.id, a.provider_type ?? 'gmail']))
+  );
 
   let threadListRef = $state<ThreadList>();
 
@@ -137,6 +164,27 @@
   }
 
   let appState = $state<"loading" | "onboarding" | "authenticated">("loading");
+  let onboardingView = $state<'providers' | 'imap'>('providers');
+  let onboardingLoading = $state<string>('');
+  let showGoogleOnboardOptions = $state(false);
+  let showOnboardByoFields = $state(false);
+  let onboardByoClientId = $state('');
+  let onboardByoClientSecret = $state('');
+  let onboardByoIdError = $derived(
+    onboardByoClientId && !onboardByoClientId.trim().endsWith('.apps.googleusercontent.com')
+      ? 'Must end with .apps.googleusercontent.com'
+      : ''
+  );
+  let onboardByoSecretError = $derived(
+    onboardByoClientSecret && onboardByoClientSecret.trim().length < 10
+      ? 'Secret seems too short'
+      : ''
+  );
+  let onboardByoValid = $derived(
+    onboardByoClientId.trim().endsWith('.apps.googleusercontent.com')
+    && onboardByoClientSecret.trim().length >= 10
+    && !onboardByoIdError && !onboardByoSecretError
+  );
 
   let currentPage = $state(0);
   let threadsPerPage = $state(100);
@@ -296,6 +344,14 @@
         isAuthenticated.set(true);
         activeAccount = status.active_account;
         allAccounts = status.accounts;
+        try {
+          const caps = await invoke("get_provider_capabilities", { accountId: status.active_account.id }) as ProviderCapabilities | null;
+          if (caps && typeof caps.has_labels === 'boolean') {
+            capabilities = caps;
+          }
+        } catch {
+          // defaults are already Gmail-like
+        }
         appState = "authenticated";
       } else {
         appState = allAccounts.length > 0 ? "authenticated" : "onboarding";
@@ -463,7 +519,7 @@
 
   async function updateThreadCount() {
     const invocationLabelId = get(selectedLabelId) || null;
-    const category = $selectedLabelId === "INBOX" ? get(selectedCategory) : null;
+    const category = $selectedLabelId === "INBOX" && capabilities.has_categories ? get(selectedCategory) : null;
     const isUnified = invocationLabelId?.startsWith("UNIFIED_") ?? false;
     const realLabelId = isUnified ? (invocationLabelId ?? "").replace("UNIFIED_", "") : invocationLabelId;
     const accountIds = isUnified ? allAccounts.map(a => a.id) : [];
@@ -595,7 +651,7 @@
     }
 
     try {
-      const category = $selectedLabelId === "INBOX" ? get(selectedCategory) : null;
+      const category = $selectedLabelId === "INBOX" && capabilities.has_categories ? get(selectedCategory) : null;
       const offset = currentPage * threadsPerPage;
       const fetched = isUnified
         ? (await invoke("get_unified_threads", {
@@ -711,7 +767,7 @@
     const gen = ++backgroundFillGeneration;
 
     const invocationLabelId = get(selectedLabelId) || null;
-    const category = $selectedLabelId === "INBOX" ? get(selectedCategory) : null;
+    const category = $selectedLabelId === "INBOX" && capabilities.has_categories ? get(selectedCategory) : null;
     const targetPage = currentPage;
     const isUnified = invocationLabelId?.startsWith("UNIFIED_") ?? false;
     const realLabelId = isUnified ? (invocationLabelId ?? "").replace("UNIFIED_", "") : invocationLabelId;
@@ -1266,7 +1322,7 @@
 
   async function checkScheduledSends() {
     try {
-      const sent: string[] = await invoke("check_scheduled_sends");
+      const sent: string[] = (await invoke("check_scheduled_sends")) ?? [];
       if (sent.length > 0) {
         for (const subject of sent) {
           addToast(`Scheduled email sent: ${subject}`, "success", 5000);
@@ -1696,6 +1752,13 @@
     listen("tray-check-mail", async () => {
       await performSync(true);
     }).then((fn) => (unlistenTrayCheckMail = fn));
+    listen("imap-new-mail", async () => {
+      await performSync(false);
+    });
+    listen("imap-connection-state", (event: any) => {
+      const { account_id, state } = event.payload;
+      imapConnectionStates[account_id] = state;
+    });
 
     // Quit confirmation — fetch fresh counts from backend (not stale component state)
     listen("quit-requested", async () => {
@@ -1776,18 +1839,108 @@
 {:else if appState === "onboarding"}
   <main class="onboarding">
     <div class="onboard-content slide-in">
-      <img src="/app-icon.png" alt="Rustymail" class="onboard-icon" />
-      <h1 class="onboard-title">Rustymail</h1>
-      <p class="onboard-subtitle">Fast, private email</p>
-      <button class="btn-google" onclick={async () => {
-          await invoke("update_setting", { key: "oauth_custom_client_id", value: "" });
-          await invoke("update_setting", { key: "oauth_custom_client_secret", value: "" });
-          await login();
-        }} disabled={isLoading}>
-        <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
-        {isLoading ? "Connecting..." : "Sign in with Google"}
-      </button>
-      <p class="onboard-footer">Your data stays on your device.</p>
+      {#if onboardingView === 'providers'}
+        <img src="/app-icon.png" alt="Rustymail" class="onboard-icon" />
+        <h1 class="onboard-title">Welcome to Rustymail</h1>
+        <p class="onboard-subtitle">Fast, private email client</p>
+
+        <div class="provider-buttons">
+          {#if showGoogleOnboardOptions}
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+              <button class="btn-provider" disabled={!!onboardingLoading} onclick={async () => {
+                onboardingLoading = 'google';
+                try {
+                  await invoke("update_setting", { key: "oauth_custom_client_id", value: "" });
+                  await invoke("update_setting", { key: "oauth_custom_client_secret", value: "" });
+                  await invoke("authenticate_gmail");
+                  await refreshAccountState();
+                  appState = "authenticated";
+                  await performSync(true);
+                } catch (e) {
+                  addToast(String(e), "error", 6000);
+                }
+                onboardingLoading = '';
+                showGoogleOnboardOptions = false;
+              }}>
+                {onboardingLoading === 'google' ? 'Connecting...' : 'Continue with built-in credentials'}
+              </button>
+              <button class="btn-provider-link" onclick={() => showOnboardByoFields = !showOnboardByoFields}>
+                Use your own OAuth credentials {showOnboardByoFields ? '▾' : '▸'}
+              </button>
+              {#if showOnboardByoFields}
+                <div style="display: flex; flex-direction: column; gap: 6px; padding: 8px 0;">
+                  <input type="text" class="onboard-credential-input" class:invalid={onboardByoIdError}
+                    placeholder="Client ID (123456789-abc.apps.googleusercontent.com)"
+                    bind:value={onboardByoClientId} />
+                  {#if onboardByoIdError}<span class="onboard-field-error">{onboardByoIdError}</span>{/if}
+                  <input type="password" class="onboard-credential-input" class:invalid={onboardByoSecretError}
+                    placeholder="Client Secret (GOCSPX-...)"
+                    bind:value={onboardByoClientSecret} />
+                  {#if onboardByoSecretError}<span class="onboard-field-error">{onboardByoSecretError}</span>{/if}
+                  <button class="btn-provider" disabled={!onboardByoValid || !!onboardingLoading}
+                    onclick={async () => {
+                      onboardingLoading = 'google';
+                      try {
+                        await invoke("update_setting", { key: "oauth_custom_client_id", value: onboardByoClientId.trim() });
+                        await invoke("update_setting", { key: "oauth_custom_client_secret", value: onboardByoClientSecret.trim() });
+                        await invoke("authenticate_gmail");
+                        await refreshAccountState();
+                        appState = "authenticated";
+                        await performSync(true);
+                      } catch (e) {
+                        addToast(String(e), "error", 6000);
+                      }
+                      onboardingLoading = '';
+                      showGoogleOnboardOptions = false; showOnboardByoFields = false;
+                      onboardByoClientId = ''; onboardByoClientSecret = '';
+                    }}>
+                    {onboardingLoading === 'google' ? 'Connecting...' : 'Sign in with custom credentials'}
+                  </button>
+                </div>
+              {/if}
+              <button class="btn-provider-link" onclick={() => { showGoogleOnboardOptions = false; showOnboardByoFields = false; }}>&larr; Back</button>
+            </div>
+          {:else}
+            <button class="btn-provider" disabled={!!onboardingLoading} onclick={() => showGoogleOnboardOptions = true}>
+              <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+              {onboardingLoading === 'google' ? 'Connecting...' : 'Sign in with Google'}
+            </button>
+
+            <button class="btn-provider" disabled={!!onboardingLoading} onclick={async () => {
+              onboardingLoading = 'microsoft';
+              try {
+                await invoke("authenticate_microsoft");
+                await refreshAccountState();
+                appState = "authenticated";
+                await performSync(true);
+              } catch (e) {
+                addToast(String(e), "error", 6000);
+              }
+              onboardingLoading = '';
+            }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="1" y="1" width="10" height="10" fill="#F25022"/><rect x="13" y="1" width="10" height="10" fill="#7FBA00"/><rect x="1" y="13" width="10" height="10" fill="#00A4EF"/><rect x="13" y="13" width="10" height="10" fill="#FFB900"/></svg>
+              {onboardingLoading === 'microsoft' ? 'Connecting...' : 'Sign in with Microsoft'}
+            </button>
+
+            <div class="provider-divider">or</div>
+
+            <button class="btn-provider-link" onclick={() => onboardingView = 'imap'}>
+              Other email account (IMAP) &rarr;
+            </button>
+          {/if}
+        </div>
+
+        <p class="onboard-footer">Your data stays on your device.</p>
+      {:else}
+        <ImapAccountForm
+          onSuccess={async () => {
+            await refreshAccountState();
+            appState = "authenticated";
+            await performSync(true);
+          }}
+          onCancel={() => onboardingView = 'providers'}
+        />
+      {/if}
     </div>
   </main>
 {:else}
@@ -1809,13 +1962,15 @@
       oncompose={() => openCompose()}
       onsync={() => performSync(true)}
       onthemecycle={cycleTheme}
+      showCalendarToggle={capabilities.has_calendar}
+      connectionState={activeAccount?.provider_type === 'imap' ? (imapConnectionStates[activeAccount.id] || '') : ''}
       ontogglecalendar={() => viewMode = viewMode === "calendar" ? "mail" : "calendar"}
       ontogglesubscriptions={() => viewMode = viewMode === "subscriptions" ? "mail" : "subscriptions"}
       onsettings={() => (showSettings = true)}
       ontogglecollapse={toggleSidebar}
       onselectlabel={selectLabel}
       onswitchaccount={switchAccount}
-      onaddaccount={addAccount}
+      onaddaccount={() => { showSettings = true; showAddAccount = true; }}
     />
 
     {#if viewMode === "mail"}
@@ -1833,7 +1988,7 @@
         activeLabelName={getActiveLabelName()}
         {searchQuery}
         {isSearching}
-        showCategoryTabs={$selectedLabelId === "INBOX"}
+        showCategoryTabs={$selectedLabelId === "INBOX" && capabilities.has_categories}
         {selectedCategory}
         unifiedIndicator={unifiedIndicatorSetting}
         {allAccounts}
@@ -1857,6 +2012,9 @@
         onbatchmovetolabel={() => { labelPickerOpen = true; }}
         isSnoozedView={$selectedLabelId === "SNOOZED" || $selectedLabelId === "UNIFIED_SNOOZED"}
         isTrashView={$selectedLabelId === "TRASH"}
+        hasSuperstars={capabilities.has_superstars}
+        hasImportant={capabilities.has_important}
+        accountProviderTypes={accountProviderMap}
       />
 
       <MessageDetail
@@ -1899,10 +2057,14 @@
 
   <Settings
     bind:show={showSettings}
+    initialAddAccount={showAddAccount}
     accounts={allAccounts}
-    onclose={() => {
+    onclose={async () => {
       showSettings = false;
+      showAddAccount = false;
       checkAndSetupSync();
+      await refreshAccountState();
+      await performSync(true);
     }}
     onAccountSwitch={switchAccount}
     onAccountAdd={(source, id, secret) => addAccount(source, id, secret)}
@@ -1946,6 +2108,8 @@
       }}
       {...composeProps}
       onDraftSaved={(id) => (composeProps.initialDraftId = id)}
+      hasDriveUpload={capabilities.has_drive_upload}
+      providerType={activeAccount?.provider_type ?? 'gmail'}
     />
   {/if}
 {/key}
@@ -2027,30 +2191,70 @@
     color: var(--text-secondary, #8e8e93);
     margin-bottom: 32px;
   }
-  .btn-google {
+  .provider-buttons {
     display: flex;
-    align-items: center;
-    justify-content: center;
+    flex-direction: column;
     gap: 10px;
     width: 100%;
-    background: var(--text-primary, #1c1c1e);
-    color: var(--bg-sidebar, #ffffff);
-    border: none;
-    padding: 12px 24px;
-    font-size: 14px;
+    max-width: 300px;
+    margin-top: 20px;
+  }
+  .btn-provider {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 11px 16px;
+    border: 1px solid var(--border, rgba(0,0,0,0.1));
+    border-radius: 8px;
+    background: var(--bg-primary, #fff);
+    color: var(--text-primary, #1c1c1e);
+    font-size: 13px;
     font-weight: 500;
-    border-radius: 10px;
     cursor: pointer;
-    transition: opacity 0.15s;
+    transition: background 0.15s, border-color 0.15s;
     font-family: inherit;
   }
-  .btn-google:hover {
-    opacity: 0.85;
+  .btn-provider:hover { background: var(--bg-secondary, #f0f0f0); border-color: var(--text-tertiary, #aaa); }
+  .btn-provider:active { transform: scale(0.98); }
+  .btn-provider:disabled { opacity: 0.5; cursor: not-allowed; }
+  .provider-divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 6px 0;
+    color: var(--text-tertiary, #aaa);
+    font-size: 12px;
   }
-  .btn-google:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
+  .provider-divider::before, .provider-divider::after {
+    content: '';
+    flex: 1;
+    border-top: 1px dashed var(--border, rgba(0,0,0,0.1));
   }
+  .btn-provider-link {
+    background: none;
+    border: none;
+    color: var(--accent, #0a84ff);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 4px 0;
+    font-family: inherit;
+  }
+  .btn-provider-link:hover { text-decoration: underline; }
+  .onboard-credential-input {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--border, rgba(0,0,0,0.1));
+    border-radius: 6px;
+    background: var(--bg-primary, #fff);
+    color: var(--text-primary, #1c1c1e);
+    font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .onboard-credential-input::placeholder { color: var(--text-secondary, #8e8e93); opacity: 0.5; }
+  .onboard-credential-input:focus { outline: none; border-color: var(--accent, #0a84ff); }
+  .onboard-credential-input.invalid { border-color: #FF453A; }
+  .onboard-field-error { font-size: 11px; color: #FF453A; padding-left: 2px; }
   .onboard-footer {
     margin-top: 16px;
     font-size: 11px;

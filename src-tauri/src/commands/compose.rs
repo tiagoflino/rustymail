@@ -37,8 +37,37 @@ pub async fn send_message(
         .await
         .map_err(|e| e.to_string())?;
 
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "imap" {
+        let config = crate::provider::imap::connection::ImapConfig::from_db(pool.inner(), &account.id).await?;
+        let provider = crate::provider::imap::provider::ImapProvider::new(config);
+        let attachments = match attachment_paths {
+            Some(ref paths) if !paths.is_empty() => crate::email_utils::read_attachment_files(paths)?,
+            _ => vec![],
+        };
+        let msg = crate::email_utils::build_mime_message(
+            &row.email,
+            &to,
+            &subject,
+            &body,
+            in_reply_to.as_deref(),
+            references.as_deref(),
+            false,
+            &attachments,
+        )?;
+        return provider.send_message(&msg).await;
+    }
+
+    if provider_type == "outlook" {
+        let attachments = match attachment_paths {
+            Some(ref paths) if !paths.is_empty() => crate::email_utils::read_attachment_files(paths)?,
+            _ => vec![],
+        };
+        return crate::outlook_api::outlook_send_message(&account.access_token, &to, &subject, &body, &attachments).await;
+    }
+
     let attachments = match attachment_paths {
-        Some(ref paths) if !paths.is_empty() => crate::gmail_api::read_attachment_files(paths)?,
+        Some(ref paths) if !paths.is_empty() => crate::email_utils::read_attachment_files(paths)?,
         _ => vec![],
     };
 
@@ -159,8 +188,24 @@ pub async fn save_draft(
         .await
         .map_err(|e| e.to_string())?;
 
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "imap" {
+        return Err("Draft saving is not yet supported for IMAP accounts".to_string());
+    }
+    if provider_type == "outlook" {
+        return crate::outlook_api::outlook_save_draft(
+            pool.inner(),
+            &account.access_token,
+            &to,
+            &subject,
+            &body,
+            draft_id.as_deref(),
+        )
+        .await;
+    }
+
     let attachments = match attachment_paths {
-        Some(ref paths) if !paths.is_empty() => crate::gmail_api::read_attachment_files(paths)?,
+        Some(ref paths) if !paths.is_empty() => crate::email_utils::read_attachment_files(paths)?,
         _ => vec![],
     };
 
@@ -203,6 +248,14 @@ pub async fn delete_draft(app_handle: tauri::AppHandle, draft_id: String) -> Res
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
 
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "imap" {
+        return Ok(());
+    }
+    if provider_type == "outlook" {
+        return crate::outlook_api::outlook_delete_draft(&account.access_token, &draft_id).await;
+    }
+
     #[derive(sqlx::FromRow)]
     struct EmailRow {
         email: String,
@@ -231,6 +284,12 @@ pub async fn delete_draft_by_thread(
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
 
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type != "gmail" {
+        // Draft management by thread is Gmail-specific
+        return Ok(());
+    }
+
     crate::gmail_api::delete_draft_by_thread(
         pool.inner(),
         &account.id,
@@ -247,6 +306,12 @@ pub async fn upload_to_drive(
 ) -> Result<String, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
+
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type != "gmail" {
+        return Err("Upload to Drive is only supported for Gmail accounts".to_string());
+    }
+
     crate::gmail_api::upload_to_drive(&account.access_token, &file_path).await
 }
 
@@ -257,6 +322,11 @@ pub async fn get_draft_id_by_message_id(
 ) -> Result<String, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
+
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type != "gmail" {
+        return Err("Draft ID lookup by message ID is only supported for Gmail accounts".to_string());
+    }
 
     crate::gmail_api::get_draft_id_by_message_id(&account.id, &account.access_token, &message_id)
         .await

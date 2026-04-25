@@ -97,6 +97,38 @@ pub async fn sync_thread_messages(
 ) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
+
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    if provider_type == "imap" {
+        let config = crate::provider::imap::connection::ImapConfig::from_db(pool.inner(), &account.id).await?;
+        let provider = crate::provider::imap::provider::ImapProvider::new(config);
+        // Fetch body for each message in the thread that lacks content
+        let msg_ids: Vec<String> = sqlx::query_scalar(
+            "SELECT id FROM messages WHERE thread_id = ? AND (body_html = '' OR body_html IS NULL) AND (body_plain = '' OR body_plain IS NULL)"
+        )
+        .bind(&thread_id)
+        .fetch_all(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+        for mid in &msg_ids {
+            provider.fetch_message_body(pool.inner(), mid).await?;
+        }
+        return Ok(());
+    }
+    if provider_type == "outlook" {
+        let msg_ids: Vec<String> = sqlx::query_scalar(
+            "SELECT id FROM messages WHERE thread_id = ? AND (body_html = '' OR body_html IS NULL) AND (body_plain = '' OR body_plain IS NULL)"
+        )
+        .bind(&thread_id)
+        .fetch_all(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+        for mid in &msg_ids {
+            crate::outlook_api::fetch_outlook_message_body(pool.inner(), &account.access_token, mid).await?;
+        }
+        return Ok(());
+    }
+
     crate::gmail_api::fetch_messages_for_thread(
         pool.inner(),
         &account.id,
@@ -152,12 +184,26 @@ pub async fn download_attachment(
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
 
-    let bytes = crate::gmail_api::download_attachment(
-        &account.access_token,
-        &message_id,
-        &attachment_id,
-    )
-    .await?;
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    let bytes = if provider_type == "imap" {
+        let config = crate::provider::imap::connection::ImapConfig::from_db(pool.inner(), &account.id).await?;
+        let provider = crate::provider::imap::provider::ImapProvider::new(config);
+        provider.fetch_attachment_data(pool.inner(), &message_id, &attachment_id).await?
+    } else if provider_type == "outlook" {
+        crate::outlook_api::outlook_download_attachment(
+            &account.access_token,
+            &message_id,
+            &attachment_id,
+        )
+        .await?
+    } else {
+        crate::gmail_api::download_attachment(
+            &account.access_token,
+            &message_id,
+            &attachment_id,
+        )
+        .await?
+    };
 
     let custom_folder: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = 'download_folder'")
         .fetch_optional(pool.inner())
@@ -215,12 +261,26 @@ pub async fn open_attachment(
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
 
-    let bytes = crate::gmail_api::download_attachment(
-        &account.access_token,
-        &message_id,
-        &attachment_id,
-    )
-    .await?;
+    let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
+    let bytes = if provider_type == "imap" {
+        let config = crate::provider::imap::connection::ImapConfig::from_db(pool.inner(), &account.id).await?;
+        let provider = crate::provider::imap::provider::ImapProvider::new(config);
+        provider.fetch_attachment_data(pool.inner(), &message_id, &attachment_id).await?
+    } else if provider_type == "outlook" {
+        crate::outlook_api::outlook_download_attachment(
+            &account.access_token,
+            &message_id,
+            &attachment_id,
+        )
+        .await?
+    } else {
+        crate::gmail_api::download_attachment(
+            &account.access_token,
+            &message_id,
+            &attachment_id,
+        )
+        .await?
+    };
 
     let temp_dir = std::env::temp_dir().join("rustymail-attachments");
     std::fs::create_dir_all(&temp_dir)
