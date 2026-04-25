@@ -13,12 +13,23 @@ pub async fn sync_folder(
     account_id: &str,
     folder: &str,
 ) -> Result<SyncResult, String> {
-    let mailbox = session
-        .select(folder)
-        .await
-        .map_err(|e| format!("SELECT {} failed: {}", folder, e))?;
+    let caps = session.capabilities().await.map_err(|e| e.to_string())?;
+    let has_condstore = caps.has_str("CONDSTORE");
+
+    let mailbox = if has_condstore {
+        session
+            .select_condstore(folder)
+            .await
+            .map_err(|e| format!("SELECT {} failed: {}", folder, e))?
+    } else {
+        session
+            .select(folder)
+            .await
+            .map_err(|e| format!("SELECT {} failed: {}", folder, e))?
+    };
 
     let uid_validity = mailbox.uid_validity.unwrap_or(0);
+    let server_modseq = mailbox.highest_modseq;
     let exists = mailbox.exists;
 
     if exists == 0 {
@@ -33,11 +44,22 @@ pub async fn sync_folder(
     if state.is_none()
         || state.as_ref().map(|s| s.uid_validity) != Some(uid_validity as i64)
     {
-        return full_folder_sync(session, pool, account_id, folder, uid_validity).await;
+        return full_folder_sync(session, pool, account_id, folder, uid_validity, server_modseq)
+            .await;
     }
 
     let stored = state.unwrap();
-    incremental_sync(session, pool, account_id, folder, stored.highest_uid, uid_validity).await
+    incremental_sync(
+        session,
+        pool,
+        account_id,
+        folder,
+        stored.highest_uid,
+        uid_validity,
+        stored.highest_modseq,
+        server_modseq,
+    )
+    .await
 }
 
 async fn full_folder_sync(
@@ -46,6 +68,7 @@ async fn full_folder_sync(
     account_id: &str,
     folder: &str,
     uid_validity: u32,
+    server_modseq: Option<u64>,
 ) -> Result<SyncResult, String> {
     tracing::info!("Full IMAP sync for {}/{}", account_id, folder);
 
@@ -181,7 +204,15 @@ async fn full_folder_sync(
 
     tx.commit().await.map_err(|e| e.to_string())?;
 
-    save_sync_state(pool, account_id, folder, uid_validity as i64, highest_uid as i64).await?;
+    save_sync_state(
+        pool,
+        account_id,
+        folder,
+        uid_validity as i64,
+        highest_uid as i64,
+        server_modseq.map(|v| v as i64),
+    )
+    .await?;
 
     tracing::info!(
         "IMAP full sync complete: {} threads, {} messages for {}/{}",
@@ -197,6 +228,7 @@ async fn full_folder_sync(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn incremental_sync(
     session: &mut ImapSession,
     pool: &sqlx::SqlitePool,
@@ -204,6 +236,8 @@ async fn incremental_sync(
     folder: &str,
     last_uid: i64,
     uid_validity: u32,
+    stored_modseq: Option<i64>,
+    server_modseq: Option<u64>,
 ) -> Result<SyncResult, String> {
     tracing::info!("Incremental IMAP sync for {}/{} from UID {}", account_id, folder, last_uid);
 
@@ -215,7 +249,70 @@ async fn incremental_sync(
 
     let fetched: Vec<_> = fetch_stream.filter_map(|r| async { r.ok() }).collect().await;
 
-    if fetched.is_empty() {
+    // Filter out messages we already have (server may return last_uid itself)
+    let has_new_messages = fetched.iter().any(|m| m.uid.unwrap_or(0) as i64 > last_uid);
+
+    if !has_new_messages && stored_modseq.is_none() {
+        // No new messages and no CONDSTORE -- nothing to do
+        return Ok(SyncResult {
+            new_thread_count: 0,
+            updated_thread_ids: vec![],
+        });
+    }
+
+    if !has_new_messages {
+        // No new messages but CONDSTORE is available -- check flag changes only
+        if let Some(modseq) = stored_modseq {
+            let flag_query = format!("(FLAGS UID) (CHANGEDSINCE {})", modseq);
+            let changed_stream = session
+                .uid_fetch("1:*", &flag_query)
+                .await
+                .map_err(|e| format!("CHANGEDSINCE FETCH failed: {}", e))?;
+            let changed: Vec<_> = changed_stream.filter_map(|r| async { r.ok() }).collect().await;
+
+            for msg in &changed {
+                let uid = msg.uid.unwrap_or(0);
+                if uid as i64 <= last_uid {
+                    let msg_id = format!("imap:{}:{}:{}", account_id, folder, uid);
+                    let is_read = msg.flags().any(|f| matches!(f, async_imap::types::Flag::Seen));
+                    let is_flagged = msg.flags().any(|f| matches!(f, async_imap::types::Flag::Flagged));
+
+                    if let Ok(Some(thread_id)) = sqlx::query_scalar::<_, String>(
+                        "SELECT thread_id FROM messages WHERE id = ?",
+                    )
+                    .bind(&msg_id)
+                    .fetch_optional(pool)
+                    .await
+                    {
+                        sqlx::query("UPDATE threads SET unread = ? WHERE id = ?")
+                            .bind(if is_read { 0 } else { 1 })
+                            .bind(&thread_id)
+                            .execute(pool)
+                            .await
+                            .ok();
+
+                        if is_flagged {
+                            sqlx::query("INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?, 'STARRED')")
+                                .bind(&thread_id)
+                                .execute(pool)
+                                .await
+                                .ok();
+                        } else {
+                            sqlx::query("DELETE FROM thread_labels WHERE thread_id = ? AND label_id = 'STARRED'")
+                                .bind(&thread_id)
+                                .execute(pool)
+                                .await
+                                .ok();
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(ms) = server_modseq {
+            save_sync_state(pool, account_id, folder, uid_validity as i64, last_uid, Some(ms as i64)).await?;
+        }
+
         return Ok(SyncResult {
             new_thread_count: 0,
             updated_thread_ids: vec![],
@@ -338,8 +435,64 @@ async fn incremental_sync(
 
     tx.commit().await.map_err(|e| e.to_string())?;
 
-    if highest_uid > last_uid {
-        save_sync_state(pool, account_id, folder, uid_validity as i64, highest_uid).await?;
+    // Fetch flag changes on existing messages via CONDSTORE CHANGEDSINCE
+    if let Some(modseq) = stored_modseq {
+        let flag_query = format!("(FLAGS UID) (CHANGEDSINCE {})", modseq);
+        let changed_stream = session
+            .uid_fetch("1:*", &flag_query)
+            .await
+            .map_err(|e| format!("CHANGEDSINCE FETCH failed: {}", e))?;
+        let changed: Vec<_> = changed_stream.filter_map(|r| async { r.ok() }).collect().await;
+
+        for msg in &changed {
+            let uid = msg.uid.unwrap_or(0);
+            if uid as i64 <= last_uid {
+                let msg_id = format!("imap:{}:{}:{}", account_id, folder, uid);
+                let is_read = msg.flags().any(|f| matches!(f, async_imap::types::Flag::Seen));
+                let is_flagged = msg.flags().any(|f| matches!(f, async_imap::types::Flag::Flagged));
+
+                if let Ok(Some(thread_id)) = sqlx::query_scalar::<_, String>(
+                    "SELECT thread_id FROM messages WHERE id = ?",
+                )
+                .bind(&msg_id)
+                .fetch_optional(pool)
+                .await
+                {
+                    sqlx::query("UPDATE threads SET unread = ? WHERE id = ?")
+                        .bind(if is_read { 0 } else { 1 })
+                        .bind(&thread_id)
+                        .execute(pool)
+                        .await
+                        .ok();
+
+                    if is_flagged {
+                        sqlx::query("INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?, 'STARRED')")
+                            .bind(&thread_id)
+                            .execute(pool)
+                            .await
+                            .ok();
+                    } else {
+                        sqlx::query("DELETE FROM thread_labels WHERE thread_id = ? AND label_id = 'STARRED'")
+                            .bind(&thread_id)
+                            .execute(pool)
+                            .await
+                            .ok();
+                    }
+                }
+            }
+        }
+    }
+
+    if highest_uid > last_uid || server_modseq.is_some() {
+        save_sync_state(
+            pool,
+            account_id,
+            folder,
+            uid_validity as i64,
+            highest_uid,
+            server_modseq.map(|v| v as i64),
+        )
+        .await?;
     }
 
     Ok(SyncResult {
@@ -352,11 +505,12 @@ async fn incremental_sync(
 struct SyncState {
     uid_validity: i64,
     highest_uid: i64,
+    highest_modseq: Option<i64>,
 }
 
 async fn get_sync_state(pool: &sqlx::SqlitePool, account_id: &str, folder: &str) -> Option<SyncState> {
     sqlx::query_as::<_, SyncState>(
-        "SELECT uid_validity, highest_uid FROM imap_sync_state WHERE account_id = ? AND folder = ?",
+        "SELECT uid_validity, highest_uid, highest_modseq FROM imap_sync_state WHERE account_id = ? AND folder = ?",
     )
     .bind(account_id)
     .bind(folder)
@@ -372,16 +526,18 @@ async fn save_sync_state(
     folder: &str,
     uid_validity: i64,
     highest_uid: i64,
+    highest_modseq: Option<i64>,
 ) -> Result<(), String> {
     sqlx::query(
-        "INSERT INTO imap_sync_state (account_id, folder, uid_validity, highest_uid)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(account_id, folder) DO UPDATE SET uid_validity = excluded.uid_validity, highest_uid = excluded.highest_uid",
+        "INSERT INTO imap_sync_state (account_id, folder, uid_validity, highest_uid, highest_modseq)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(account_id, folder) DO UPDATE SET uid_validity = excluded.uid_validity, highest_uid = excluded.highest_uid, highest_modseq = excluded.highest_modseq",
     )
     .bind(account_id)
     .bind(folder)
     .bind(uid_validity)
     .bind(highest_uid)
+    .bind(highest_modseq)
     .execute(pool)
     .await
     .map_err(|e| e.to_string())?;
@@ -413,7 +569,7 @@ mod tests {
     #[tokio::test]
     async fn test_save_and_get_sync_state() {
         let pool = test_pool().await;
-        save_sync_state(&pool, "acc1", "INBOX", 12345, 500).await.unwrap();
+        save_sync_state(&pool, "acc1", "INBOX", 12345, 500, None).await.unwrap();
         let state = get_sync_state(&pool, "acc1", "INBOX").await;
         assert!(state.is_some());
         let state = state.unwrap();
@@ -424,8 +580,8 @@ mod tests {
     #[tokio::test]
     async fn test_save_sync_state_updates() {
         let pool = test_pool().await;
-        save_sync_state(&pool, "acc1", "INBOX", 12345, 500).await.unwrap();
-        save_sync_state(&pool, "acc1", "INBOX", 12345, 750).await.unwrap();
+        save_sync_state(&pool, "acc1", "INBOX", 12345, 500, None).await.unwrap();
+        save_sync_state(&pool, "acc1", "INBOX", 12345, 750, None).await.unwrap();
 
         let state = get_sync_state(&pool, "acc1", "INBOX").await.unwrap();
         assert_eq!(state.uid_validity, 12345);
@@ -435,9 +591,9 @@ mod tests {
     #[tokio::test]
     async fn test_save_sync_state_multi_folder() {
         let pool = test_pool().await;
-        save_sync_state(&pool, "acc1", "INBOX", 100, 50).await.unwrap();
-        save_sync_state(&pool, "acc1", "Sent", 200, 30).await.unwrap();
-        save_sync_state(&pool, "acc1", "Drafts", 300, 10).await.unwrap();
+        save_sync_state(&pool, "acc1", "INBOX", 100, 50, None).await.unwrap();
+        save_sync_state(&pool, "acc1", "Sent", 200, 30, None).await.unwrap();
+        save_sync_state(&pool, "acc1", "Drafts", 300, 10, None).await.unwrap();
 
         let inbox = get_sync_state(&pool, "acc1", "INBOX").await.unwrap();
         assert_eq!(inbox.uid_validity, 100);
@@ -455,8 +611,8 @@ mod tests {
     #[tokio::test]
     async fn test_sync_state_different_accounts() {
         let pool = test_pool().await;
-        save_sync_state(&pool, "acc1", "INBOX", 100, 50).await.unwrap();
-        save_sync_state(&pool, "acc2", "INBOX", 200, 80).await.unwrap();
+        save_sync_state(&pool, "acc1", "INBOX", 100, 50, None).await.unwrap();
+        save_sync_state(&pool, "acc2", "INBOX", 200, 80, None).await.unwrap();
 
         let acc1 = get_sync_state(&pool, "acc1", "INBOX").await.unwrap();
         assert_eq!(acc1.uid_validity, 100);
@@ -468,5 +624,42 @@ mod tests {
 
         let acc3 = get_sync_state(&pool, "acc3", "INBOX").await;
         assert!(acc3.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_save_sync_state_with_modseq() {
+        let pool = test_pool().await;
+        save_sync_state(&pool, "acc1", "INBOX", 100, 500, Some(12345)).await.unwrap();
+        let state = get_sync_state(&pool, "acc1", "INBOX").await.unwrap();
+        assert_eq!(state.highest_modseq, Some(12345));
+    }
+
+    #[tokio::test]
+    async fn test_save_sync_state_without_modseq() {
+        let pool = test_pool().await;
+        save_sync_state(&pool, "acc1", "INBOX", 100, 500, None).await.unwrap();
+        let state = get_sync_state(&pool, "acc1", "INBOX").await.unwrap();
+        assert_eq!(state.highest_modseq, None);
+    }
+
+    #[tokio::test]
+    async fn test_save_sync_state_updates_modseq() {
+        let pool = test_pool().await;
+        save_sync_state(&pool, "acc1", "INBOX", 100, 500, Some(100)).await.unwrap();
+        save_sync_state(&pool, "acc1", "INBOX", 100, 600, Some(200)).await.unwrap();
+        let state = get_sync_state(&pool, "acc1", "INBOX").await.unwrap();
+        assert_eq!(state.highest_uid, 600);
+        assert_eq!(state.highest_modseq, Some(200));
+    }
+
+    #[tokio::test]
+    async fn test_sync_state_modseq_independent_per_folder() {
+        let pool = test_pool().await;
+        save_sync_state(&pool, "acc1", "INBOX", 100, 500, Some(111)).await.unwrap();
+        save_sync_state(&pool, "acc1", "Sent", 100, 300, Some(222)).await.unwrap();
+        let inbox = get_sync_state(&pool, "acc1", "INBOX").await.unwrap();
+        let sent = get_sync_state(&pool, "acc1", "Sent").await.unwrap();
+        assert_eq!(inbox.highest_modseq, Some(111));
+        assert_eq!(sent.highest_modseq, Some(222));
     }
 }
