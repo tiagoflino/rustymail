@@ -12,6 +12,7 @@ jobs:
     env:
       RUSTYMAIL_CLIENT_ID: ${{ secrets.RUSTYMAIL_CLIENT_ID }}
       RUSTYMAIL_CLIENT_SECRET: ${{ secrets.RUSTYMAIL_CLIENT_SECRET }}
+      RUSTYMAIL_MICROSOFT_CLIENT_ID: ${{ secrets.RUSTYMAIL_MICROSOFT_CLIENT_ID }}
       HAS_PREMIUM_KEY: ${{ secrets.PREMIUM_DEPLOY_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
