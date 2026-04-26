@@ -186,14 +186,12 @@ pub fn parse_multistatus_events(xml: &str) -> Vec<(String, String)> {
                     }
                 }
             }
-            Ok(Event::Text(e)) => {
-                if inside_response {
-                    let text = e.unescape().unwrap_or_default().to_string();
-                    match current_tag.as_str() {
-                        "href" => current_href = text,
-                        "calendar-data" => current_cal_data = text,
-                        _ => {}
-                    }
+            Ok(Event::Text(e)) if inside_response => {
+                let text = e.unescape().unwrap_or_default().to_string();
+                match current_tag.as_str() {
+                    "href" => current_href = text,
+                    "calendar-data" => current_cal_data = text,
+                    _ => {}
                 }
             }
             Ok(Event::End(e)) => {
@@ -248,12 +246,10 @@ fn parse_propfind_property(xml: &str, property: &str) -> Option<String> {
                     capture_href = false;
                 }
             }
-            Ok(Event::Text(e)) => {
-                if capture_href {
-                    let text = e.unescape().unwrap_or_default().to_string();
-                    if !text.is_empty() {
-                        return Some(text);
-                    }
+            Ok(Event::Text(e)) if capture_href => {
+                let text = e.unescape().unwrap_or_default().to_string();
+                if !text.is_empty() {
+                    return Some(text);
                 }
             }
             Ok(Event::End(e)) => {
