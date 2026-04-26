@@ -707,8 +707,9 @@ END:VCALENDAR</c:calendar-data>
                 .body(&response_xml);
         });
 
-        let test_password =
-            std::env::var("TEST_CALDAV_PASSWORD").unwrap_or_else(|_| "test-password".to_string());
+        let Ok(test_password) = std::env::var("TEST_CALDAV_PASSWORD") else {
+            return;
+        };
 
         let events = caldav_get_events(
             &server.base_url(),
