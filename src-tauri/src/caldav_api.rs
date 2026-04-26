@@ -711,10 +711,13 @@ END:VCALENDAR</c:calendar-data>
                 .body(&response_xml);
         });
 
+        let test_password =
+            std::env::var("TEST_CALDAV_PASSWORD").unwrap_or_else(|_| "test-password".to_string());
+
         let events = caldav_get_events(
             &server.base_url(),
             "user@test.com",
-            "password123",
+            &test_password,
             "2026-04-01T00:00:00Z",
             "2026-04-30T23:59:59Z",
         )
