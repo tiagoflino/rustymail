@@ -756,8 +756,8 @@ END:VCALENDAR</c:calendar-data>
             }),
         };
 
-        let test_password =
-            std::env::var("TEST_CALDAV_PASSWORD").unwrap_or_else(|_| "test-password".to_string());
+        let test_password = std::env::var("TEST_CALDAV_PASSWORD")
+            .expect("TEST_CALDAV_PASSWORD must be set for caldav mock test");
 
         let created = caldav_create_event(
             &server.base_url(),
