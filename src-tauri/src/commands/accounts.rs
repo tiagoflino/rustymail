@@ -932,6 +932,15 @@ pub async fn add_imap_account(
     .await
     .map_err(|e| e.to_string())?;
 
+    let domain = email.split('@').nth(1).unwrap_or(&imap_host);
+    if let Ok(url) = crate::caldav_api::discover_caldav_url(domain, &email, &password).await {
+        let _ = sqlx::query("UPDATE imap_config SET caldav_url = ? WHERE account_id = ?")
+            .bind(&url)
+            .bind(&email)
+            .execute(pool.inner())
+            .await;
+    }
+
     Ok(())
 }
 

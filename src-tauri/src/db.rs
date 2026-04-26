@@ -162,7 +162,8 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         smtp_host TEXT NOT NULL,
         smtp_port INTEGER NOT NULL DEFAULT 587,
         auth_method TEXT NOT NULL DEFAULT 'password',
-        use_tls INTEGER NOT NULL DEFAULT 1
+        use_tls INTEGER NOT NULL DEFAULT 1,
+        caldav_url TEXT
     );
 
     CREATE TABLE IF NOT EXISTS imap_sync_state (
@@ -537,7 +538,16 @@ async fn m016_add_rfc_message_id(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-async fn run_migrations(pool: &SqlitePool) -> Result<()> {
+async fn m017_add_caldav_url(pool: &SqlitePool) -> Result<()> {
+    if !has_column(pool, "imap_config", "caldav_url").await {
+        sqlx::query("ALTER TABLE imap_config ADD COLUMN caldav_url TEXT")
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
+pub(crate) async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     let applied: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
         .fetch_all(pool)
         .await
@@ -614,6 +624,12 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
                 .execute(pool)
                 .await;
         }
+        if has_column(pool, "imap_config", "caldav_url").await {
+            let _ = sqlx::query("INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)")
+                .bind(17i64)
+                .execute(pool)
+                .await;
+        }
         let applied_after: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
             .fetch_all(pool)
             .await
@@ -625,7 +641,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 }
 
 async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()> {
-    for version in 1..=16i64 {
+    for version in 1..=17i64 {
         if !applied.contains(&version) {
             println!("[Migration] Running v{}...", version);
             match version {
@@ -645,6 +661,7 @@ async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()
                 14 => m014_create_imap_sync_state(pool).await?,
                 15 => m015_create_outlook_sync_state(pool).await?,
                 16 => m016_add_rfc_message_id(pool).await?,
+                17 => m017_add_caldav_url(pool).await?,
                 _ => {}
             }
             sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
@@ -838,7 +855,7 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
             .fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 16);
+        assert_eq!(count, 17);
     }
 
     #[tokio::test]

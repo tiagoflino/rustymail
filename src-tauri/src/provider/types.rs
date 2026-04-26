@@ -30,7 +30,7 @@ impl ProviderCapabilities {
             has_important: false,
             has_server_threading: false,
             has_drive_upload: false,
-            has_calendar: false,
+            has_calendar: true,
         }
     }
 
@@ -124,7 +124,7 @@ mod tests {
         assert!(!caps.has_important);
         assert!(!caps.has_server_threading);
         assert!(!caps.has_drive_upload);
-        assert!(!caps.has_calendar);
+        assert!(caps.has_calendar);
     }
 
     #[test]
