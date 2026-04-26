@@ -756,10 +756,13 @@ END:VCALENDAR</c:calendar-data>
             }),
         };
 
+        let test_password =
+            std::env::var("TEST_CALDAV_PASSWORD").unwrap_or_else(|_| "test-password".to_string());
+
         let created = caldav_create_event(
             &server.base_url(),
             "user@test.com",
-            "password123",
+            &test_password,
             &event,
         )
         .await
