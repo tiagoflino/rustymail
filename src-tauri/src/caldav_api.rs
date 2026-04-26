@@ -785,10 +785,13 @@ END:VCALENDAR</c:calendar-data>
             then.status(204);
         });
 
+        let test_password =
+            std::env::var("TEST_CALDAV_PASSWORD").unwrap_or_else(|_| "test-password".to_string());
+
         let result = caldav_delete_event(
             &server.base_url(),
             "user@test.com",
-            "password123",
+            &test_password,
             "/calendars/user/default/event1.ics",
         )
         .await;
