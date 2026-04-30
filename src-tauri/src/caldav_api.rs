@@ -756,7 +756,13 @@ END:VCALENDAR</c:calendar-data>
             }),
         };
 
-        let test_password = "test-password".to_string();
+        let test_password = std::env::var("TEST_CALDAV_PASSWORD").unwrap_or_else(|_| {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            format!("test-password-{}", nanos)
+        });
 
         let created = caldav_create_event(
             &server.base_url(),
