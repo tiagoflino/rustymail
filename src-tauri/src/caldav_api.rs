@@ -785,8 +785,8 @@ END:VCALENDAR</c:calendar-data>
             then.status(204);
         });
 
-        let test_password =
-            std::env::var("TEST_CALDAV_PASSWORD").unwrap_or_else(|_| "test-password".to_string());
+        let test_password = std::env::var("TEST_CALDAV_PASSWORD")
+            .expect("TEST_CALDAV_PASSWORD must be set for test_caldav_delete_event_via_mock");
 
         let result = caldav_delete_event(
             &server.base_url(),
