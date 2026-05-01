@@ -28,6 +28,8 @@
   let aiSummaryLoading = $state(false);
   let aiStatusMessage = $state<string | null>(null);
   let aiAvailable = $state(false);
+  let smartReplies = $state<string[]>([]);
+  let smartRepliesLoading = $state(false);
 
   let expandedMessages = $state(new Set<string>());
   let lastExpandedThreadId: string | null = null;
@@ -101,6 +103,7 @@
   $effect(() => {
     $selectedThreadId;
     aiSummary = null;
+    smartReplies = [];
   });
 
   function formatAiSummary(raw: string): string {
@@ -234,6 +237,28 @@
     }
   }
 
+  async function handleSmartReplies() {
+    if (!$selectedThreadId || smartRepliesLoading) return;
+    smartRepliesLoading = true;
+    smartReplies = [];
+    try {
+      await invoke("ensure_ai_ready");
+      let senderName: string | null = null;
+      try {
+        senderName = (await invoke("get_setting", { key: "sender_name" })) as string;
+      } catch {}
+      const result = await invoke("ai_smart_replies", {
+        threadId: $selectedThreadId,
+        senderName,
+      });
+      smartReplies = result as string[];
+    } catch (e: any) {
+      addToast(`Smart replies failed: ${e}`, "error", 5000);
+    } finally {
+      smartRepliesLoading = false;
+    }
+  }
+
   function toggleMessage(id: string) {
     const next = new Set(expandedMessages);
     if (next.has(id)) {
@@ -289,6 +314,7 @@
     onforward: (msg: LocalMessage) => void;
     oneditdraft: (msg: LocalMessage) => void;
     oniframeload: (iframe: HTMLIFrameElement) => void;
+    onsmartreply?: (text: string, msg: LocalMessage) => void;
   }
 
   let {
@@ -302,6 +328,7 @@
     onforward,
     oneditdraft,
     oniframeload,
+    onsmartreply,
   }: Props = $props();
 
   interface Attachment {
@@ -711,6 +738,33 @@
             </button>
           {/if}
         {/each}
+        {#if aiAvailable && $currentMessages.length > 0}
+          <div class="smart-replies-section">
+            {#if smartReplies.length > 0}
+              <div class="smart-replies-chips">
+                {#each smartReplies as reply}
+                  <button
+                    class="smart-reply-chip"
+                    onclick={() => {
+                      const lastMsg = $currentMessages[$currentMessages.length - 1];
+                      if (onsmartreply) onsmartreply(reply, lastMsg);
+                    }}
+                  >{reply}</button>
+                {/each}
+              </div>
+            {:else}
+              <button class="smart-replies-btn" onclick={handleSmartReplies} disabled={smartRepliesLoading}>
+                {#if smartRepliesLoading}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="30 70" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/></circle></svg>
+                  Generating replies...
+                {:else}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 014 4c0 1.1-.4 2.1-1 2.8L12 12l-3-3.2A4 4 0 0112 2z"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 18h6"/><path d="M10 22h4"/></svg>
+                  Quick Replies
+                {/if}
+              </button>
+            {/if}
+          </div>
+        {/if}
       </div>
     {:else}
       <div class="empty-state">No messages loaded for this thread.</div>
@@ -1364,4 +1418,56 @@
   .ai-card-skeleton .w60 { width: 60%; }
   .ai-card-skeleton .w70 { width: 70%; }
   .ai-card-skeleton .w80 { width: 80%; }
+  .smart-replies-section {
+    margin-top: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .smart-replies-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: var(--font-size-toolbar);
+    font-family: var(--font-family);
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+  }
+  .smart-replies-btn:hover:not(:disabled) {
+    background: var(--sidebar-hover);
+    color: var(--text-primary);
+  }
+  .smart-replies-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
+  .smart-replies-chips {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .smart-reply-chip {
+    padding: 8px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--text-primary);
+    font-size: var(--font-size-toolbar);
+    font-family: var(--font-family);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    max-width: 300px;
+    text-align: left;
+    line-height: 1.4;
+  }
+  .smart-reply-chip:hover {
+    background: var(--sidebar-hover);
+    border-color: var(--accent-blue);
+  }
 </style>

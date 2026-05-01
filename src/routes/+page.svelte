@@ -1541,6 +1541,24 @@
     return match ? match[1] : str;
   }
 
+  function handleSmartReply(text: string, msg: LocalMessage) {
+    const thread = $threads.find((t) => t.id === msg.thread_id);
+    let subject = msg.subject || thread?.subject || "";
+    if (!subject.toLowerCase().startsWith("re:")) subject = `Re: ${subject}`;
+    const to = msg.sender || "";
+    const body = `<p>${text.replace(/\n/g, "<br>")}</p>`;
+
+    openCompose({
+      initialTo: to,
+      initialSubject: subject,
+      initialBodyHTML: body,
+      threadId: msg.thread_id,
+      inReplyTo: msg.id,
+      references: msg.id,
+      accountId: thread?.account_id ?? null,
+    });
+  }
+
   function handleReply(msg: LocalMessage) {
     const thread = $threads.find((t) => t.id === msg.thread_id);
     let subject = msg.subject || thread?.subject || "";
@@ -2028,6 +2046,7 @@
         onforward={handleForward}
         oneditdraft={handleEditDraft}
         oniframeload={handleIframeLoad}
+        onsmartreply={handleSmartReply}
       />
 
       {#if batchSnoozeOpen}
