@@ -1,4 +1,5 @@
 mod commands;
+pub mod caldav_api;
 pub mod calendar_api;
 mod credentials;
 mod db;

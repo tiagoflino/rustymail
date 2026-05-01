@@ -24,6 +24,22 @@ pub async fn get_upcoming_events(
 
     let provider_type = super::accounts::get_provider_type(pool.inner(), &account.id).await;
     if provider_type == "imap" {
+        let caldav_url = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT caldav_url FROM imap_config WHERE account_id = ?",
+        )
+        .bind(&account.id)
+        .fetch_optional(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?
+        .flatten();
+        if let Some(url) = caldav_url {
+            let config = crate::provider::imap::connection::ImapConfig::from_db(pool.inner(), &account.id).await?;
+            let password = crate::credentials::get_imap_password(&account.id)?;
+            let now = chrono::Utc::now();
+            let start = now.to_rfc3339();
+            let end = (now + chrono::Duration::days(7)).to_rfc3339();
+            return crate::caldav_api::caldav_get_events(&url, &config.username, &password, &start, &end).await;
+        }
         return Ok(vec![]);
     }
     if provider_type == "outlook" {
