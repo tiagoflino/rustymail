@@ -2548,6 +2548,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "icalendar"
+version = "0.17.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "264fe856964b7a84076dec2d8ea29fce7c9b422968c9a2f404d4aa3771ae2179"
+dependencies = [
+ "chrono",
+ "iso8601",
+ "nom 8.0.0",
+ "nom-language",
+ "uuid",
+]
+
+[[package]]
 name = "ico"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2788,6 +2801,15 @@ checksum = "173609498df190136aa7dea1a91db051746d339e18476eed5ca40521f02d7aa5"
 dependencies = [
  "is-docker",
  "once_cell",
+]
+
+[[package]]
+name = "iso8601"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1082f0c48f143442a1ac6122f67e360ceee130b967af4d50996e5154a45df46"
+dependencies = [
+ "nom 8.0.0",
 ]
 
 [[package]]
@@ -3498,6 +3520,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df9761775871bdef83bee530e60050f7e54b1105350d6884eb0fb4f46c2f9405"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "nom-language"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2de2bc5b451bfedaef92c90b8939a8fff5770bdcc1fafd6239d086aab8fa6b29"
+dependencies = [
+ "nom 8.0.0",
 ]
 
 [[package]]
@@ -5093,6 +5124,7 @@ dependencies = [
  "futures",
  "hex",
  "httpmock",
+ "icalendar",
  "keyring",
  "lettre",
  "mail-parser",
@@ -5100,6 +5132,7 @@ dependencies = [
  "mockall",
  "native-tls",
  "oauth2",
+ "quick-xml 0.37.5",
  "regex-lite",
  "reqwest 0.12.28",
  "rustymail-premium",
@@ -5123,6 +5156,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "urlencoding",
+ "uuid",
 ]
 
 [[package]]
