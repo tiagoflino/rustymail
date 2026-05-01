@@ -707,9 +707,7 @@ END:VCALENDAR</c:calendar-data>
                 .body(&response_xml);
         });
 
-        let Ok(test_password) = std::env::var("TEST_CALDAV_PASSWORD") else {
-            return;
-        };
+        let test_password = "test-password".to_string();
 
         let events = caldav_get_events(
             &server.base_url(),
@@ -756,13 +754,7 @@ END:VCALENDAR</c:calendar-data>
             }),
         };
 
-        let test_password = std::env::var("TEST_CALDAV_PASSWORD").unwrap_or_else(|_| {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            format!("test-password-{}", nanos)
-        });
+        let test_password = "test-password".to_string();
 
         let created = caldav_create_event(
             &server.base_url(),
@@ -791,8 +783,7 @@ END:VCALENDAR</c:calendar-data>
             then.status(204);
         });
 
-        let test_password = std::env::var("TEST_CALDAV_PASSWORD")
-            .expect("TEST_CALDAV_PASSWORD must be set for test_caldav_delete_event_via_mock");
+        let test_password = "test-password".to_string();
 
         let result = caldav_delete_event(
             &server.base_url(),
