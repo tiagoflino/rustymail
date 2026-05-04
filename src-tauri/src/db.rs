@@ -629,6 +629,115 @@ async fn m017_add_caldav_url(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+async fn m018_create_contacts(pool: &SqlitePool) -> Result<()> {
+    if !has_table(pool, "contacts").await {
+        sqlx::query(
+            "CREATE TABLE contacts (
+                id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                given_name TEXT,
+                surname TEXT,
+                nickname TEXT,
+                company TEXT,
+                job_title TEXT,
+                department TEXT,
+                notes TEXT,
+                birthday TEXT,
+                photo_uri TEXT,
+                phones TEXT NOT NULL DEFAULT '[]',
+                addresses TEXT NOT NULL DEFAULT '[]',
+                social_profiles TEXT NOT NULL DEFAULT '[]',
+                urls TEXT NOT NULL DEFAULT '[]',
+                relations TEXT NOT NULL DEFAULT '[]',
+                is_starred INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT 'local',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                FOREIGN KEY (account_id) REFERENCES accounts(id)
+            )"
+        ).execute(pool).await?;
+        sqlx::query("CREATE INDEX idx_contacts_account ON contacts(account_id)")
+            .execute(pool).await?;
+    }
+
+    if !has_table(pool, "contact_emails").await {
+        sqlx::query(
+            "CREATE TABLE contact_emails (
+                id TEXT PRIMARY KEY,
+                contact_id TEXT NOT NULL,
+                email TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'other',
+                is_primary INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
+            )"
+        ).execute(pool).await?;
+        sqlx::query("CREATE UNIQUE INDEX idx_contact_emails_email ON contact_emails(email COLLATE NOCASE)")
+            .execute(pool).await?;
+        sqlx::query("CREATE INDEX idx_contact_emails_contact ON contact_emails(contact_id)")
+            .execute(pool).await?;
+    }
+
+    if !has_table(pool, "contact_provider_links").await {
+        sqlx::query(
+            "CREATE TABLE contact_provider_links (
+                id TEXT PRIMARY KEY,
+                contact_id TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                remote_id TEXT NOT NULL,
+                etag TEXT,
+                last_synced_at INTEGER,
+                FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+                UNIQUE(account_id, provider, remote_id)
+            )"
+        ).execute(pool).await?;
+    }
+
+    if !has_table(pool, "contact_groups").await {
+        sqlx::query(
+            "CREATE TABLE contact_groups (
+                id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                color TEXT,
+                remote_id TEXT,
+                created_at INTEGER NOT NULL
+            )"
+        ).execute(pool).await?;
+    }
+
+    if !has_table(pool, "contact_group_members").await {
+        sqlx::query(
+            "CREATE TABLE contact_group_members (
+                contact_id TEXT NOT NULL,
+                group_id TEXT NOT NULL,
+                PRIMARY KEY (contact_id, group_id),
+                FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+                FOREIGN KEY (group_id) REFERENCES contact_groups(id) ON DELETE CASCADE
+            )"
+        ).execute(pool).await?;
+    }
+
+    if !has_table(pool, "contacts_sync_state").await {
+        sqlx::query(
+            "CREATE TABLE contacts_sync_state (
+                account_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                sync_token TEXT,
+                last_full_sync INTEGER,
+                PRIMARY KEY (account_id, provider)
+            )"
+        ).execute(pool).await?;
+    }
+
+    sqlx::query(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS contacts_fts USING fts5(display_name, company, job_title, notes, content='contacts', content_rowid='rowid')"
+    ).execute(pool).await?;
+
+    Ok(())
+}
+
 pub(crate) async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     let applied: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
         .fetch_all(pool)
@@ -723,7 +832,7 @@ pub(crate) async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 }
 
 async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()> {
-    for version in 1..=17i64 {
+    for version in 1..=18i64 {
         if !applied.contains(&version) {
             println!("[Migration] Running v{}...", version);
             match version {
@@ -744,6 +853,7 @@ async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()
                 15 => m015_create_outlook_sync_state(pool).await?,
                 16 => m016_add_rfc_message_id(pool).await?,
                 17 => m017_add_caldav_url(pool).await?,
+                18 => m018_create_contacts(pool).await?,
                 _ => {}
             }
             sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
@@ -938,7 +1048,7 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
             .fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 17);
+        assert_eq!(count, 18);
     }
 
     #[tokio::test]
@@ -1229,5 +1339,30 @@ mod tests {
             .execute(&pool).await;
 
         assert!(dup.is_err(), "Duplicate email should be rejected by unique index");
+    }
+
+    #[tokio::test]
+    async fn test_migration_018_creates_contact_tables() {
+        let pool = test_pool().await;
+        // Create minimal schema without contacts (simulating old DB)
+        sqlx::query("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY, email TEXT, display_name TEXT, avatar_url TEXT, token_expiry INTEGER, is_active INTEGER DEFAULT 1, created_at INTEGER, credential_source TEXT DEFAULT 'builtin', provider_type TEXT DEFAULT 'gmail')")
+            .execute(&pool).await.unwrap();
+        // Mark 1-17 as done
+        for v in 1..=17i64 {
+            sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
+                .bind(v).execute(&pool).await.unwrap();
+        }
+
+        // Run pending migrations (should apply 18)
+        let applied: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
+            .fetch_all(&pool).await.unwrap();
+        run_pending_migrations(&pool, &applied).await.unwrap();
+
+        assert!(has_table(&pool, "contacts").await, "contacts table should exist after migration 18");
+        assert!(has_table(&pool, "contact_emails").await, "contact_emails table should exist");
+        assert!(has_table(&pool, "contact_groups").await, "contact_groups table should exist");
+        assert!(has_table(&pool, "contacts_sync_state").await, "contacts_sync_state table should exist");
     }
 }
