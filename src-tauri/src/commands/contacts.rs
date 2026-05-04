@@ -832,6 +832,338 @@ pub(crate) async fn search_contacts_autocomplete(
     Ok(suggestions)
 }
 
+// --- Import/Export ---
+
+pub(crate) async fn import_vcard_inner(
+    pool: &SqlitePool,
+    account_id: &str,
+    data: &str,
+) -> Result<Vec<ContactWithEmails>, String> {
+    let mut imported = Vec::new();
+
+    let cards: Vec<&str> = data.split("END:VCARD").collect();
+    for card in cards {
+        let card = card.trim();
+        if card.is_empty() || !card.contains("BEGIN:VCARD") {
+            continue;
+        }
+
+        let mut display_name = String::new();
+        let mut given_name: Option<String> = None;
+        let mut surname: Option<String> = None;
+        let mut emails: Vec<EmailInput> = Vec::new();
+        let mut phones: Vec<serde_json::Value> = Vec::new();
+        let mut company: Option<String> = None;
+        let mut job_title: Option<String> = None;
+
+        for line in card.lines() {
+            let line = line.trim_end_matches('\r');
+            if line.starts_with("FN:") {
+                display_name = line[3..].to_string();
+            } else if line.starts_with("N:") {
+                let parts: Vec<&str> = line[2..].splitn(5, ';').collect();
+                if parts.len() >= 2 {
+                    let fam = parts[0].trim();
+                    let giv = parts[1].trim();
+                    if !fam.is_empty() {
+                        surname = Some(fam.to_string());
+                    }
+                    if !giv.is_empty() {
+                        given_name = Some(giv.to_string());
+                    }
+                }
+            } else if line.contains("EMAIL") && line.contains(':') {
+                let colon_pos = line.find(':').unwrap();
+                let email_value = line[colon_pos + 1..].trim().to_string();
+                let prefix = &line[..colon_pos].to_uppercase();
+                let email_type = if prefix.contains("WORK") {
+                    "work"
+                } else if prefix.contains("HOME") {
+                    "home"
+                } else {
+                    "other"
+                };
+                let is_primary = emails.is_empty();
+                emails.push(EmailInput {
+                    email: email_value,
+                    r#type: email_type.to_string(),
+                    is_primary,
+                });
+            } else if line.contains("TEL") && line.contains(':') {
+                let colon_pos = line.find(':').unwrap();
+                let phone_value = line[colon_pos + 1..].trim().to_string();
+                let prefix = &line[..colon_pos].to_uppercase();
+                let phone_type = if prefix.contains("CELL") || prefix.contains("MOBILE") {
+                    "mobile"
+                } else if prefix.contains("WORK") {
+                    "work"
+                } else if prefix.contains("HOME") {
+                    "home"
+                } else {
+                    "other"
+                };
+                phones.push(serde_json::json!({
+                    "number": phone_value,
+                    "type": phone_type,
+                }));
+            } else if line.starts_with("ORG:") {
+                let val = line[4..].trim_end_matches(';').trim().to_string();
+                if !val.is_empty() {
+                    company = Some(val);
+                }
+            } else if line.starts_with("TITLE:") {
+                let val = line[6..].trim().to_string();
+                if !val.is_empty() {
+                    job_title = Some(val);
+                }
+            }
+        }
+
+        // Fallback display name to first email
+        if display_name.is_empty() {
+            if let Some(first_email) = emails.first() {
+                display_name = first_email.email.clone();
+            }
+        }
+
+        // Skip entries with no display name and no emails
+        if display_name.is_empty() && emails.is_empty() {
+            continue;
+        }
+
+        let input = CreateContactInput {
+            display_name,
+            given_name,
+            surname,
+            company,
+            job_title,
+            phones,
+            emails,
+            ..Default::default()
+        };
+
+        match create_contact_inner(pool, account_id, input).await {
+            Ok(contact) => imported.push(contact),
+            Err(_) => continue, // Skip duplicates
+        }
+    }
+
+    Ok(imported)
+}
+
+pub(crate) async fn import_csv_inner(
+    pool: &SqlitePool,
+    account_id: &str,
+    data: &str,
+) -> Result<Vec<ContactWithEmails>, String> {
+    let mut lines = data.lines();
+    let header_line = match lines.next() {
+        Some(h) => h,
+        None => return Ok(Vec::new()),
+    };
+
+    // Parse headers with case-insensitive matching
+    let headers: Vec<String> = header_line.split(',').map(|h| h.trim().to_lowercase()).collect();
+
+    let name_col = headers.iter().position(|h| {
+        h == "name" || h == "full name" || h == "display name" || h == "display_name"
+    });
+    let email_col = headers.iter().position(|h| {
+        h == "email" || h == "e-mail" || h == "email address"
+    });
+    let phone_col = headers.iter().position(|h| {
+        h == "phone" || h == "telephone" || h == "mobile" || h == "phone number"
+    });
+    let company_col = headers.iter().position(|h| {
+        h == "company" || h == "organization" || h == "org" || h == "organisation"
+    });
+    let title_col = headers.iter().position(|h| {
+        h == "title" || h == "job title" || h == "job_title" || h == "position"
+    });
+
+    let mut imported = Vec::new();
+
+    for line in lines {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let fields: Vec<&str> = line.split(',').collect();
+
+        let display_name = name_col
+            .and_then(|i| fields.get(i))
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+
+        if display_name.is_empty() {
+            continue;
+        }
+
+        let email = email_col
+            .and_then(|i| fields.get(i))
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+
+        let phone = phone_col
+            .and_then(|i| fields.get(i))
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+
+        let company = company_col
+            .and_then(|i| fields.get(i))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let job_title = title_col
+            .and_then(|i| fields.get(i))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let emails = if email.is_empty() {
+            Vec::new()
+        } else {
+            vec![EmailInput {
+                email,
+                r#type: "other".to_string(),
+                is_primary: true,
+            }]
+        };
+
+        let phones = if phone.is_empty() {
+            Vec::new()
+        } else {
+            vec![serde_json::json!({ "number": phone, "type": "other" })]
+        };
+
+        let input = CreateContactInput {
+            display_name,
+            company,
+            job_title,
+            emails,
+            phones,
+            ..Default::default()
+        };
+
+        match create_contact_inner(pool, account_id, input).await {
+            Ok(contact) => imported.push(contact),
+            Err(_) => continue,
+        }
+    }
+
+    Ok(imported)
+}
+
+pub(crate) async fn export_vcard_inner(
+    pool: &SqlitePool,
+    account_id: &str,
+    contact_ids: Option<Vec<String>>,
+) -> Result<String, String> {
+    let contacts = match contact_ids {
+        Some(ids) => {
+            let mut results = Vec::new();
+            for id in ids {
+                results.push(get_contact_inner(pool, &id).await?);
+            }
+            results
+        }
+        None => get_contacts_inner(pool, account_id, None, None, 0, 10000).await?,
+    };
+
+    let mut output = String::new();
+
+    for c in &contacts {
+        output.push_str("BEGIN:VCARD\r\n");
+        output.push_str("VERSION:3.0\r\n");
+        output.push_str(&format!("FN:{}\r\n", c.contact.display_name));
+
+        let surname = c.contact.surname.as_deref().unwrap_or("");
+        let given = c.contact.given_name.as_deref().unwrap_or("");
+        output.push_str(&format!("N:{};{};;;\r\n", surname, given));
+
+        for email in &c.emails {
+            output.push_str(&format!(
+                "EMAIL;TYPE={}:{}\r\n",
+                email.r#type.to_uppercase(),
+                email.email
+            ));
+        }
+
+        let phones: Vec<serde_json::Value> =
+            serde_json::from_str(&c.contact.phones).unwrap_or_default();
+        for phone in &phones {
+            let number = phone.get("number").and_then(|v| v.as_str()).unwrap_or("");
+            let ptype = phone
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("OTHER")
+                .to_uppercase();
+            if !number.is_empty() {
+                output.push_str(&format!("TEL;TYPE={}:{}\r\n", ptype, number));
+            }
+        }
+
+        if let Some(ref org) = c.contact.company {
+            output.push_str(&format!("ORG:{}\r\n", org));
+        }
+
+        if let Some(ref title) = c.contact.job_title {
+            output.push_str(&format!("TITLE:{}\r\n", title));
+        }
+
+        output.push_str("END:VCARD\r\n");
+    }
+
+    Ok(output)
+}
+
+pub(crate) async fn export_csv_inner(
+    pool: &SqlitePool,
+    account_id: &str,
+    contact_ids: Option<Vec<String>>,
+) -> Result<String, String> {
+    let contacts = match contact_ids {
+        Some(ids) => {
+            let mut results = Vec::new();
+            for id in ids {
+                results.push(get_contact_inner(pool, &id).await?);
+            }
+            results
+        }
+        None => get_contacts_inner(pool, account_id, None, None, 0, 10000).await?,
+    };
+
+    let mut output = String::from("Name,Email,Phone,Company,Title\n");
+
+    for c in &contacts {
+        let email = c
+            .emails
+            .iter()
+            .find(|e| e.is_primary)
+            .or_else(|| c.emails.first())
+            .map(|e| e.email.as_str())
+            .unwrap_or("");
+
+        let phones: Vec<serde_json::Value> =
+            serde_json::from_str(&c.contact.phones).unwrap_or_default();
+        let phone = phones
+            .first()
+            .and_then(|p| p.get("number"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let company = c.contact.company.as_deref().unwrap_or("");
+        let title = c.contact.job_title.as_deref().unwrap_or("");
+
+        output.push_str(&format!(
+            "{},{},{},{},{}\n",
+            c.contact.display_name, email, phone, company, title
+        ));
+    }
+
+    Ok(output)
+}
+
 // --- Tauri command wrappers ---
 
 #[tauri::command]
@@ -987,6 +1319,44 @@ pub async fn merge_contacts(
 ) -> Result<ContactWithEmails, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     merge_contacts_inner(pool.inner(), &primary_id, &secondary_id).await
+}
+
+#[tauri::command]
+pub async fn import_contacts(
+    app_handle: tauri::AppHandle,
+    data: String,
+    format: String,
+    account_id: Option<String>,
+) -> Result<Vec<ContactWithEmails>, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let acc_id = match account_id {
+        Some(id) => id,
+        None => super::accounts::get_active_account(pool.inner()).await?.id,
+    };
+    match format.to_lowercase().as_str() {
+        "vcard" | "vcf" => import_vcard_inner(pool.inner(), &acc_id, &data).await,
+        "csv" => import_csv_inner(pool.inner(), &acc_id, &data).await,
+        _ => Err(format!("Unsupported format: {}", format)),
+    }
+}
+
+#[tauri::command]
+pub async fn export_contacts(
+    app_handle: tauri::AppHandle,
+    format: String,
+    contact_ids: Option<Vec<String>>,
+    account_id: Option<String>,
+) -> Result<String, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let acc_id = match account_id {
+        Some(id) => id,
+        None => super::accounts::get_active_account(pool.inner()).await?.id,
+    };
+    match format.to_lowercase().as_str() {
+        "vcard" | "vcf" => export_vcard_inner(pool.inner(), &acc_id, contact_ids).await,
+        "csv" => export_csv_inner(pool.inner(), &acc_id, contact_ids).await,
+        _ => Err(format!("Unsupported format: {}", format)),
+    }
 }
 
 #[cfg(test)]
@@ -1399,5 +1769,64 @@ mod tests {
         // Secondary should be deleted
         let result = get_contact_inner(&pool, &c2.contact.id).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_import_vcard() {
+        let pool = test_pool().await;
+        let vcard_data = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Jane Smith\r\nN:Smith;Jane;;;\r\nEMAIL;TYPE=WORK:jane@smith.com\r\nTEL;TYPE=CELL:+1234567890\r\nORG:SmithCo\r\nTITLE:CEO\r\nEND:VCARD\r\n";
+
+        let imported = import_vcard_inner(&pool, "acc1", vcard_data).await.unwrap();
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].contact.display_name, "Jane Smith");
+        assert_eq!(imported[0].contact.company, Some("SmithCo".to_string()));
+        assert_eq!(imported[0].emails[0].email, "jane@smith.com");
+    }
+
+    #[tokio::test]
+    async fn test_import_csv() {
+        let pool = test_pool().await;
+        let csv_data = "Name,Email,Phone,Company,Title\nJohn Doe,john@doe.com,+1111111111,DoeCo,Manager\nJane Roe,jane@roe.com,,RoeCo,";
+
+        let imported = import_csv_inner(&pool, "acc1", csv_data).await.unwrap();
+        assert_eq!(imported.len(), 2);
+        assert_eq!(imported[0].contact.display_name, "John Doe");
+        assert_eq!(imported[1].contact.display_name, "Jane Roe");
+    }
+
+    #[tokio::test]
+    async fn test_export_vcard() {
+        let pool = test_pool().await;
+        create_contact_inner(&pool, "acc1", CreateContactInput {
+            display_name: "Export Test".to_string(),
+            given_name: Some("Export".to_string()),
+            surname: Some("Test".to_string()),
+            company: Some("TestCo".to_string()),
+            emails: vec![EmailInput { email: "export@test.com".to_string(), r#type: "work".to_string(), is_primary: true }],
+            ..Default::default()
+        }).await.unwrap();
+
+        let vcard = export_vcard_inner(&pool, "acc1", None).await.unwrap();
+        assert!(vcard.contains("BEGIN:VCARD"));
+        assert!(vcard.contains("FN:Export Test"));
+        assert!(vcard.contains("EMAIL;TYPE=WORK:export@test.com"));
+        assert!(vcard.contains("ORG:TestCo"));
+        assert!(vcard.contains("END:VCARD"));
+    }
+
+    #[tokio::test]
+    async fn test_export_csv() {
+        let pool = test_pool().await;
+        create_contact_inner(&pool, "acc1", CreateContactInput {
+            display_name: "CSV User".to_string(),
+            company: Some("CSVCo".to_string()),
+            job_title: Some("Dev".to_string()),
+            emails: vec![EmailInput { email: "csv@test.com".to_string(), r#type: "work".to_string(), is_primary: true }],
+            ..Default::default()
+        }).await.unwrap();
+
+        let csv = export_csv_inner(&pool, "acc1", None).await.unwrap();
+        assert!(csv.contains("Name,Email,Phone,Company,Title"));
+        assert!(csv.contains("CSV User,csv@test.com,"));
     }
 }
