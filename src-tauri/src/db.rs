@@ -196,6 +196,84 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
     CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions(account_id, status);
     CREATE INDEX IF NOT EXISTS idx_scheduled_sends_time ON scheduled_sends(send_at);
 
+    CREATE TABLE IF NOT EXISTS contacts (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        given_name TEXT,
+        surname TEXT,
+        nickname TEXT,
+        company TEXT,
+        job_title TEXT,
+        department TEXT,
+        notes TEXT,
+        birthday TEXT,
+        photo_uri TEXT,
+        phones TEXT NOT NULL DEFAULT '[]',
+        addresses TEXT NOT NULL DEFAULT '[]',
+        social_profiles TEXT NOT NULL DEFAULT '[]',
+        urls TEXT NOT NULL DEFAULT '[]',
+        relations TEXT NOT NULL DEFAULT '[]',
+        is_starred INTEGER NOT NULL DEFAULT 0,
+        source TEXT NOT NULL DEFAULT 'local',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (account_id) REFERENCES accounts(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS contact_emails (
+        id TEXT PRIMARY KEY,
+        contact_id TEXT NOT NULL,
+        email TEXT NOT NULL,
+        type TEXT NOT NULL DEFAULT 'other',
+        is_primary INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_contact_emails_email
+        ON contact_emails(email COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_contact_emails_contact
+        ON contact_emails(contact_id);
+    CREATE INDEX IF NOT EXISTS idx_contacts_account
+        ON contacts(account_id);
+
+    CREATE TABLE IF NOT EXISTS contact_provider_links (
+        id TEXT PRIMARY KEY,
+        contact_id TEXT NOT NULL,
+        account_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        remote_id TEXT NOT NULL,
+        etag TEXT,
+        last_synced_at INTEGER,
+        FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+        UNIQUE(account_id, provider, remote_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS contact_groups (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        color TEXT,
+        remote_id TEXT,
+        created_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS contact_group_members (
+        contact_id TEXT NOT NULL,
+        group_id TEXT NOT NULL,
+        PRIMARY KEY (contact_id, group_id),
+        FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+        FOREIGN KEY (group_id) REFERENCES contact_groups(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS contacts_sync_state (
+        account_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        sync_token TEXT,
+        last_full_sync INTEGER,
+        PRIMARY KEY (account_id, provider)
+    );
+
     PRAGMA journal_mode=WAL;
     "#;
 
@@ -209,6 +287,10 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
     sqlx::query(
         "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(sender, subject, body_plain, content=messages, content_rowid=rowid)"
     ).execute(pool).await.ok();
+
+    sqlx::query(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS contacts_fts USING fts5(display_name, company, job_title, notes, content='contacts', content_rowid='rowid')"
+    ).execute(pool).await?;
 
     let defaults = [
         ("theme", "system"),
@@ -716,6 +798,7 @@ mod tests {
 
         let names: Vec<&str> = indexes.iter().map(|r| r.0.as_str()).collect();
         for expected in &[
+            "idx_contact_emails_contact", "idx_contact_emails_email", "idx_contacts_account",
             "idx_labels_account", "idx_message_labels_label",
             "idx_messages_account", "idx_messages_internal_date", "idx_messages_thread",
             "idx_snoozed_account_until",
@@ -1094,5 +1177,57 @@ mod tests {
         let rfc_id: Option<String> = sqlx::query_scalar("SELECT rfc_message_id FROM messages WHERE id = 'm1'")
             .fetch_one(&pool).await.unwrap();
         assert_eq!(rfc_id, Some("<abc@example.com>".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_contacts_tables_exist_after_schema() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+
+        let tables: Vec<(String,)> = sqlx::query_as(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'contact%' ORDER BY name"
+        ).fetch_all(&pool).await.unwrap();
+
+        let names: Vec<&str> = tables.iter().map(|r| r.0.as_str()).collect();
+        for expected in &[
+            "contact_emails",
+            "contact_group_members",
+            "contact_groups",
+            "contact_provider_links",
+            "contacts",
+            "contacts_sync_state",
+        ] {
+            assert!(names.contains(expected), "Missing table: {expected}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_contacts_fts_exists_after_schema() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+
+        let result: Result<Vec<(String,)>, _> = sqlx::query_as(
+            "SELECT display_name FROM contacts_fts WHERE contacts_fts MATCH 'test' LIMIT 1"
+        ).fetch_all(&pool).await;
+
+        assert!(result.is_ok(), "contacts_fts table should exist and be queryable");
+    }
+
+    #[tokio::test]
+    async fn test_contact_emails_unique_index() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+
+        sqlx::query("INSERT INTO accounts (id, email, display_name, is_active, created_at) VALUES ('a1', 'user@test.com', 'Test User', 1, 1000)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO contacts (id, account_id, display_name, phones, addresses, social_profiles, urls, relations, source, created_at, updated_at) VALUES ('c1', 'a1', 'Test', '[]', '[]', '[]', '[]', '[]', 'local', 1000, 1000)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO contact_emails (id, contact_id, email, type, is_primary) VALUES ('e1', 'c1', 'test@example.com', 'work', 1)")
+            .execute(&pool).await.unwrap();
+
+        let dup = sqlx::query("INSERT INTO contact_emails (id, contact_id, email, type, is_primary) VALUES ('e2', 'c1', 'test@example.com', 'personal', 0)")
+            .execute(&pool).await;
+
+        assert!(dup.is_err(), "Duplicate email should be rejected by unique index");
     }
 }
