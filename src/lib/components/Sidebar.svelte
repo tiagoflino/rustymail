@@ -52,6 +52,7 @@
     onthemecycle: () => void;
     ontogglecalendar: () => void;
     ontogglesubscriptions: () => void;
+    ontogglecontacts?: () => void;
     onsettings: () => void;
     ontogglecollapse: () => void;
     onselectlabel: (labelId: string) => void;
@@ -80,6 +81,7 @@
     onthemecycle,
     ontogglecalendar,
     ontogglesubscriptions,
+    ontogglecontacts,
     onsettings,
     ontogglecollapse,
     onselectlabel,
@@ -195,6 +197,16 @@
       title="Toggle Subscriptions"
     >
       {@html iconSubscriptions}
+    </button>
+    <button
+      class="btn-sidebar sidebar-contacts-btn"
+      onclick={() => ontogglecontacts?.()}
+      title="Contacts"
+    >
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.2">
+        <circle cx="8" cy="5" r="2.5"/>
+        <path d="M3 14c0-2.8 2.2-5 5-5s5 2.2 5 5"/>
+      </svg>
     </button>
   </div>
 
@@ -769,6 +781,15 @@
     border: 1px solid var(--border-color);
   }
   .sidebar-subscriptions-btn {
+    width: 36px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-view);
+    border: 1px solid var(--border-color);
+  }
+  .sidebar-contacts-btn {
     width: 36px;
     padding: 0;
     display: flex;

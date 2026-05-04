@@ -1985,6 +1985,7 @@
       connectionState={activeAccount?.provider_type === 'imap' ? (imapConnectionStates[activeAccount.id] || '') : ''}
       ontogglecalendar={() => viewMode = viewMode === "calendar" ? "mail" : "calendar"}
       ontogglesubscriptions={() => viewMode = viewMode === "subscriptions" ? "mail" : "subscriptions"}
+      ontogglecontacts={() => { viewMode = "contacts"; }}
       onsettings={() => (showSettings = true)}
       ontogglecollapse={toggleSidebar}
       onselectlabel={selectLabel}
