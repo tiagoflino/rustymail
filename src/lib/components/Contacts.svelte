@@ -3,6 +3,8 @@
   import { onMount } from "svelte";
   import { addToast } from "$lib/stores/toast";
   import type { ContactWithEmails, ContactGroup } from "$lib/stores/contacts";
+  import ContactForm from './ContactForm.svelte';
+  import ContactImportExport from './ContactImportExport.svelte';
 
   let contacts = $state<ContactWithEmails[]>([]);
   let contactGroups = $state<ContactGroup[]>([]);
@@ -350,8 +352,17 @@
   </div>
 </div>
 
-<!-- ContactForm will be added here -->
-<!-- ImportExport will be added here -->
+{#if showForm}
+  <ContactForm
+    contact={editingContact}
+    onClose={() => { showForm = false; editingContact = null; }}
+    onSaved={(c) => { showForm = false; editingContact = null; loadContacts(); }}
+  />
+{/if}
+
+{#if showImportExport}
+  <ContactImportExport onClose={() => { showImportExport = false; }} />
+{/if}
 
 <style>
   .contacts-container {
