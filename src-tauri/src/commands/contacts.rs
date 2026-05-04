@@ -485,6 +485,144 @@ pub(crate) async fn delete_contact_inner(
     Ok(())
 }
 
+// --- ContactGroup type ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct ContactGroup {
+    pub id: String,
+    pub account_id: String,
+    pub name: String,
+    pub color: Option<String>,
+    pub remote_id: Option<String>,
+    pub created_at: i64,
+}
+
+// --- Group inner functions ---
+
+pub(crate) async fn create_group_inner(
+    pool: &SqlitePool,
+    account_id: &str,
+    name: &str,
+    color: Option<&str>,
+) -> Result<ContactGroup, String> {
+    let id = new_id();
+    let now = now_epoch();
+
+    sqlx::query(
+        "INSERT INTO contact_groups (id, account_id, name, color, created_at) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(account_id)
+    .bind(name)
+    .bind(color)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(ContactGroup {
+        id,
+        account_id: account_id.to_string(),
+        name: name.to_string(),
+        color: color.map(|c| c.to_string()),
+        remote_id: None,
+        created_at: now,
+    })
+}
+
+pub(crate) async fn get_groups_inner(
+    pool: &SqlitePool,
+    account_id: &str,
+) -> Result<Vec<ContactGroup>, String> {
+    sqlx::query_as::<_, ContactGroup>(
+        "SELECT id, account_id, name, color, remote_id, created_at FROM contact_groups WHERE account_id = ? ORDER BY name ASC",
+    )
+    .bind(account_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn update_group_inner(
+    pool: &SqlitePool,
+    group_id: &str,
+    name: Option<&str>,
+    color: Option<&str>,
+) -> Result<ContactGroup, String> {
+    let existing: ContactGroup = sqlx::query_as(
+        "SELECT id, account_id, name, color, remote_id, created_at FROM contact_groups WHERE id = ?",
+    )
+    .bind(group_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| format!("Group not found: {}", group_id))?;
+
+    let new_name = name.unwrap_or(&existing.name);
+    let new_color = if color.is_some() { color } else { existing.color.as_deref() };
+
+    sqlx::query("UPDATE contact_groups SET name = ?, color = ? WHERE id = ?")
+        .bind(new_name)
+        .bind(new_color)
+        .bind(group_id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(ContactGroup {
+        id: existing.id,
+        account_id: existing.account_id,
+        name: new_name.to_string(),
+        color: new_color.map(|c| c.to_string()),
+        remote_id: existing.remote_id,
+        created_at: existing.created_at,
+    })
+}
+
+pub(crate) async fn delete_group_inner(
+    pool: &SqlitePool,
+    group_id: &str,
+) -> Result<(), String> {
+    sqlx::query("DELETE FROM contact_group_members WHERE group_id = ?")
+        .bind(group_id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    sqlx::query("DELETE FROM contact_groups WHERE id = ?")
+        .bind(group_id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+pub(crate) async fn set_contact_groups_inner(
+    pool: &SqlitePool,
+    contact_id: &str,
+    group_ids: Vec<String>,
+) -> Result<(), String> {
+    sqlx::query("DELETE FROM contact_group_members WHERE contact_id = ?")
+        .bind(contact_id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    for group_id in &group_ids {
+        sqlx::query(
+            "INSERT OR IGNORE INTO contact_group_members (contact_id, group_id) VALUES (?, ?)",
+        )
+        .bind(contact_id)
+        .bind(group_id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
 // --- Autocomplete search ---
 
 pub(crate) async fn search_contacts_autocomplete(
@@ -653,6 +791,64 @@ pub async fn search_contacts_v2(
         None => super::accounts::get_active_account(pool.inner()).await?.id,
     };
     search_contacts_autocomplete(pool.inner(), &acc_id, &query).await
+}
+
+#[tauri::command]
+pub async fn get_contact_groups(
+    app_handle: tauri::AppHandle,
+    account_id: Option<String>,
+) -> Result<Vec<ContactGroup>, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let acc_id = match account_id {
+        Some(id) => id,
+        None => super::accounts::get_active_account(pool.inner()).await?.id,
+    };
+    get_groups_inner(pool.inner(), &acc_id).await
+}
+
+#[tauri::command]
+pub async fn create_contact_group(
+    app_handle: tauri::AppHandle,
+    name: String,
+    color: Option<String>,
+    account_id: Option<String>,
+) -> Result<ContactGroup, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let acc_id = match account_id {
+        Some(id) => id,
+        None => super::accounts::get_active_account(pool.inner()).await?.id,
+    };
+    create_group_inner(pool.inner(), &acc_id, &name, color.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn update_contact_group(
+    app_handle: tauri::AppHandle,
+    group_id: String,
+    name: Option<String>,
+    color: Option<String>,
+) -> Result<ContactGroup, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    update_group_inner(pool.inner(), &group_id, name.as_deref(), color.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn delete_contact_group(
+    app_handle: tauri::AppHandle,
+    group_id: String,
+) -> Result<(), String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    delete_group_inner(pool.inner(), &group_id).await
+}
+
+#[tauri::command]
+pub async fn set_contact_groups(
+    app_handle: tauri::AppHandle,
+    contact_id: String,
+    group_ids: Vec<String>,
+) -> Result<(), String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    set_contact_groups_inner(pool.inner(), &contact_id, group_ids).await
 }
 
 #[cfg(test)]
@@ -943,5 +1139,76 @@ mod tests {
         let results = search_contacts_autocomplete(&pool, "acc1", "charlie").await.unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].email, "charlie@unknown.com");
+    }
+
+    #[tokio::test]
+    async fn test_create_and_list_groups() {
+        let pool = test_pool().await;
+        let group = create_group_inner(&pool, "acc1", "VIP Clients", Some("#ff0000"))
+            .await
+            .unwrap();
+        assert_eq!(group.name, "VIP Clients");
+        assert_eq!(group.color, Some("#ff0000".to_string()));
+
+        create_group_inner(&pool, "acc1", "Friends", None).await.unwrap();
+        let groups = get_groups_inner(&pool, "acc1").await.unwrap();
+        assert_eq!(groups.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_assign_contact_to_group() {
+        let pool = test_pool().await;
+        let group = create_group_inner(&pool, "acc1", "Team", None).await.unwrap();
+        let contact = create_contact_inner(
+            &pool,
+            "acc1",
+            CreateContactInput {
+                display_name: "Member".to_string(),
+                emails: vec![EmailInput {
+                    email: "member@team.com".to_string(),
+                    r#type: "work".to_string(),
+                    is_primary: true,
+                }],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        set_contact_groups_inner(&pool, &contact.contact.id, vec![group.id.clone()])
+            .await
+            .unwrap();
+
+        let fetched = get_contact_inner(&pool, &contact.contact.id).await.unwrap();
+        assert_eq!(fetched.groups, vec!["Team"]);
+
+        // Also test that group filter works in get_contacts_inner
+        let in_group = get_contacts_inner(&pool, "acc1", None, Some(&group.id), 0, 10)
+            .await
+            .unwrap();
+        assert_eq!(in_group.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_update_group() {
+        let pool = test_pool().await;
+        let group = create_group_inner(&pool, "acc1", "Old Name", Some("#000000"))
+            .await
+            .unwrap();
+
+        let updated = update_group_inner(&pool, &group.id, Some("New Name"), Some("#ffffff"))
+            .await
+            .unwrap();
+        assert_eq!(updated.name, "New Name");
+        assert_eq!(updated.color, Some("#ffffff".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_delete_group() {
+        let pool = test_pool().await;
+        let group = create_group_inner(&pool, "acc1", "Temp", None).await.unwrap();
+        delete_group_inner(&pool, &group.id).await.unwrap();
+        let groups = get_groups_inner(&pool, "acc1").await.unwrap();
+        assert_eq!(groups.len(), 0);
     }
 }
