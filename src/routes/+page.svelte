@@ -35,6 +35,7 @@
   import Compose from "$lib/components/Compose.svelte";
   import FullCalendar from "$lib/components/FullCalendar.svelte";
   import Subscriptions from "$lib/components/Subscriptions.svelte";
+  import Contacts from "$lib/components/Contacts.svelte";
   import Toasts from "$lib/components/Toasts.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import ThreadList from "$lib/components/ThreadList.svelte";
@@ -104,7 +105,7 @@
   let isLoadingThreads = $state(false);
   let showCompose = $state(false);
   let showCommandPalette = $state(false);
-  let viewMode = $state<"mail" | "calendar" | "subscriptions">("mail");
+  let viewMode = $state<"mail" | "calendar" | "subscriptions" | "contacts">("mail");
   let imapConnectionStates = $state<Record<string, string>>({});
   let snoozePopoverOpen = $state(false);
   let batchSnoozeOpen = $state(false);
@@ -2071,6 +2072,8 @@
       <FullCalendar {isMacOS} />
     {:else if viewMode === "subscriptions"}
       <Subscriptions accountId={activeAccount?.id ?? ""} {isMacOS} onselectsubscription={handleSelectSubscription} />
+    {:else if viewMode === "contacts"}
+      <Contacts />
     {/if}
   </div>
 
