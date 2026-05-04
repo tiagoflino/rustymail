@@ -485,6 +485,87 @@ pub(crate) async fn delete_contact_inner(
     Ok(())
 }
 
+// --- Autocomplete search ---
+
+pub(crate) async fn search_contacts_autocomplete(
+    pool: &SqlitePool,
+    account_id: &str,
+    query: &str,
+) -> Result<Vec<super::compose::ContactSuggestion>, String> {
+    use super::compose::ContactSuggestion;
+    let mut suggestions: Vec<ContactSuggestion> = Vec::new();
+    let mut seen_emails: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let pattern = format!("%{}%", query);
+
+    // 1. Search contact_emails + contact name (fast indexed path)
+    let email_results: Vec<(String, String)> = sqlx::query_as(
+        "SELECT c.display_name, ce.email FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id WHERE c.account_id = ? AND (ce.email LIKE ? OR c.display_name LIKE ?) ORDER BY ce.is_primary DESC LIMIT 10"
+    )
+    .bind(account_id)
+    .bind(&pattern)
+    .bind(&pattern)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    for (name, email) in email_results {
+        let lower = email.to_lowercase();
+        if seen_emails.insert(lower) {
+            let raw = if name.is_empty() {
+                email.clone()
+            } else {
+                format!("{} <{}>", name, email)
+            };
+            suggestions.push(ContactSuggestion { name, email, raw });
+        }
+    }
+
+    // 2. If under 10 results, search FTS for partial name/company matches
+    if suggestions.len() < 10 {
+        let remaining = 10 - suggestions.len() as i64;
+        let fts_results: Vec<(String, String)> = sqlx::query_as(
+            "SELECT c.display_name, ce.email FROM contacts c JOIN contacts_fts f ON c.rowid = f.rowid JOIN contact_emails ce ON ce.contact_id = c.id WHERE f.contacts_fts MATCH ? AND c.account_id = ? AND ce.is_primary = 1 LIMIT ?"
+        )
+        .bind(&format!("\"{}\"*", query.replace('"', "")))
+        .bind(account_id)
+        .bind(remaining)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+        for (name, email) in fts_results {
+            let lower = email.to_lowercase();
+            if seen_emails.insert(lower) {
+                let raw = if name.is_empty() {
+                    email.clone()
+                } else {
+                    format!("{} <{}>", name, email)
+                };
+                suggestions.push(ContactSuggestion { name, email, raw });
+            }
+        }
+    }
+
+    // 3. Fall back to message history for contacts not yet in store
+    if suggestions.len() < 10 {
+        let legacy = super::compose::search_contacts_inner(pool, account_id, query)
+            .await
+            .unwrap_or_default();
+        for s in legacy {
+            let lower = s.email.to_lowercase();
+            if seen_emails.insert(lower) {
+                suggestions.push(s);
+            }
+            if suggestions.len() >= 10 {
+                break;
+            }
+        }
+    }
+
+    suggestions.truncate(10);
+    Ok(suggestions)
+}
+
 // --- Tauri command wrappers ---
 
 #[tauri::command]
@@ -558,6 +639,20 @@ pub async fn delete_contact(
 ) -> Result<(), String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     delete_contact_inner(pool.inner(), &contact_id).await
+}
+
+#[tauri::command]
+pub async fn search_contacts_v2(
+    app_handle: tauri::AppHandle,
+    query: String,
+    account_id: Option<String>,
+) -> Result<Vec<super::compose::ContactSuggestion>, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let acc_id = match account_id {
+        Some(id) => id,
+        None => super::accounts::get_active_account(pool.inner()).await?.id,
+    };
+    search_contacts_autocomplete(pool.inner(), &acc_id, &query).await
 }
 
 #[cfg(test)]
@@ -784,5 +879,69 @@ mod tests {
         delete_contact_inner(&pool, &created.contact.id).await.unwrap();
         let result = get_contact_inner(&pool, &created.contact.id).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_search_contacts_autocomplete() {
+        let pool = test_pool().await;
+
+        // Create contacts in store
+        create_contact_inner(
+            &pool,
+            "acc1",
+            CreateContactInput {
+                display_name: "Alice Anderson".to_string(),
+                company: Some("Tech Corp".to_string()),
+                emails: vec![EmailInput {
+                    email: "alice@techcorp.com".to_string(),
+                    r#type: "work".to_string(),
+                    is_primary: true,
+                }],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        create_contact_inner(
+            &pool,
+            "acc1",
+            CreateContactInput {
+                display_name: "Bob Builder".to_string(),
+                emails: vec![EmailInput {
+                    email: "bob@builder.io".to_string(),
+                    r#type: "work".to_string(),
+                    is_primary: true,
+                }],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        // Also insert a message from an unknown sender (legacy fallback)
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id) VALUES ('t1', 'acc1', '', '')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_html, body_plain) VALUES ('m1', 't1', 'acc1', 'Charlie <charlie@unknown.com>', '', 'Hi', '', 1000, '', '')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Search should find Alice from contacts
+        let results = search_contacts_autocomplete(&pool, "acc1", "ali").await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].email, "alice@techcorp.com");
+        assert_eq!(results[0].name, "Alice Anderson");
+
+        // Search by email domain
+        let results = search_contacts_autocomplete(&pool, "acc1", "techcorp").await.unwrap();
+        assert_eq!(results.len(), 1);
+
+        // Search should also find legacy message senders
+        let results = search_contacts_autocomplete(&pool, "acc1", "charlie").await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].email, "charlie@unknown.com");
     }
 }
