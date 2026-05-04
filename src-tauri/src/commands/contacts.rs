@@ -485,6 +485,134 @@ pub(crate) async fn delete_contact_inner(
     Ok(())
 }
 
+// --- Merge contacts ---
+
+pub(crate) async fn merge_contacts_inner(
+    pool: &SqlitePool,
+    primary_id: &str,
+    secondary_id: &str,
+) -> Result<ContactWithEmails, String> {
+    let primary = get_contact_inner(pool, primary_id).await?;
+    let secondary = get_contact_inner(pool, secondary_id).await?;
+
+    // Save old FTS values before merge
+    let old_display_name = primary.contact.display_name.clone();
+    let old_company = primary.contact.company.clone();
+    let old_job_title = primary.contact.job_title.clone();
+    let old_notes = primary.contact.notes.clone();
+
+    // Merge text fields: primary wins if non-null, else fill from secondary
+    let company = primary.contact.company.or(secondary.contact.company);
+    let job_title = primary.contact.job_title.or(secondary.contact.job_title);
+    let department = primary.contact.department.or(secondary.contact.department);
+    let nickname = primary.contact.nickname.or(secondary.contact.nickname);
+    let birthday = primary.contact.birthday.or(secondary.contact.birthday);
+    let photo_uri = primary.contact.photo_uri.or(secondary.contact.photo_uri);
+
+    // Notes: concatenate if both exist
+    let notes = match (primary.contact.notes, secondary.contact.notes) {
+        (Some(p), Some(s)) => Some(format!("{}\n{}", p, s)),
+        (Some(p), None) => Some(p),
+        (None, Some(s)) => Some(s),
+        (None, None) => None,
+    };
+
+    // JSON array fields: parse both, concatenate
+    let phones = merge_json_arrays(&primary.contact.phones, &secondary.contact.phones);
+    let addresses = merge_json_arrays(&primary.contact.addresses, &secondary.contact.addresses);
+    let social_profiles =
+        merge_json_arrays(&primary.contact.social_profiles, &secondary.contact.social_profiles);
+    let urls = merge_json_arrays(&primary.contact.urls, &secondary.contact.urls);
+    let relations = merge_json_arrays(&primary.contact.relations, &secondary.contact.relations);
+
+    let now = now_epoch();
+
+    // Update primary contact with merged fields
+    sqlx::query(
+        "UPDATE contacts SET company = ?, job_title = ?, department = ?, nickname = ?, notes = ?, birthday = ?, photo_uri = ?, phones = ?, addresses = ?, social_profiles = ?, urls = ?, relations = ?, updated_at = ? WHERE id = ?"
+    )
+    .bind(&company).bind(&job_title).bind(&department).bind(&nickname)
+    .bind(&notes).bind(&birthday).bind(&photo_uri)
+    .bind(&phones).bind(&addresses).bind(&social_profiles)
+    .bind(&urls).bind(&relations).bind(now)
+    .bind(primary_id)
+    .execute(pool).await.map_err(|e| e.to_string())?;
+
+    // Move secondary's emails to primary (skip duplicates based on case-insensitive match)
+    let primary_emails: Vec<String> = primary
+        .emails
+        .iter()
+        .map(|e| e.email.to_lowercase())
+        .collect();
+
+    for email in &secondary.emails {
+        if !primary_emails.contains(&email.email.to_lowercase()) {
+            let new_eid = new_id();
+            // Delete the old email row (unique constraint on email) then insert with new contact_id
+            sqlx::query("DELETE FROM contact_emails WHERE id = ?")
+                .bind(&email.id)
+                .execute(pool)
+                .await
+                .map_err(|e| e.to_string())?;
+            sqlx::query(
+                "INSERT INTO contact_emails (id, contact_id, email, type, is_primary) VALUES (?, ?, ?, ?, ?)"
+            )
+            .bind(&new_eid).bind(primary_id).bind(&email.email).bind(&email.r#type).bind(false)
+            .execute(pool).await.map_err(|e| e.to_string())?;
+        }
+    }
+
+    // Move provider links from secondary to primary
+    sqlx::query("UPDATE OR IGNORE contact_provider_links SET contact_id = ? WHERE contact_id = ?")
+        .bind(primary_id)
+        .bind(secondary_id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Move group memberships from secondary to primary
+    sqlx::query(
+        "INSERT OR IGNORE INTO contact_group_members (contact_id, group_id) SELECT ?, group_id FROM contact_group_members WHERE contact_id = ?"
+    )
+    .bind(primary_id).bind(secondary_id)
+    .execute(pool).await.map_err(|e| e.to_string())?;
+
+    // Delete the secondary contact (cascade deletes remaining emails, groups, provider links)
+    delete_contact_inner(pool, secondary_id).await?;
+
+    // Update FTS for primary: delete old entry then insert new
+    sqlx::query(
+        "INSERT INTO contacts_fts (contacts_fts, rowid, display_name, company, job_title, notes) VALUES ('delete', (SELECT rowid FROM contacts WHERE id = ?), ?, ?, ?, ?)"
+    )
+    .bind(primary_id)
+    .bind(&old_display_name)
+    .bind(&old_company)
+    .bind(&old_job_title)
+    .bind(&old_notes)
+    .execute(pool).await.map_err(|e| e.to_string())?;
+
+    sqlx::query(
+        "INSERT INTO contacts_fts (rowid, display_name, company, job_title, notes) VALUES ((SELECT rowid FROM contacts WHERE id = ?), ?, ?, ?, ?)"
+    )
+    .bind(primary_id)
+    .bind(&primary.contact.display_name)
+    .bind(&company)
+    .bind(&job_title)
+    .bind(&notes)
+    .execute(pool).await.map_err(|e| e.to_string())?;
+
+    get_contact_inner(pool, primary_id).await
+}
+
+fn merge_json_arrays(a: &str, b: &str) -> String {
+    let mut arr_a: Vec<serde_json::Value> =
+        serde_json::from_str(a).unwrap_or_default();
+    let arr_b: Vec<serde_json::Value> =
+        serde_json::from_str(b).unwrap_or_default();
+    arr_a.extend(arr_b);
+    serde_json::to_string(&arr_a).unwrap_or_else(|_| "[]".to_string())
+}
+
 // --- ContactGroup type ---
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -851,6 +979,16 @@ pub async fn set_contact_groups(
     set_contact_groups_inner(pool.inner(), &contact_id, group_ids).await
 }
 
+#[tauri::command]
+pub async fn merge_contacts(
+    app_handle: tauri::AppHandle,
+    primary_id: String,
+    secondary_id: String,
+) -> Result<ContactWithEmails, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    merge_contacts_inner(pool.inner(), &primary_id, &secondary_id).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1210,5 +1348,56 @@ mod tests {
         delete_group_inner(&pool, &group.id).await.unwrap();
         let groups = get_groups_inner(&pool, "acc1").await.unwrap();
         assert_eq!(groups.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_merge_contacts() {
+        let pool = test_pool().await;
+        let c1 = create_contact_inner(
+            &pool,
+            "acc1",
+            CreateContactInput {
+                display_name: "John Doe".to_string(),
+                company: Some("Acme".to_string()),
+                emails: vec![EmailInput {
+                    email: "john@acme.com".to_string(),
+                    r#type: "work".to_string(),
+                    is_primary: true,
+                }],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let c2 = create_contact_inner(
+            &pool,
+            "acc1",
+            CreateContactInput {
+                display_name: "J. Doe".to_string(),
+                job_title: Some("Engineer".to_string()),
+                emails: vec![EmailInput {
+                    email: "jdoe@personal.com".to_string(),
+                    r#type: "personal".to_string(),
+                    is_primary: true,
+                }],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let merged = merge_contacts_inner(&pool, &c1.contact.id, &c2.contact.id)
+            .await
+            .unwrap();
+
+        assert_eq!(merged.contact.display_name, "John Doe");
+        assert_eq!(merged.contact.company, Some("Acme".to_string()));
+        assert_eq!(merged.contact.job_title, Some("Engineer".to_string()));
+        assert_eq!(merged.emails.len(), 2);
+
+        // Secondary should be deleted
+        let result = get_contact_inner(&pool, &c2.contact.id).await;
+        assert!(result.is_err());
     }
 }
