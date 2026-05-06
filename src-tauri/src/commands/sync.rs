@@ -40,12 +40,30 @@ pub async fn sync_gmail_data(
         });
     }
 
-    // Spawn background contact sync (non-blocking, throttled internally)
+    // Spawn background contact sync + discovery backfill (non-blocking, throttled internally)
     let bg_pool_contacts = pool.inner().clone();
     let bg_account_id_contacts = account.id.clone();
     tokio::spawn(async move {
         if let Err(e) = super::contacts::sync_contacts_inner(&bg_pool_contacts, &bg_account_id_contacts).await {
             tracing::warn!("Contact sync failed: {}", e);
+        }
+        // Backfill discovered contacts from message history
+        let email: String = sqlx::query_scalar("SELECT email FROM accounts WHERE id = ?")
+            .bind(&bg_account_id_contacts)
+            .fetch_optional(&bg_pool_contacts)
+            .await
+            .unwrap_or(None)
+            .unwrap_or_default();
+        if !email.is_empty() {
+            if let Err(e) = crate::contacts::discovery::backfill_discovered_contacts(
+                &bg_pool_contacts,
+                &bg_account_id_contacts,
+                &email,
+            )
+            .await
+            {
+                tracing::warn!("Contact discovery backfill failed: {}", e);
+            }
         }
     });
 

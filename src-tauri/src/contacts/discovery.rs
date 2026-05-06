@@ -261,6 +261,74 @@ async fn check_and_promote(pool: &SqlitePool, contact_id: &str) -> Result<(), St
     Ok(())
 }
 
+pub async fn backfill_discovered_contacts(
+    pool: &SqlitePool,
+    account_id: &str,
+    account_email: &str,
+) -> Result<usize, String> {
+    // Check if already done
+    let key = format!("discovery_backfill_{}", account_id);
+    let done: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
+        .bind(&key)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+    if done.as_deref() == Some("true") {
+        return Ok(0);
+    }
+
+    // Check if discovery is enabled
+    let enabled: Option<String> = sqlx::query_scalar(
+        "SELECT value FROM settings WHERE key = 'contact_discovery_enabled'",
+    )
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+    if enabled.as_deref() == Some("false") {
+        return Ok(0);
+    }
+
+    let mut processed = 0usize;
+    let mut offset = 0i64;
+    let batch_size = 500i64;
+
+    loop {
+        let messages: Vec<(String, String, i64)> = sqlx::query_as(
+            "SELECT sender, recipients, internal_date FROM messages WHERE account_id = ? ORDER BY internal_date ASC LIMIT ? OFFSET ?",
+        )
+        .bind(account_id)
+        .bind(batch_size)
+        .bind(offset)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        if messages.is_empty() {
+            break;
+        }
+
+        for (sender, recipients, timestamp) in &messages {
+            extract_contacts_from_message(pool, account_id, account_email, sender, recipients, *timestamp)
+                .await
+                .ok();
+            processed += 1;
+        }
+
+        offset += batch_size;
+        tokio::task::yield_now().await;
+    }
+
+    // Mark complete
+    sqlx::query("INSERT OR REPLACE INTO settings (key, value) VALUES (?, 'true')")
+        .bind(&key)
+        .execute(pool)
+        .await
+        .ok();
+
+    Ok(processed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -536,5 +604,42 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(promoted.0, 0);
+    }
+
+    #[tokio::test]
+    async fn test_backfill_processes_existing_messages() {
+        let pool = test_pool().await;
+        sqlx::query("INSERT INTO threads (id, account_id, snippet, history_id) VALUES ('t1', 'acc1', '', '')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for i in 0..5i64 {
+            sqlx::query("INSERT INTO messages (id, thread_id, account_id, sender, recipients, subject, snippet, internal_date, body_html, body_plain) VALUES (?, 't1', 'acc1', 'alice@test.com', 'user@test.com', 'Hi', '', ?, '', '')")
+                .bind(format!("m{}", i))
+                .bind(1700000000 + i)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let count = backfill_discovered_contacts(&pool, "acc1", "user@test.com")
+            .await
+            .unwrap();
+        assert_eq!(count, 5);
+
+        // alice should be promoted (5 > threshold 3)
+        let promoted: (i64,) = sqlx::query_as(
+            "SELECT is_promoted FROM contacts WHERE id = (SELECT contact_id FROM contact_emails WHERE email = 'alice@test.com')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(promoted.0, 1);
+
+        // Running again should be a no-op
+        let count2 = backfill_discovered_contacts(&pool, "acc1", "user@test.com")
+            .await
+            .unwrap();
+        assert_eq!(count2, 0);
     }
 }

@@ -200,6 +200,7 @@ pub fn run() {
             commands::contacts::import_contacts,
             commands::contacts::export_contacts,
             commands::contacts::sync_contacts,
+            commands::contacts::backfill_contacts,
             tray::update_tray_unread,
             #[cfg(feature = "premium")]
             rustymail_premium::commands::llm::get_ai_status,
