@@ -261,7 +261,7 @@ pub(crate) async fn get_contacts_inner(
         // FTS search with prefix match, fallback to LIKE on failure
         let fts_query = format!("\"{}\"*", sanitize_fts_query(query));
         let fts_ids: Result<Vec<(String,)>, _> = sqlx::query_as(
-            "SELECT c.id FROM contacts c WHERE c.account_id = ? AND c.rowid IN (SELECT rowid FROM contacts_fts WHERE contacts_fts MATCH ?) ORDER BY c.display_name ASC LIMIT ? OFFSET ?"
+            "SELECT c.id FROM contacts c WHERE c.account_id = ? AND (c.is_promoted = 1 OR c.source != 'discovered') AND c.rowid IN (SELECT rowid FROM contacts_fts WHERE contacts_fts MATCH ?) ORDER BY c.display_name ASC LIMIT ? OFFSET ?"
         )
         .bind(account_id)
         .bind(fts_query)
@@ -276,7 +276,7 @@ pub(crate) async fn get_contacts_inner(
                 // Fallback to LIKE search on display_name
                 let like_pattern = format!("%{}%", query);
                 let rows: Vec<(String,)> = sqlx::query_as(
-                    "SELECT id FROM contacts WHERE account_id = ? AND display_name LIKE ? ORDER BY display_name ASC LIMIT ? OFFSET ?"
+                    "SELECT id FROM contacts WHERE account_id = ? AND (is_promoted = 1 OR source != 'discovered') AND display_name LIKE ? ORDER BY display_name ASC LIMIT ? OFFSET ?"
                 )
                 .bind(account_id)
                 .bind(like_pattern)
@@ -292,7 +292,7 @@ pub(crate) async fn get_contacts_inner(
         // Also search contact_emails with LIKE
         let email_pattern = format!("%{}%", query);
         let email_ids: Vec<(String,)> = sqlx::query_as(
-            "SELECT DISTINCT ce.contact_id FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id WHERE c.account_id = ? AND ce.email LIKE ? LIMIT ?"
+            "SELECT DISTINCT ce.contact_id FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id WHERE c.account_id = ? AND (c.is_promoted = 1 OR c.source != 'discovered') AND ce.email LIKE ? LIMIT ?"
         )
         .bind(account_id)
         .bind(email_pattern)
@@ -311,7 +311,7 @@ pub(crate) async fn get_contacts_inner(
         ids
     } else if let Some(gid) = group_id {
         let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT c.id FROM contacts c JOIN contact_group_members m ON c.id = m.contact_id WHERE c.account_id = ? AND m.group_id = ? ORDER BY c.display_name ASC LIMIT ? OFFSET ?"
+            "SELECT c.id FROM contacts c JOIN contact_group_members m ON c.id = m.contact_id WHERE c.account_id = ? AND (c.is_promoted = 1 OR c.source != 'discovered') AND m.group_id = ? ORDER BY c.display_name ASC LIMIT ? OFFSET ?"
         )
         .bind(account_id)
         .bind(gid)
@@ -323,7 +323,7 @@ pub(crate) async fn get_contacts_inner(
         rows.into_iter().map(|(id,)| id).collect()
     } else {
         let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT id FROM contacts WHERE account_id = ? ORDER BY display_name ASC LIMIT ? OFFSET ?"
+            "SELECT id FROM contacts WHERE account_id = ? AND (is_promoted = 1 OR source != 'discovered') ORDER BY display_name ASC LIMIT ? OFFSET ?"
         )
         .bind(account_id)
         .bind(limit)
@@ -1551,6 +1551,24 @@ pub async fn sync_contacts(
     sync_contacts_inner(pool.inner(), &acc_id).await
 }
 
+#[tauri::command]
+pub async fn backfill_contacts(
+    app_handle: tauri::AppHandle,
+    account_id: Option<String>,
+) -> Result<usize, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let acc = match account_id {
+        Some(id) => super::accounts::get_account_by_id(pool.inner(), &id).await?,
+        None => super::accounts::get_active_account(pool.inner()).await?,
+    };
+    let email: String = sqlx::query_scalar("SELECT email FROM accounts WHERE id = ?")
+        .bind(&acc.id)
+        .fetch_one(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+    crate::contacts::discovery::backfill_discovered_contacts(pool.inner(), &acc.id, &email).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2020,5 +2038,40 @@ mod tests {
         let csv = export_csv_inner(&pool, "acc1", None).await.unwrap();
         assert!(csv.contains("Name,Email,Phone,Company,Title"));
         assert!(csv.contains("\"CSV User\",\"csv@test.com\","));
+    }
+
+    #[tokio::test]
+    async fn test_get_contacts_hides_unpromoted_discovered() {
+        let pool = test_pool().await;
+        // Create a normal contact (visible)
+        create_contact_inner(&pool, "acc1", CreateContactInput {
+            display_name: "Visible".to_string(),
+            emails: vec![EmailInput { email: "visible@test.com".into(), r#type: "work".into(), is_primary: true }],
+            ..Default::default()
+        }).await.unwrap();
+
+        // Create a discovered unpromoted contact (hidden from list)
+        sqlx::query("INSERT INTO contacts (id, account_id, display_name, phones, addresses, social_profiles, urls, relations, source, is_promoted, email_count_sent, email_count_received, created_at, updated_at) VALUES ('d1', 'acc1', 'Hidden', '[]', '[]', '[]', '[]', '[]', 'discovered', 0, 1, 0, 1000, 1000)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO contact_emails (id, contact_id, email, type, is_primary) VALUES ('de1', 'd1', 'hidden@test.com', 'other', 1)")
+            .execute(&pool).await.unwrap();
+
+        let list = get_contacts_inner(&pool, "acc1", None, None, 0, 50).await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].contact.display_name, "Visible");
+    }
+
+    #[tokio::test]
+    async fn test_autocomplete_includes_unpromoted_discovered() {
+        let pool = test_pool().await;
+        // Create a discovered unpromoted contact
+        sqlx::query("INSERT INTO contacts (id, account_id, display_name, phones, addresses, social_profiles, urls, relations, source, is_promoted, email_count_sent, email_count_received, created_at, updated_at) VALUES ('d1', 'acc1', 'Discovered Person', '[]', '[]', '[]', '[]', '[]', 'discovered', 0, 1, 0, 1000, 1000)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO contact_emails (id, contact_id, email, type, is_primary) VALUES ('de1', 'd1', 'discovered@test.com', 'other', 1)")
+            .execute(&pool).await.unwrap();
+
+        let results = search_contacts_autocomplete(&pool, "acc1", "discovered").await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].email, "discovered@test.com");
     }
 }
