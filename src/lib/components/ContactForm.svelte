@@ -60,6 +60,7 @@
   }
 
   async function handleSave() {
+    if (saving) return;
     if (!displayName.trim()) {
       addToast('Display name is required', 'error');
       return;
@@ -116,8 +117,10 @@
   }
 </script>
 
-<div class="modal-overlay" onclick={handleOverlayClick} onkeydown={(e) => { if (e.key === 'Escape') onClose(); }} role="button" tabindex="-1" aria-label="Close modal">
-  <div class="modal-card" onclick={handleModalClick} role="presentation">
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape') onClose(); }} />
+
+<div class="modal-overlay" onclick={handleOverlayClick}>
+  <div class="modal-card" onclick={handleModalClick} role="dialog" aria-modal="true">
     <h3 class="modal-title">{contact ? 'Edit Contact' : 'New Contact'}</h3>
 
     <form onsubmit={(e) => { e.preventDefault(); handleSave(); }}>

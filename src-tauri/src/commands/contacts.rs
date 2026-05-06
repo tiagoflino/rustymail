@@ -108,6 +108,8 @@ pub(crate) async fn create_contact_inner(
     let relations_json =
         serde_json::to_string(&input.relations).unwrap_or_else(|_| "[]".to_string());
 
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+
     sqlx::query(
         "INSERT INTO contacts (id, account_id, display_name, given_name, surname, nickname, company, job_title, department, notes, birthday, photo_uri, phones, addresses, social_profiles, urls, relations, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'local', ?, ?)"
     )
@@ -118,7 +120,7 @@ pub(crate) async fn create_contact_inner(
     .bind(&phones_json).bind(&addresses_json).bind(&social_json)
     .bind(&urls_json).bind(&relations_json)
     .bind(now).bind(now)
-    .execute(pool).await.map_err(|e| e.to_string())?;
+    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
 
     // Insert emails
     let mut emails = Vec::new();
@@ -128,7 +130,7 @@ pub(crate) async fn create_contact_inner(
             "INSERT INTO contact_emails (id, contact_id, email, type, is_primary) VALUES (?, ?, ?, ?, ?)"
         )
         .bind(&eid).bind(&id).bind(&e_input.email).bind(&e_input.r#type).bind(e_input.is_primary)
-        .execute(pool).await.map_err(|_| format!("Email '{}' already exists for another contact", e_input.email))?;
+        .execute(&mut *tx).await.map_err(|_| format!("Email '{}' already exists for another contact", e_input.email))?;
 
         emails.push(ContactEmail {
             id: eid,
@@ -146,7 +148,7 @@ pub(crate) async fn create_contact_inner(
         )
         .bind(&id)
         .bind(group_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
     }
@@ -156,7 +158,9 @@ pub(crate) async fn create_contact_inner(
         "INSERT INTO contacts_fts (rowid, display_name, company, job_title, notes) VALUES ((SELECT rowid FROM contacts WHERE id = ?), ?, ?, ?, ?)"
     )
     .bind(&id).bind(&input.display_name).bind(&input.company).bind(&input.job_title).bind(&input.notes)
-    .execute(pool).await.map_err(|e| e.to_string())?;
+    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+
+    tx.commit().await.map_err(|e| e.to_string())?;
 
     let contact = Contact {
         id,
@@ -255,7 +259,7 @@ pub(crate) async fn get_contacts_inner(
 ) -> Result<Vec<ContactWithEmails>, String> {
     let contact_ids: Vec<String> = if let Some(query) = search {
         // FTS search with prefix match, fallback to LIKE on failure
-        let fts_query = format!("{}*", query);
+        let fts_query = format!("\"{}\"*", sanitize_fts_query(query));
         let fts_ids: Result<Vec<(String,)>, _> = sqlx::query_as(
             "SELECT c.id FROM contacts c WHERE c.account_id = ? AND c.rowid IN (SELECT rowid FROM contacts_fts WHERE contacts_fts MATCH ?) ORDER BY c.display_name ASC LIMIT ? OFFSET ?"
         )
@@ -303,6 +307,7 @@ pub(crate) async fn get_contacts_inner(
             }
         }
 
+        ids.truncate(limit as usize);
         ids
     } else if let Some(gid) = group_id {
         let rows: Vec<(String,)> = sqlx::query_as(
@@ -329,11 +334,46 @@ pub(crate) async fn get_contacts_inner(
         rows.into_iter().map(|(id,)| id).collect()
     };
 
-    let mut results = Vec::with_capacity(contact_ids.len());
-    for id in contact_ids {
-        results.push(get_contact_inner(pool, &id).await?);
+    if contact_ids.is_empty() {
+        return Ok(vec![]);
     }
-    Ok(results)
+
+    let placeholders = contact_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+
+    // Batch fetch contacts
+    let contacts_query = format!("SELECT * FROM contacts WHERE id IN ({})", placeholders);
+    let mut contacts_q = sqlx::query_as::<_, Contact>(&contacts_query);
+    for id in &contact_ids {
+        contacts_q = contacts_q.bind(id.as_str());
+    }
+    let contacts: Vec<Contact> = contacts_q.fetch_all(pool).await.map_err(|e| e.to_string())?;
+
+    // Batch fetch emails
+    let email_query = format!("SELECT * FROM contact_emails WHERE contact_id IN ({}) ORDER BY is_primary DESC", placeholders);
+    let mut email_q = sqlx::query_as::<_, ContactEmail>(&email_query);
+    for id in &contact_ids {
+        email_q = email_q.bind(id.as_str());
+    }
+    let all_emails: Vec<ContactEmail> = email_q.fetch_all(pool).await.unwrap_or_default();
+
+    // Batch fetch groups
+    let group_query = format!("SELECT m.contact_id, g.name FROM contact_groups g JOIN contact_group_members m ON g.id = m.group_id WHERE m.contact_id IN ({})", placeholders);
+    let mut group_q = sqlx::query_as::<_, (String, String)>(&group_query);
+    for id in &contact_ids {
+        group_q = group_q.bind(id.as_str());
+    }
+    let all_groups: Vec<(String, String)> = group_q.fetch_all(pool).await.unwrap_or_default();
+
+    // Assemble results preserving original order
+    let mut result = Vec::new();
+    for cid in &contact_ids {
+        if let Some(contact) = contacts.iter().find(|c| &c.id == cid) {
+            let emails: Vec<ContactEmail> = all_emails.iter().filter(|e| e.contact_id == *cid).cloned().collect();
+            let groups: Vec<String> = all_groups.iter().filter(|g| g.0 == *cid).map(|g| g.1.clone()).collect();
+            result.push(ContactWithEmails { contact: contact.clone(), emails, groups });
+        }
+    }
+    Ok(result)
 }
 
 pub(crate) async fn update_contact_inner(
@@ -383,6 +423,8 @@ pub(crate) async fn update_contact_inner(
         None => existing.contact.relations,
     };
 
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+
     sqlx::query(
         "UPDATE contacts SET display_name = ?, given_name = ?, surname = ?, nickname = ?, company = ?, job_title = ?, department = ?, notes = ?, birthday = ?, photo_uri = ?, phones = ?, addresses = ?, social_profiles = ?, urls = ?, relations = ?, is_starred = ?, updated_at = ? WHERE id = ?"
     )
@@ -392,13 +434,13 @@ pub(crate) async fn update_contact_inner(
     .bind(&phones_json).bind(&addresses_json).bind(&social_json)
     .bind(&urls_json).bind(&relations_json).bind(is_starred).bind(now)
     .bind(contact_id)
-    .execute(pool).await.map_err(|e| e.to_string())?;
+    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
 
     // Rebuild emails if provided
     if let Some(new_emails) = input.emails {
         sqlx::query("DELETE FROM contact_emails WHERE contact_id = ?")
             .bind(contact_id)
-            .execute(pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
 
@@ -408,7 +450,7 @@ pub(crate) async fn update_contact_inner(
                 "INSERT INTO contact_emails (id, contact_id, email, type, is_primary) VALUES (?, ?, ?, ?, ?)"
             )
             .bind(&eid).bind(contact_id).bind(&e_input.email).bind(&e_input.r#type).bind(e_input.is_primary)
-            .execute(pool).await.map_err(|_| format!("Email '{}' already exists for another contact", e_input.email))?;
+            .execute(&mut *tx).await.map_err(|_| format!("Email '{}' already exists for another contact", e_input.email))?;
         }
     }
 
@@ -416,7 +458,7 @@ pub(crate) async fn update_contact_inner(
     if let Some(new_groups) = input.groups {
         sqlx::query("DELETE FROM contact_group_members WHERE contact_id = ?")
             .bind(contact_id)
-            .execute(pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
 
@@ -426,7 +468,7 @@ pub(crate) async fn update_contact_inner(
             )
             .bind(contact_id)
             .bind(group_id)
-            .execute(pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
         }
@@ -441,13 +483,15 @@ pub(crate) async fn update_contact_inner(
     .bind(&old_company)
     .bind(&old_job_title)
     .bind(&old_notes)
-    .execute(pool).await.map_err(|e| e.to_string())?;
+    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
 
     sqlx::query(
         "INSERT INTO contacts_fts (rowid, display_name, company, job_title, notes) VALUES ((SELECT rowid FROM contacts WHERE id = ?), ?, ?, ?, ?)"
     )
     .bind(contact_id).bind(&display_name).bind(&company).bind(&job_title).bind(&notes)
-    .execute(pool).await.map_err(|e| e.to_string())?;
+    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+
+    tx.commit().await.map_err(|e| e.to_string())?;
 
     get_contact_inner(pool, contact_id).await
 }
@@ -464,6 +508,8 @@ pub(crate) async fn delete_contact_inner(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Contact not found: {}", contact_id))?;
 
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+
     // Delete FTS entry using special delete command for content-synced FTS5
     sqlx::query(
         "INSERT INTO contacts_fts (contacts_fts, rowid, display_name, company, job_title, notes) VALUES ('delete', (SELECT rowid FROM contacts WHERE id = ?), ?, ?, ?, ?)"
@@ -473,14 +519,16 @@ pub(crate) async fn delete_contact_inner(
     .bind(&contact.company)
     .bind(&contact.job_title)
     .bind(&contact.notes)
-    .execute(pool).await.map_err(|e| e.to_string())?;
+    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
 
     // Delete contact (ON DELETE CASCADE handles emails/groups)
     sqlx::query("DELETE FROM contacts WHERE id = ?")
         .bind(contact_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
+
+    tx.commit().await.map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -492,6 +540,10 @@ pub(crate) async fn merge_contacts_inner(
     primary_id: &str,
     secondary_id: &str,
 ) -> Result<ContactWithEmails, String> {
+    if primary_id == secondary_id {
+        return Err("Cannot merge a contact with itself".to_string());
+    }
+
     let primary = get_contact_inner(pool, primary_id).await?;
     let secondary = get_contact_inner(pool, secondary_id).await?;
 
@@ -527,6 +579,8 @@ pub(crate) async fn merge_contacts_inner(
 
     let now = now_epoch();
 
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+
     // Update primary contact with merged fields
     sqlx::query(
         "UPDATE contacts SET company = ?, job_title = ?, department = ?, nickname = ?, notes = ?, birthday = ?, photo_uri = ?, phones = ?, addresses = ?, social_profiles = ?, urls = ?, relations = ?, updated_at = ? WHERE id = ?"
@@ -536,7 +590,7 @@ pub(crate) async fn merge_contacts_inner(
     .bind(&phones).bind(&addresses).bind(&social_profiles)
     .bind(&urls).bind(&relations).bind(now)
     .bind(primary_id)
-    .execute(pool).await.map_err(|e| e.to_string())?;
+    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
 
     // Move secondary's emails to primary (skip duplicates based on case-insensitive match)
     let primary_emails: Vec<String> = primary
@@ -551,14 +605,14 @@ pub(crate) async fn merge_contacts_inner(
             // Delete the old email row (unique constraint on email) then insert with new contact_id
             sqlx::query("DELETE FROM contact_emails WHERE id = ?")
                 .bind(&email.id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(|e| e.to_string())?;
             sqlx::query(
                 "INSERT INTO contact_emails (id, contact_id, email, type, is_primary) VALUES (?, ?, ?, ?, ?)"
             )
             .bind(&new_eid).bind(primary_id).bind(&email.email).bind(&email.r#type).bind(false)
-            .execute(pool).await.map_err(|e| e.to_string())?;
+            .execute(&mut *tx).await.map_err(|e| e.to_string())?;
         }
     }
 
@@ -566,7 +620,7 @@ pub(crate) async fn merge_contacts_inner(
     sqlx::query("UPDATE OR IGNORE contact_provider_links SET contact_id = ? WHERE contact_id = ?")
         .bind(primary_id)
         .bind(secondary_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -575,10 +629,31 @@ pub(crate) async fn merge_contacts_inner(
         "INSERT OR IGNORE INTO contact_group_members (contact_id, group_id) SELECT ?, group_id FROM contact_group_members WHERE contact_id = ?"
     )
     .bind(primary_id).bind(secondary_id)
-    .execute(pool).await.map_err(|e| e.to_string())?;
+    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+
+    // Delete the secondary contact's FTS entry
+    let sec_contact: Contact = sqlx::query_as("SELECT * FROM contacts WHERE id = ?")
+        .bind(secondary_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    sqlx::query(
+        "INSERT INTO contacts_fts (contacts_fts, rowid, display_name, company, job_title, notes) VALUES ('delete', (SELECT rowid FROM contacts WHERE id = ?), ?, ?, ?, ?)"
+    )
+    .bind(secondary_id)
+    .bind(&sec_contact.display_name)
+    .bind(&sec_contact.company)
+    .bind(&sec_contact.job_title)
+    .bind(&sec_contact.notes)
+    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
 
     // Delete the secondary contact (cascade deletes remaining emails, groups, provider links)
-    delete_contact_inner(pool, secondary_id).await?;
+    sqlx::query("DELETE FROM contacts WHERE id = ?")
+        .bind(secondary_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // Update FTS for primary: delete old entry then insert new
     sqlx::query(
@@ -589,7 +664,7 @@ pub(crate) async fn merge_contacts_inner(
     .bind(&old_company)
     .bind(&old_job_title)
     .bind(&old_notes)
-    .execute(pool).await.map_err(|e| e.to_string())?;
+    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
 
     sqlx::query(
         "INSERT INTO contacts_fts (rowid, display_name, company, job_title, notes) VALUES ((SELECT rowid FROM contacts WHERE id = ?), ?, ?, ?, ?)"
@@ -599,9 +674,54 @@ pub(crate) async fn merge_contacts_inner(
     .bind(&company)
     .bind(&job_title)
     .bind(&notes)
-    .execute(pool).await.map_err(|e| e.to_string())?;
+    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+
+    tx.commit().await.map_err(|e| e.to_string())?;
 
     get_contact_inner(pool, primary_id).await
+}
+
+fn escape_csv_field(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\"\""))
+}
+
+fn parse_csv_line(line: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            '"' if !in_quotes => {
+                in_quotes = true;
+            }
+            '"' if in_quotes => {
+                if chars.peek() == Some(&'"') {
+                    current.push('"');
+                    chars.next();
+                } else {
+                    in_quotes = false;
+                }
+            }
+            ',' if !in_quotes => {
+                fields.push(current.trim().to_string());
+                current = String::new();
+            }
+            _ => {
+                current.push(c);
+            }
+        }
+    }
+    fields.push(current.trim().to_string());
+    fields
+}
+
+fn sanitize_fts_query(query: &str) -> String {
+    query
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace() || *c == '@' || *c == '.' || *c == '-' || *c == '_')
+        .collect()
 }
 
 fn merge_json_arrays(a: &str, b: &str) -> String {
@@ -792,7 +912,7 @@ pub(crate) async fn search_contacts_autocomplete(
         let fts_results: Vec<(String, String)> = sqlx::query_as(
             "SELECT c.display_name, ce.email FROM contacts c JOIN contacts_fts f ON c.rowid = f.rowid JOIN contact_emails ce ON ce.contact_id = c.id WHERE f.contacts_fts MATCH ? AND c.account_id = ? AND ce.is_primary = 1 LIMIT ?"
         )
-        .bind(format!("\"{}\"*", query.replace('"', "")))
+        .bind(format!("\"{}\"*", sanitize_fts_query(query)))
         .bind(account_id)
         .bind(remaining)
         .fetch_all(pool)
@@ -963,7 +1083,7 @@ pub(crate) async fn import_csv_inner(
     };
 
     // Parse headers with case-insensitive matching
-    let headers: Vec<String> = header_line.split(',').map(|h| h.trim().to_lowercase()).collect();
+    let headers: Vec<String> = parse_csv_line(header_line).iter().map(|h| h.to_lowercase()).collect();
 
     let name_col = headers.iter().position(|h| {
         h == "name" || h == "full name" || h == "display name" || h == "display_name"
@@ -989,11 +1109,11 @@ pub(crate) async fn import_csv_inner(
             continue;
         }
 
-        let fields: Vec<&str> = line.split(',').collect();
+        let fields = parse_csv_line(line);
 
         let display_name = name_col
             .and_then(|i| fields.get(i))
-            .map(|s| s.trim().to_string())
+            .map(|s| s.to_string())
             .unwrap_or_default();
 
         if display_name.is_empty() {
@@ -1002,22 +1122,22 @@ pub(crate) async fn import_csv_inner(
 
         let email = email_col
             .and_then(|i| fields.get(i))
-            .map(|s| s.trim().to_string())
+            .map(|s| s.to_string())
             .unwrap_or_default();
 
         let phone = phone_col
             .and_then(|i| fields.get(i))
-            .map(|s| s.trim().to_string())
+            .map(|s| s.to_string())
             .unwrap_or_default();
 
         let company = company_col
             .and_then(|i| fields.get(i))
-            .map(|s| s.trim().to_string())
+            .map(|s| s.to_string())
             .filter(|s| !s.is_empty());
 
         let job_title = title_col
             .and_then(|i| fields.get(i))
-            .map(|s| s.trim().to_string())
+            .map(|s| s.to_string())
             .filter(|s| !s.is_empty());
 
         let emails = if email.is_empty() {
@@ -1157,7 +1277,11 @@ pub(crate) async fn export_csv_inner(
 
         output.push_str(&format!(
             "{},{},{},{},{}\n",
-            c.contact.display_name, email, phone, company, title
+            escape_csv_field(&c.contact.display_name),
+            escape_csv_field(email),
+            escape_csv_field(phone),
+            escape_csv_field(company),
+            escape_csv_field(title)
         ));
     }
 
@@ -1895,6 +2019,6 @@ mod tests {
 
         let csv = export_csv_inner(&pool, "acc1", None).await.unwrap();
         assert!(csv.contains("Name,Email,Phone,Company,Title"));
-        assert!(csv.contains("CSV User,csv@test.com,"));
+        assert!(csv.contains("\"CSV User\",\"csv@test.com\","));
     }
 }

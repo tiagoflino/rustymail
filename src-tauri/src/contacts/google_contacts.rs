@@ -221,6 +221,9 @@ pub async fn fetch_google_contacts(
         if page_token.is_none() {
             break;
         }
+
+        // Small delay between pagination requests to avoid rate limits
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
 
     Ok((all_persons, next_sync_token))

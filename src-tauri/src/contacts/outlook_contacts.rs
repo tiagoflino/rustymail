@@ -2,6 +2,14 @@ use crate::commands::contacts::{CreateContactInput, EmailInput};
 use reqwest::Client;
 use serde_json::Value;
 use sqlx::SqlitePool;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn now_epoch() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+}
 
 const CONTACTS_DELTA_SELECT: &str = "displayName,givenName,surname,emailAddresses,mobilePhone,businessPhones,companyName,jobTitle,department";
 
@@ -174,7 +182,11 @@ pub async fn fetch_outlook_contacts(
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        // If no nextLink, check for deltaLink
+        // If no nextLink, check for deltaLink — otherwise add a small delay before next page
+        if next_url.is_some() {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+
         if next_url.is_none() {
             let new_delta = body
                 .get("@odata.deltaLink")
@@ -297,41 +309,60 @@ pub async fn sync_outlook_contacts(
                     .execute(pool)
                     .await
                     .map_err(|e| e.to_string())?;
+
+                    synced_count += 1;
                 }
             }
             None => {
-                // Create new contact
-                let link_id = uuid::Uuid::new_v4().to_string();
-                match crate::commands::contacts::create_contact_inner(pool, account_id, input).await
-                {
-                    Ok(created) => {
-                        sqlx::query(
-                            "INSERT INTO contact_provider_links (id, contact_id, account_id, provider, remote_id, etag) VALUES (?, ?, ?, 'outlook', ?, ?)",
-                        )
-                        .bind(&link_id)
-                        .bind(&created.contact.id)
-                        .bind(account_id)
-                        .bind(&remote_id)
-                        .bind(&etag)
-                        .execute(pool)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                // Check for email match (dedup) scoped to same account
+                let mut matched_contact_id: Option<String> = None;
+                for e in &input.emails {
+                    let existing_email: Option<(String,)> = sqlx::query_as(
+                        "SELECT ce.contact_id FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id WHERE ce.email = ? COLLATE NOCASE AND c.account_id = ?"
+                    ).bind(&e.email).bind(account_id).fetch_optional(pool).await.unwrap_or(None);
+                    if let Some((cid,)) = existing_email {
+                        matched_contact_id = Some(cid);
+                        break;
                     }
-                    Err(_) => continue,
                 }
+
+                let contact_id = if let Some(cid) = matched_contact_id {
+                    cid
+                } else {
+                    match crate::commands::contacts::create_contact_inner(pool, account_id, input).await {
+                        Ok(created) => created.contact.id,
+                        Err(_) => continue,
+                    }
+                };
+
+                // Create provider link
+                let link_id = uuid::Uuid::new_v4().to_string();
+                sqlx::query(
+                    "INSERT INTO contact_provider_links (id, contact_id, account_id, provider, remote_id, etag) VALUES (?, ?, ?, 'outlook', ?, ?)",
+                )
+                .bind(&link_id)
+                .bind(&contact_id)
+                .bind(account_id)
+                .bind(&remote_id)
+                .bind(&etag)
+                .execute(pool)
+                .await
+                .map_err(|e| e.to_string())?;
+
+                synced_count += 1;
             }
         }
-
-        synced_count += 1;
     }
 
     // Store new delta link in contacts_sync_state
     if let Some(new_link) = new_delta_link {
+        let now = now_epoch();
         sqlx::query(
-            "INSERT OR REPLACE INTO contacts_sync_state (account_id, provider, sync_token) VALUES (?, 'outlook', ?)",
+            "INSERT OR REPLACE INTO contacts_sync_state (account_id, provider, sync_token, last_full_sync) VALUES (?, 'outlook', ?, ?)",
         )
         .bind(account_id)
         .bind(&new_link)
+        .bind(now)
         .execute(pool)
         .await
         .map_err(|e| e.to_string())?;

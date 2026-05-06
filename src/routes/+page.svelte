@@ -1733,17 +1733,23 @@
         .catch(() => availableSuperstars.set(["YELLOW_STAR"]));
 
       // Check for outdated OAuth scopes
-      try {
-        const outdated = await invoke<Array<{id: string, email: string, provider_type: string}>>('check_scopes_outdated');
-        for (const account of outdated) {
-          addToast(
-            `${account.email} needs updated permissions for contact sync`,
-            'info',
-            0,
-            { label: 'Re-authenticate', onClick: () => { invoke('authenticate_gmail'); } }
-          );
-        }
-      } catch {}
+      const scopeToastShown = sessionStorage.getItem('scope_toast_shown');
+      if (!scopeToastShown) {
+        try {
+          const outdated = await invoke<Array<{id: string, email: string, provider_type: string}>>('check_scopes_outdated');
+          if (outdated.length > 0) {
+            sessionStorage.setItem('scope_toast_shown', 'true');
+            for (const account of outdated) {
+              addToast(
+                `${account.email} needs updated permissions for contact sync`,
+                'info',
+                0,
+                { label: 'Re-authenticate', onClick: () => { invoke('authenticate_gmail'); } }
+              );
+            }
+          }
+        } catch {}
+      }
     }
 
     setTimeout(() => checkForUpdates(true), 5000);
@@ -1998,7 +2004,7 @@
       connectionState={activeAccount?.provider_type === 'imap' ? (imapConnectionStates[activeAccount.id] || '') : ''}
       ontogglecalendar={() => viewMode = viewMode === "calendar" ? "mail" : "calendar"}
       ontogglesubscriptions={() => viewMode = viewMode === "subscriptions" ? "mail" : "subscriptions"}
-      ontogglecontacts={() => { viewMode = "contacts"; }}
+      ontogglecontacts={() => { viewMode = viewMode === "contacts" ? "mail" : "contacts"; }}
       onsettings={() => (showSettings = true)}
       ontogglecollapse={toggleSidebar}
       onselectlabel={selectLabel}

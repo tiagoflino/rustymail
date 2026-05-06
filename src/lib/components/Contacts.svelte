@@ -15,6 +15,7 @@
   let showForm = $state(false);
   let showImportExport = $state(false);
   let editingContact = $state<ContactWithEmails | null>(null);
+  let isLoading = $state(true);
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -78,6 +79,7 @@
   }
 
   function getInitials(name: string): string {
+    if (!name || !name.trim()) return '?';
     const parts = name.trim().split(/\s+/);
     if (parts.length >= 2) {
       return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
@@ -112,6 +114,8 @@
   }
 
   async function handleDelete(contact: ContactWithEmails) {
+    const confirmed = confirm('Are you sure you want to delete this contact? This cannot be undone.');
+    if (!confirmed) return;
     try {
       await invoke("delete_contact", { contactId: contact.id });
       contacts = contacts.filter(c => c.id !== contact.id);
@@ -135,9 +139,11 @@
     showForm = true;
   }
 
-  onMount(() => {
-    loadContacts();
-    loadGroups();
+  onMount(async () => {
+    isLoading = true;
+    await loadContacts();
+    await loadGroups();
+    isLoading = false;
   });
 </script>
 
@@ -230,7 +236,11 @@
         </button>
       {/each}
 
-      {#if filteredContacts.length === 0}
+      {#if isLoading}
+        <div class="empty-state">
+          <p>Loading contacts...</p>
+        </div>
+      {:else if filteredContacts.length === 0}
         <div class="empty-state">
           <p>No contacts found</p>
         </div>
@@ -329,11 +339,8 @@
             <div class="detail-section">
               <h4 class="section-label">Groups</h4>
               <div class="groups-list">
-                {#each selectedContact.groups as groupId}
-                  {@const group = contactGroups.find(g => g.id === groupId)}
-                  {#if group}
-                    <span class="group-tag">{group.name}</span>
-                  {/if}
+                {#each selectedContact.groups as groupName}
+                  <span class="group-tag">{groupName}</span>
                 {/each}
               </div>
             </div>
@@ -361,7 +368,10 @@
 {/if}
 
 {#if showImportExport}
-  <ContactImportExport onClose={() => { showImportExport = false; }} />
+  <ContactImportExport
+    onClose={() => { showImportExport = false; }}
+    onImported={() => { showImportExport = false; loadContacts(); }}
+  />
 {/if}
 
 <style>

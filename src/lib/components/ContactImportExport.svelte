@@ -4,7 +4,7 @@
   import { addToast } from "$lib/stores/toast";
   import { loadContacts } from "$lib/stores/contacts";
 
-  let { onClose }: { onClose: () => void } = $props();
+  let { onClose, onImported }: { onClose: () => void; onImported?: () => void } = $props();
 
   let importData = $state("");
   let importFormat = $state<"vcard" | "csv">("vcard");
@@ -26,6 +26,7 @@
       });
       addToast(`Imported ${result.length} contacts`, "success");
       await loadContacts();
+      onImported?.();
       onClose();
     } catch (e: any) {
       addToast(e?.toString() || "Import failed", "error");
