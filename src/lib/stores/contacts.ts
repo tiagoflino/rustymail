@@ -29,6 +29,11 @@ export interface ContactWithEmails {
     relations: string;
     is_starred: boolean;
     source: string;
+    email_count_sent: number;
+    email_count_received: number;
+    first_seen_at: number | null;
+    last_contacted_at: number | null;
+    is_promoted: boolean;
     created_at: number;
     updated_at: number;
     emails: ContactEmail[];

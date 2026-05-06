@@ -37,6 +37,11 @@ pub struct Contact {
     pub relations: String,
     pub is_starred: bool,
     pub source: String,
+    pub email_count_sent: i64,
+    pub email_count_received: i64,
+    pub first_seen_at: Option<i64>,
+    pub last_contacted_at: Option<i64>,
+    pub is_promoted: bool,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -182,6 +187,11 @@ pub(crate) async fn create_contact_inner(
         relations: relations_json,
         is_starred: false,
         source: "local".to_string(),
+        email_count_sent: 0,
+        email_count_received: 0,
+        first_seen_at: None,
+        last_contacted_at: None,
+        is_promoted: true,
         created_at: now,
         updated_at: now,
     };
@@ -509,6 +519,28 @@ pub(crate) async fn delete_contact_inner(
         .ok_or_else(|| format!("Contact not found: {}", contact_id))?;
 
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+
+    // If contact is discovered, blocklist its primary email to prevent re-discovery
+    let source_check: Option<(String, String)> = sqlx::query_as(
+        "SELECT c.source, ce.email FROM contacts c JOIN contact_emails ce ON ce.contact_id = c.id WHERE c.id = ? AND ce.is_primary = 1"
+    )
+    .bind(contact_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .unwrap_or(None);
+
+    if let Some((source, email)) = source_check {
+        if source == "discovered" {
+            let now = now_epoch();
+            sqlx::query("INSERT OR IGNORE INTO discovery_blocklist (email, account_id, blocked_at) VALUES (?, (SELECT account_id FROM contacts WHERE id = ?), ?)")
+                .bind(&email)
+                .bind(contact_id)
+                .bind(now)
+                .execute(&mut *tx)
+                .await
+                .ok();
+        }
+    }
 
     // Delete FTS entry using special delete command for content-synced FTS5
     sqlx::query(
@@ -1569,6 +1601,28 @@ pub async fn backfill_contacts(
     crate::contacts::discovery::backfill_discovered_contacts(pool.inner(), &acc.id, &email).await
 }
 
+#[tauri::command]
+pub async fn blocklist_discovered_email(
+    app_handle: tauri::AppHandle,
+    email: String,
+    account_id: Option<String>,
+) -> Result<(), String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let acc_id = match account_id {
+        Some(id) => id,
+        None => super::accounts::get_active_account(pool.inner()).await?.id,
+    };
+    let now = now_epoch();
+    sqlx::query("INSERT OR IGNORE INTO discovery_blocklist (email, account_id, blocked_at) VALUES (?, ?, ?)")
+        .bind(&email)
+        .bind(&acc_id)
+        .bind(now)
+        .execute(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2073,5 +2127,25 @@ mod tests {
         let results = search_contacts_autocomplete(&pool, "acc1", "discovered").await.unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].email, "discovered@test.com");
+    }
+
+    #[tokio::test]
+    async fn test_delete_discovered_contact_blocklists_email() {
+        let pool = test_pool().await;
+        // Create a discovered contact
+        sqlx::query("INSERT INTO contacts (id, account_id, display_name, phones, addresses, social_profiles, urls, relations, source, is_promoted, email_count_sent, email_count_received, created_at, updated_at) VALUES ('d1', 'acc1', 'Discovered', '[]', '[]', '[]', '[]', '[]', 'discovered', 1, 2, 3, 1000, 1000)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO contact_emails (id, contact_id, email, type, is_primary) VALUES ('de1', 'd1', 'disc@test.com', 'other', 1)")
+            .execute(&pool).await.unwrap();
+        // Insert FTS entry to match what create_contact_inner would do
+        sqlx::query("INSERT INTO contacts_fts (rowid, display_name, company, job_title, notes) VALUES ((SELECT rowid FROM contacts WHERE id = 'd1'), 'Discovered', NULL, NULL, NULL)")
+            .execute(&pool).await.unwrap();
+
+        delete_contact_inner(&pool, "d1").await.unwrap();
+
+        // Should be blocklisted
+        let blocked: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM discovery_blocklist WHERE email = 'disc@test.com'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(blocked.0, 1);
     }
 }

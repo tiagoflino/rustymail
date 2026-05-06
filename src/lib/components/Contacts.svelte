@@ -271,7 +271,12 @@
         <div class="detail-avatar" style="background-color: {getAvatarColor(selectedContact.display_name)}">
           {getInitials(selectedContact.display_name)}
         </div>
-        <h3 class="detail-name">{selectedContact.display_name}</h3>
+        <h3 class="detail-name">
+          {selectedContact.display_name}
+          {#if selectedContact.source === 'discovered'}
+            <span class="discovered-badge">Auto-discovered</span>
+          {/if}
+        </h3>
         {#if selectedContact.job_title || selectedContact.company}
           <p class="detail-title">
             {selectedContact.job_title ?? ""}{selectedContact.job_title && selectedContact.company ? " at " : ""}{selectedContact.company ?? ""}
@@ -290,6 +295,24 @@
                   {/if}
                 </div>
               {/each}
+            </div>
+          {/if}
+
+          {#if selectedContact.source === 'discovered'}
+            <div class="detail-section">
+              <h4 class="section-label">Activity</h4>
+              <div class="activity-stats">
+                <span class="stat">Sent: {selectedContact.email_count_sent || 0}</span>
+                <span class="stat">Received: {selectedContact.email_count_received || 0}</span>
+              </div>
+              {#if selectedContact.first_seen_at}
+                <div class="activity-dates">
+                  <span class="date-label">First seen: {new Date(selectedContact.first_seen_at * 1000).toLocaleDateString()}</span>
+                  {#if selectedContact.last_contacted_at}
+                    <span class="date-label">Last contact: {new Date(selectedContact.last_contacted_at * 1000).toLocaleDateString()}</span>
+                  {/if}
+                </div>
+              {/if}
             </div>
           {/if}
 
@@ -712,5 +735,36 @@
     gap: 12px;
     color: var(--text-secondary);
     font-size: 13px;
+  }
+
+  .discovered-badge {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--bg-control);
+    color: var(--text-secondary);
+    margin-left: 8px;
+  }
+
+  .activity-stats {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 6px;
+  }
+
+  .stat {
+    font-size: 13px;
+    color: var(--text-primary);
+  }
+
+  .activity-dates {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .date-label {
+    font-size: 11px;
+    color: var(--text-secondary);
   }
 </style>
