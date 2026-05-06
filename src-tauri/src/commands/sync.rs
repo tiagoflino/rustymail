@@ -40,6 +40,15 @@ pub async fn sync_gmail_data(
         });
     }
 
+    // Spawn background contact sync (non-blocking, throttled internally)
+    let bg_pool_contacts = pool.inner().clone();
+    let bg_account_id_contacts = account.id.clone();
+    tokio::spawn(async move {
+        if let Err(e) = super::contacts::sync_contacts_inner(&bg_pool_contacts, &bg_account_id_contacts).await {
+            tracing::warn!("Contact sync failed: {}", e);
+        }
+    });
+
     if provider_type == "outlook" {
         crate::outlook_api::fetch_and_store_outlook_folders(pool.inner(), &account.id, &account.access_token).await?;
         let folder = label_id.as_deref().unwrap_or("inbox");

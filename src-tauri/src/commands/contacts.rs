@@ -1164,6 +1164,61 @@ pub(crate) async fn export_csv_inner(
     Ok(output)
 }
 
+// --- Sync ---
+
+pub(crate) async fn sync_contacts_inner(
+    pool: &SqlitePool,
+    account_id: &str,
+) -> Result<usize, String> {
+    // Get provider type
+    let provider_type: String = sqlx::query_scalar(
+        "SELECT provider_type FROM accounts WHERE id = ?",
+    )
+    .bind(account_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // Check throttle (15 min = 900 seconds)
+    let last_sync: Option<i64> = sqlx::query_scalar(
+        "SELECT last_full_sync FROM contacts_sync_state WHERE account_id = ?",
+    )
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let now = now_epoch();
+    if let Some(last) = last_sync {
+        if now - last < 900 {
+            return Ok(0); // Throttled
+        }
+    }
+
+    // Get access token via account lookup (handles token refresh)
+    let account = super::accounts::get_account_by_id(pool, account_id).await?;
+
+    match provider_type.as_str() {
+        "gmail" => {
+            crate::contacts::google_contacts::sync_google_contacts(
+                pool,
+                account_id,
+                &account.access_token,
+            )
+            .await
+        }
+        "outlook" => {
+            crate::contacts::outlook_contacts::sync_outlook_contacts(
+                pool,
+                account_id,
+                &account.access_token,
+            )
+            .await
+        }
+        _ => Ok(0), // IMAP/CardDAV not yet implemented
+    }
+}
+
 // --- Tauri command wrappers ---
 
 #[tauri::command]
@@ -1357,6 +1412,19 @@ pub async fn export_contacts(
         "csv" => export_csv_inner(pool.inner(), &acc_id, contact_ids).await,
         _ => Err(format!("Unsupported format: {}", format)),
     }
+}
+
+#[tauri::command]
+pub async fn sync_contacts(
+    app_handle: tauri::AppHandle,
+    account_id: Option<String>,
+) -> Result<usize, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let acc_id = match account_id {
+        Some(id) => id,
+        None => super::accounts::get_active_account(pool.inner()).await?.id,
+    };
+    sync_contacts_inner(pool.inner(), &acc_id).await
 }
 
 #[cfg(test)]
