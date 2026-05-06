@@ -102,6 +102,7 @@ pub fn run() {
             commands::accounts::authenticate_gmail,
             commands::accounts::authenticate_microsoft,
             commands::accounts::check_auth_status,
+            commands::accounts::check_scopes_outdated,
             commands::accounts::get_accounts,
             commands::accounts::switch_account,
             commands::accounts::remove_account,

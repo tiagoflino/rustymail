@@ -8,6 +8,9 @@ use tauri::Manager;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
+/// Bump this when new OAuth scopes are added. v1 = initial, v2 = added contacts.readonly
+const GMAIL_SCOPES_VERSION: i32 = 2;
+
 #[allow(dead_code)]
 pub(crate) struct ActiveAccountFull {
     pub(crate) id: String,
@@ -482,6 +485,13 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
         .execute(pool.inner())
         .await
         .map_err(|e| e.to_string())?;
+
+    sqlx::query("UPDATE accounts SET scopes_version = ? WHERE id = ?")
+        .bind(GMAIL_SCOPES_VERSION)
+        .bind(&account_id)
+        .execute(pool.inner())
+        .await
+        .ok();
 
     Ok(())
 }
@@ -1232,6 +1242,30 @@ async fn refresh_microsoft_token(
 #[tauri::command]
 pub async fn authenticate_microsoft(app_handle: tauri::AppHandle) -> Result<(), String> {
     start_microsoft_oauth_flow(app_handle).await
+}
+
+#[derive(serde::Serialize, sqlx::FromRow)]
+pub struct ScopeOutdatedAccount {
+    pub id: String,
+    pub email: String,
+    pub provider_type: String,
+}
+
+#[tauri::command]
+pub async fn check_scopes_outdated(
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<ScopeOutdatedAccount>, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+
+    let outdated: Vec<ScopeOutdatedAccount> = sqlx::query_as(
+        "SELECT id, COALESCE(email, '') as email, COALESCE(provider_type, 'gmail') as provider_type FROM accounts WHERE COALESCE(provider_type, 'gmail') = 'gmail' AND (scopes_version IS NULL OR scopes_version < ?)"
+    )
+    .bind(GMAIL_SCOPES_VERSION)
+    .fetch_all(pool.inner())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(outdated)
 }
 
 #[cfg(test)]

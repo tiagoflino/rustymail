@@ -1731,6 +1731,19 @@
       invoke<string[]>("get_available_superstars", { accountId: null })
         .then((stars) => availableSuperstars.set(stars))
         .catch(() => availableSuperstars.set(["YELLOW_STAR"]));
+
+      // Check for outdated OAuth scopes
+      try {
+        const outdated = await invoke<Array<{id: string, email: string, provider_type: string}>>('check_scopes_outdated');
+        for (const account of outdated) {
+          addToast(
+            `${account.email} needs updated permissions for contact sync`,
+            'info',
+            0,
+            { label: 'Re-authenticate', onClick: () => { invoke('authenticate_gmail'); } }
+          );
+        }
+      } catch {}
     }
 
     setTimeout(() => checkForUpdates(true), 5000);

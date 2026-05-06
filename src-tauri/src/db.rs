@@ -16,7 +16,8 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         is_active INTEGER DEFAULT 1,
         created_at INTEGER,
         credential_source TEXT DEFAULT 'builtin',
-        provider_type TEXT DEFAULT 'gmail'
+        provider_type TEXT DEFAULT 'gmail',
+        scopes_version INTEGER NOT NULL DEFAULT 1
     );
 
     CREATE TABLE IF NOT EXISTS labels (
@@ -629,6 +630,15 @@ async fn m017_add_caldav_url(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+async fn m019_add_scopes_version(pool: &SqlitePool) -> Result<()> {
+    if !has_column(pool, "accounts", "scopes_version").await {
+        sqlx::query("ALTER TABLE accounts ADD COLUMN scopes_version INTEGER NOT NULL DEFAULT 1")
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
 async fn m018_create_contacts(pool: &SqlitePool) -> Result<()> {
     if !has_table(pool, "contacts").await {
         sqlx::query(
@@ -832,7 +842,7 @@ pub(crate) async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 }
 
 async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()> {
-    for version in 1..=18i64 {
+    for version in 1..=19i64 {
         if !applied.contains(&version) {
             println!("[Migration] Running v{}...", version);
             match version {
@@ -854,6 +864,7 @@ async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()
                 16 => m016_add_rfc_message_id(pool).await?,
                 17 => m017_add_caldav_url(pool).await?,
                 18 => m018_create_contacts(pool).await?,
+                19 => m019_add_scopes_version(pool).await?,
                 _ => {}
             }
             sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
@@ -1048,7 +1059,7 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
             .fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 18);
+        assert_eq!(count, 19);
     }
 
     #[tokio::test]
