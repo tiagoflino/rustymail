@@ -116,10 +116,8 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-<div class="modal-overlay" onclick={handleOverlayClick}>
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div class="modal-card" onclick={handleModalClick}>
+<div class="modal-overlay" onclick={handleOverlayClick} onkeydown={(e) => { if (e.key === 'Escape') onClose(); }} role="button" tabindex="-1" aria-label="Close modal">
+  <div class="modal-card" onclick={handleModalClick} role="presentation">
     <h3 class="modal-title">{contact ? 'Edit Contact' : 'New Contact'}</h3>
 
     <form onsubmit={(e) => { e.preventDefault(); handleSave(); }}>
@@ -164,7 +162,7 @@
       </div>
 
       <div class="form-section">
-        <label class="section-label">Emails</label>
+        <span class="section-label">Emails</span>
         {#each emails as emailEntry, index}
           <div class="dynamic-row">
             <input
@@ -189,7 +187,7 @@
       </div>
 
       <div class="form-section">
-        <label class="section-label">Phones</label>
+        <span class="section-label">Phones</span>
         {#each phones as phoneEntry, index}
           <div class="dynamic-row">
             <input

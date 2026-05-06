@@ -260,7 +260,7 @@ pub(crate) async fn get_contacts_inner(
             "SELECT c.id FROM contacts c WHERE c.account_id = ? AND c.rowid IN (SELECT rowid FROM contacts_fts WHERE contacts_fts MATCH ?) ORDER BY c.display_name ASC LIMIT ? OFFSET ?"
         )
         .bind(account_id)
-        .bind(&fts_query)
+        .bind(fts_query)
         .bind(limit)
         .bind(offset)
         .fetch_all(pool)
@@ -275,7 +275,7 @@ pub(crate) async fn get_contacts_inner(
                     "SELECT id FROM contacts WHERE account_id = ? AND display_name LIKE ? ORDER BY display_name ASC LIMIT ? OFFSET ?"
                 )
                 .bind(account_id)
-                .bind(&like_pattern)
+                .bind(like_pattern)
                 .bind(limit)
                 .bind(offset)
                 .fetch_all(pool)
@@ -291,7 +291,7 @@ pub(crate) async fn get_contacts_inner(
             "SELECT DISTINCT ce.contact_id FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id WHERE c.account_id = ? AND ce.email LIKE ? LIMIT ?"
         )
         .bind(account_id)
-        .bind(&email_pattern)
+        .bind(email_pattern)
         .bind(limit)
         .fetch_all(pool)
         .await
@@ -792,7 +792,7 @@ pub(crate) async fn search_contacts_autocomplete(
         let fts_results: Vec<(String, String)> = sqlx::query_as(
             "SELECT c.display_name, ce.email FROM contacts c JOIN contacts_fts f ON c.rowid = f.rowid JOIN contact_emails ce ON ce.contact_id = c.id WHERE f.contacts_fts MATCH ? AND c.account_id = ? AND ce.is_primary = 1 LIMIT ?"
         )
-        .bind(&format!("\"{}\"*", query.replace('"', "")))
+        .bind(format!("\"{}\"*", query.replace('"', "")))
         .bind(account_id)
         .bind(remaining)
         .fetch_all(pool)
@@ -858,10 +858,10 @@ pub(crate) async fn import_vcard_inner(
 
         for line in card.lines() {
             let line = line.trim_end_matches('\r');
-            if line.starts_with("FN:") {
-                display_name = line[3..].to_string();
-            } else if line.starts_with("N:") {
-                let parts: Vec<&str> = line[2..].splitn(5, ';').collect();
+            if let Some(val) = line.strip_prefix("FN:") {
+                display_name = val.to_string();
+            } else if let Some(val) = line.strip_prefix("N:") {
+                let parts: Vec<&str> = val.splitn(5, ';').collect();
                 if parts.len() >= 2 {
                     let fam = parts[0].trim();
                     let giv = parts[1].trim();
@@ -906,13 +906,13 @@ pub(crate) async fn import_vcard_inner(
                     "number": phone_value,
                     "type": phone_type,
                 }));
-            } else if line.starts_with("ORG:") {
-                let val = line[4..].trim_end_matches(';').trim().to_string();
+            } else if let Some(val) = line.strip_prefix("ORG:") {
+                let val = val.trim_end_matches(';').trim().to_string();
                 if !val.is_empty() {
                     company = Some(val);
                 }
-            } else if line.starts_with("TITLE:") {
-                let val = line[6..].trim().to_string();
+            } else if let Some(val) = line.strip_prefix("TITLE:") {
+                let val = val.trim().to_string();
                 if !val.is_empty() {
                     job_title = Some(val);
                 }

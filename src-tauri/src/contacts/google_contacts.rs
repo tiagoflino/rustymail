@@ -161,6 +161,7 @@ pub async fn fetch_google_contacts(
 
     let mut all_persons: Vec<Value> = Vec::new();
     let mut page_token: Option<String> = None;
+    #[allow(unused_assignments)]
     let mut next_sync_token: Option<String> = None;
 
     loop {
