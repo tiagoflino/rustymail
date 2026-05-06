@@ -298,6 +298,9 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
         .add_scope(oauth2::Scope::new(
             "https://www.googleapis.com/auth/drive.file".to_string(),
         ))
+        .add_scope(oauth2::Scope::new(
+            "https://www.googleapis.com/auth/contacts.readonly".to_string(),
+        ))
         .set_pkce_challenge(pkce_challenge)
         .add_extra_param("access_type", "offline")
         .add_extra_param("prompt", "consent")
@@ -407,6 +410,7 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
                     "https://www.googleapis.com/auth/gmail.labels",
                     "https://www.googleapis.com/auth/calendar.events",
                     "https://www.googleapis.com/auth/drive.file",
+                    "https://www.googleapis.com/auth/contacts.readonly",
                 ];
 
                 for req_scope in required_scopes {
