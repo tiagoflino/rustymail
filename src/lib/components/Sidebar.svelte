@@ -755,42 +755,28 @@
   .sidebar-compose {
     padding: 12px 12px 4px 12px;
     display: flex;
-    gap: 8px;
+    gap: 6px;
   }
   .sidebar-compose-btn {
     font-size: var(--font-size-base);
     font-weight: 500;
-    padding: 7px 14px;
+    padding: 7px 12px;
     background: var(--accent-blue);
     color: white;
     border: none;
     border-radius: var(--radius-standard);
     box-shadow: none;
+    white-space: nowrap;
   }
   .sidebar-compose-btn:hover {
     background: var(--accent-blue);
     opacity: 0.9;
   }
-  .sidebar-calendar-btn {
-    width: 36px;
-    padding: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--bg-view);
-    border: 1px solid var(--border-color);
-  }
-  .sidebar-subscriptions-btn {
-    width: 36px;
-    padding: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--bg-view);
-    border: 1px solid var(--border-color);
-  }
+  .sidebar-calendar-btn,
+  .sidebar-subscriptions-btn,
   .sidebar-contacts-btn {
-    width: 36px;
+    width: 30px;
+    flex-shrink: 0;
     padding: 0;
     display: flex;
     align-items: center;
