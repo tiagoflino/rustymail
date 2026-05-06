@@ -217,9 +217,21 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         relations TEXT NOT NULL DEFAULT '[]',
         is_starred INTEGER NOT NULL DEFAULT 0,
         source TEXT NOT NULL DEFAULT 'local',
+        email_count_sent INTEGER NOT NULL DEFAULT 0,
+        email_count_received INTEGER NOT NULL DEFAULT 0,
+        first_seen_at INTEGER,
+        last_contacted_at INTEGER,
+        is_promoted INTEGER NOT NULL DEFAULT 1,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         FOREIGN KEY (account_id) REFERENCES accounts(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS discovery_blocklist (
+        email TEXT NOT NULL,
+        account_id TEXT NOT NULL,
+        blocked_at INTEGER NOT NULL,
+        PRIMARY KEY (email, account_id)
     );
 
     CREATE TABLE IF NOT EXISTS contact_emails (
@@ -317,6 +329,8 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         ("shortcut_settings", "Meta+,"),
         ("shortcut_search", "/"),
         ("unified_indicator", "avatar"),
+        ("contact_discovery_threshold", "3"),
+        ("contact_discovery_enabled", "true"),
     ];
     for (key, value) in defaults {
         let _ = sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)")
@@ -639,6 +653,44 @@ async fn m019_add_scopes_version(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+async fn m020_add_discovery_columns(pool: &SqlitePool) -> Result<()> {
+    if !has_column(pool, "contacts", "email_count_sent").await {
+        sqlx::query("ALTER TABLE contacts ADD COLUMN email_count_sent INTEGER NOT NULL DEFAULT 0")
+            .execute(pool).await?;
+    }
+    if !has_column(pool, "contacts", "email_count_received").await {
+        sqlx::query("ALTER TABLE contacts ADD COLUMN email_count_received INTEGER NOT NULL DEFAULT 0")
+            .execute(pool).await?;
+    }
+    if !has_column(pool, "contacts", "first_seen_at").await {
+        sqlx::query("ALTER TABLE contacts ADD COLUMN first_seen_at INTEGER")
+            .execute(pool).await?;
+    }
+    if !has_column(pool, "contacts", "last_contacted_at").await {
+        sqlx::query("ALTER TABLE contacts ADD COLUMN last_contacted_at INTEGER")
+            .execute(pool).await?;
+    }
+    if !has_column(pool, "contacts", "is_promoted").await {
+        sqlx::query("ALTER TABLE contacts ADD COLUMN is_promoted INTEGER NOT NULL DEFAULT 1")
+            .execute(pool).await?;
+    }
+    if !has_table(pool, "discovery_blocklist").await {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS discovery_blocklist (
+                email TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                blocked_at INTEGER NOT NULL,
+                PRIMARY KEY (email, account_id)
+            )"
+        ).execute(pool).await?;
+    }
+    sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES ('contact_discovery_threshold', '3')")
+        .execute(pool).await?;
+    sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES ('contact_discovery_enabled', 'true')")
+        .execute(pool).await?;
+    Ok(())
+}
+
 async fn m018_create_contacts(pool: &SqlitePool) -> Result<()> {
     if !has_table(pool, "contacts").await {
         sqlx::query(
@@ -842,7 +894,7 @@ pub(crate) async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 }
 
 async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()> {
-    for version in 1..=19i64 {
+    for version in 1..=20i64 {
         if !applied.contains(&version) {
             println!("[Migration] Running v{}...", version);
             match version {
@@ -865,6 +917,7 @@ async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()
                 17 => m017_add_caldav_url(pool).await?,
                 18 => m018_create_contacts(pool).await?,
                 19 => m019_add_scopes_version(pool).await?,
+                20 => m020_add_discovery_columns(pool).await?,
                 _ => {}
             }
             sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
@@ -1059,7 +1112,7 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
             .fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 19);
+        assert_eq!(count, 20);
     }
 
     #[tokio::test]
@@ -1359,6 +1412,8 @@ mod tests {
         sqlx::query("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)")
             .execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY, email TEXT, display_name TEXT, avatar_url TEXT, token_expiry INTEGER, is_active INTEGER DEFAULT 1, created_at INTEGER, credential_source TEXT DEFAULT 'builtin', provider_type TEXT DEFAULT 'gmail')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
             .execute(&pool).await.unwrap();
         // Mark 1-17 as done
         for v in 1..=17i64 {
