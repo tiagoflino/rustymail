@@ -378,7 +378,7 @@
     border-right: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
-    background: var(--bg-primary);
+    background: var(--bg-view);
     overflow: hidden;
   }
 
@@ -417,21 +417,21 @@
   }
 
   .action-btn:hover {
-    background: var(--hover-bg);
+    background: var(--sidebar-hover);
     color: var(--text-primary);
   }
 
   .action-btn.primary {
-    color: var(--accent-color);
+    color: var(--accent-blue);
   }
 
   .action-btn.primary:hover {
-    background: var(--accent-color);
+    background: var(--accent-blue);
     color: #fff;
   }
 
   .action-btn.danger:hover {
-    background: var(--danger-color);
+    background: #ff3b30;
     color: #fff;
   }
 
@@ -445,7 +445,7 @@
     left: 20px;
     top: 50%;
     transform: translateY(-50%);
-    color: var(--text-tertiary);
+    color: var(--text-secondary);
     pointer-events: none;
   }
 
@@ -454,7 +454,7 @@
     padding: 6px 8px 6px 28px;
     border: 1px solid var(--border-color);
     border-radius: 6px;
-    background: var(--input-bg);
+    background: var(--bg-list);
     color: var(--text-primary);
     font-size: 13px;
     outline: none;
@@ -462,11 +462,11 @@
   }
 
   .search-input:focus {
-    border-color: var(--accent-color);
+    border-color: var(--accent-blue);
   }
 
   .search-input::placeholder {
-    color: var(--text-tertiary);
+    color: var(--text-secondary);
   }
 
   .group-filters {
@@ -489,12 +489,12 @@
   }
 
   .filter-btn:hover {
-    background: var(--hover-bg);
+    background: var(--sidebar-hover);
   }
 
   .filter-btn.active {
-    background: var(--selected-bg);
-    color: var(--accent-color);
+    background: var(--sidebar-active);
+    color: var(--accent-blue);
   }
 
   .contact-list {
@@ -518,11 +518,11 @@
   }
 
   .contact-item:hover {
-    background: var(--hover-bg);
+    background: var(--sidebar-hover);
   }
 
   .contact-item.selected {
-    background: var(--selected-bg);
+    background: var(--sidebar-active);
   }
 
   .contact-avatar {
@@ -563,7 +563,7 @@
 
   .contact-company {
     font-size: 11px;
-    color: var(--text-tertiary);
+    color: var(--text-secondary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -574,7 +574,7 @@
     align-items: center;
     justify-content: center;
     padding: 40px 20px;
-    color: var(--text-tertiary);
+    color: var(--text-secondary);
     font-size: 13px;
   }
 
@@ -582,7 +582,7 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    background: var(--bg-primary);
+    background: var(--bg-view);
     overflow-y: auto;
   }
 
@@ -650,7 +650,7 @@
   .section-label {
     font-size: 11px;
     font-weight: 600;
-    color: var(--text-tertiary);
+    color: var(--text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.5px;
     margin: 0 0 6px;
@@ -674,7 +674,7 @@
     font-size: 10px;
     padding: 1px 5px;
     border-radius: 4px;
-    background: var(--tag-bg);
+    background: var(--bg-control);
     color: var(--text-secondary);
     font-weight: 500;
   }
@@ -689,7 +689,7 @@
     font-size: 11px;
     padding: 2px 8px;
     border-radius: 4px;
-    background: var(--tag-bg);
+    background: var(--bg-control);
     color: var(--text-secondary);
   }
 
@@ -700,7 +700,7 @@
     justify-content: center;
     height: 100%;
     gap: 12px;
-    color: var(--text-tertiary);
+    color: var(--text-secondary);
     font-size: 13px;
   }
 </style>

@@ -223,7 +223,7 @@
     padding: 8px 10px;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-standard);
-    background: var(--input-bg);
+    background: var(--bg-list);
     color: var(--text-primary);
     font-family: monospace;
     font-size: 12px;
@@ -234,11 +234,11 @@
   }
 
   .data-textarea:focus {
-    border-color: var(--accent-color);
+    border-color: var(--accent-blue);
   }
 
   .data-textarea::placeholder {
-    color: var(--text-tertiary);
+    color: var(--text-secondary);
   }
 
   .divider {
@@ -267,7 +267,7 @@
   }
 
   .btn-primary {
-    background: var(--accent-color);
+    background: var(--accent-blue);
     color: #fff;
   }
 
@@ -276,11 +276,11 @@
   }
 
   .btn-secondary {
-    background: var(--hover-bg);
+    background: var(--sidebar-hover);
     color: var(--text-primary);
   }
 
   .btn-secondary:hover:not(:disabled) {
-    background: var(--selected-bg);
+    background: var(--sidebar-active);
   }
 </style>

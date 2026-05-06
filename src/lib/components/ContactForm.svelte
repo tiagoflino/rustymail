@@ -234,6 +234,8 @@
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(var(--blur-modal));
+    -webkit-backdrop-filter: blur(var(--blur-modal));
     z-index: 1000;
     display: flex;
     align-items: center;
@@ -241,14 +243,14 @@
   }
 
   .modal-card {
-    background: var(--bg-primary);
-    border-radius: 12px;
+    background: var(--bg-view);
+    border-radius: var(--radius-modal);
     padding: 24px;
     width: 100%;
     max-width: 480px;
     max-height: 85vh;
     overflow-y: auto;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(0, 0, 0, 0.1);
   }
 
   .modal-title {
@@ -273,7 +275,7 @@
     padding: 8px 10px;
     border: 1px solid var(--border-color);
     border-radius: 6px;
-    background: var(--input-bg);
+    background: var(--bg-list);
     color: var(--text-primary);
     font-size: 13px;
     outline: none;
@@ -281,11 +283,11 @@
   }
 
   .form-input:focus {
-    border-color: var(--accent-color);
+    border-color: var(--accent-blue);
   }
 
   .form-input::placeholder {
-    color: var(--text-tertiary);
+    color: var(--text-secondary);
   }
 
   .form-textarea {
@@ -297,7 +299,7 @@
     padding: 8px 10px;
     border: 1px solid var(--border-color);
     border-radius: 6px;
-    background: var(--input-bg);
+    background: var(--bg-list);
     color: var(--text-primary);
     font-size: 13px;
     outline: none;
@@ -312,7 +314,7 @@
     display: block;
     font-size: 11px;
     font-weight: 600;
-    color: var(--text-tertiary);
+    color: var(--text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.5px;
     margin-bottom: 6px;
@@ -338,21 +340,21 @@
     border: none;
     border-radius: 4px;
     background: transparent;
-    color: var(--text-tertiary);
+    color: var(--text-secondary);
     font-size: 16px;
     cursor: pointer;
     transition: background 0.15s, color 0.15s;
   }
 
   .remove-btn:hover {
-    background: var(--danger-color);
+    background: #ff3b30;
     color: #fff;
   }
 
   .add-btn {
     border: none;
     background: transparent;
-    color: var(--accent-color);
+    color: var(--accent-blue);
     font-size: 12px;
     font-weight: 500;
     cursor: pointer;
@@ -386,7 +388,7 @@
   }
 
   .btn-cancel {
-    background: var(--hover-bg);
+    background: var(--sidebar-hover);
     color: var(--text-primary);
   }
 
@@ -395,7 +397,7 @@
   }
 
   .btn-save {
-    background: var(--accent-color);
+    background: var(--accent-blue);
     color: #fff;
   }
 

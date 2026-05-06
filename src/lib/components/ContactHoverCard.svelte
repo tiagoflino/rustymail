@@ -30,17 +30,17 @@
 <style>
     .hover-card {
         position: fixed;
-        background: var(--bg-primary);
+        background: var(--bg-view);
         border: 1px solid var(--border-color);
         border-radius: 8px;
         padding: 12px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
         z-index: 9999;
         min-width: 200px;
         max-width: 280px;
     }
     .hc-header { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
-    .hc-avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--accent-color); color: white; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; }
+    .hc-avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--accent-blue); color: white; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; }
     .hc-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
     .hc-subtitle { font-size: 11px; color: var(--text-secondary); }
     .hc-email { font-size: 11px; color: var(--text-secondary); padding-left: 38px; }
