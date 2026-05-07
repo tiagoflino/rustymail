@@ -1751,12 +1751,6 @@
         } catch {}
       }
 
-      // Trigger contact discovery backfill if not yet done
-      try {
-        await invoke('backfill_contacts', { accountId: null });
-      } catch (e) {
-        // Non-critical, ignore silently
-      }
     }
 
     setTimeout(() => checkForUpdates(true), 5000);

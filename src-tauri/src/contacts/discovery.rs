@@ -275,7 +275,19 @@ pub async fn backfill_discovered_contacts(
         .unwrap_or(None);
 
     if done.as_deref() == Some("true") {
-        return Ok(0);
+        // Verify we actually have discovered contacts - if not, the flag was set prematurely
+        let discovered_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM contacts WHERE account_id = ? AND source = 'discovered'",
+        )
+        .bind(account_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+
+        if discovered_count > 0 {
+            return Ok(0);
+        }
+        // Flag was set prematurely (0 messages were available) — re-run
     }
 
     // Check if discovery is enabled
@@ -319,12 +331,14 @@ pub async fn backfill_discovered_contacts(
         tokio::task::yield_now().await;
     }
 
-    // Mark complete
-    sqlx::query("INSERT OR REPLACE INTO settings (key, value) VALUES (?, 'true')")
-        .bind(&key)
-        .execute(pool)
-        .await
-        .ok();
+    // Only mark complete if we actually had messages to process
+    if processed > 0 {
+        sqlx::query("INSERT OR REPLACE INTO settings (key, value) VALUES (?, 'true')")
+            .bind(&key)
+            .execute(pool)
+            .await
+            .ok();
+    }
 
     Ok(processed)
 }
