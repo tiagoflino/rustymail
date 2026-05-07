@@ -546,6 +546,47 @@
                 </div>
               </div>
             </div>
+
+            <div class="section">
+              <div class="section-title">Contact Discovery</div>
+              <p class="section-desc">Automatically discover contacts from your email history based on interaction frequency.</p>
+              <div class="setting-card">
+                <div class="card-row">
+                  <label class="toggle-row">
+                    <div class="toggle-label">
+                      <span class="setting-name">Enable Contact Discovery</span>
+                      <span class="setting-hint">Automatically extract contacts from sent and received emails</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      class="toggle"
+                      checked={settings.contact_discovery_enabled === "true"}
+                      onchange={(e) => saveSetting("contact_discovery_enabled", e.currentTarget.checked ? "true" : "false")}
+                    />
+                  </label>
+                </div>
+                <div class="card-row last">
+                  <label class="toggle-row">
+                    <div class="toggle-label">
+                      <span class="setting-name">Promotion Threshold</span>
+                      <span class="setting-hint">Number of interactions before a discovered contact appears in your contact list (instant promotion on reciprocal exchange)</span>
+                    </div>
+                    <div class="slider-row">
+                      <input
+                        type="range"
+                        class="range-slider"
+                        min="2"
+                        max="10"
+                        step="1"
+                        value={parseInt(settings.contact_discovery_threshold || "3")}
+                        oninput={(e) => saveSetting("contact_discovery_threshold", e.currentTarget.value)}
+                      />
+                      <span class="slider-value">{settings.contact_discovery_threshold || "3"}</span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            </div>
           {:else if activeTab === "reading"}
             <div class="section">
               <div class="section-title">Reading Preferences</div>
