@@ -331,6 +331,8 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         ("unified_indicator", "avatar"),
         ("contact_discovery_threshold", "3"),
         ("contact_discovery_enabled", "true"),
+        ("smart_reply_count", "4"),
+        ("smart_reply_style", "mixed"),
     ];
     for (key, value) in defaults {
         let _ = sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)")
@@ -691,6 +693,14 @@ async fn m020_add_discovery_columns(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+async fn m021_add_smart_reply_settings(pool: &SqlitePool) -> Result<()> {
+    sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES ('smart_reply_count', '4')")
+        .execute(pool).await?;
+    sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES ('smart_reply_style', 'mixed')")
+        .execute(pool).await?;
+    Ok(())
+}
+
 async fn m018_create_contacts(pool: &SqlitePool) -> Result<()> {
     if !has_table(pool, "contacts").await {
         sqlx::query(
@@ -894,7 +904,7 @@ pub(crate) async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 }
 
 async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()> {
-    for version in 1..=20i64 {
+    for version in 1..=21i64 {
         if !applied.contains(&version) {
             println!("[Migration] Running v{}...", version);
             match version {
@@ -918,6 +928,7 @@ async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()
                 18 => m018_create_contacts(pool).await?,
                 19 => m019_add_scopes_version(pool).await?,
                 20 => m020_add_discovery_columns(pool).await?,
+                21 => m021_add_smart_reply_settings(pool).await?,
                 _ => {}
             }
             sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
@@ -1112,7 +1123,7 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
             .fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 20);
+        assert_eq!(count, 21);
     }
 
     #[tokio::test]

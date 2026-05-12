@@ -1113,6 +1113,40 @@
                 <div class="card-row">
                   <div class="setting-row-inline">
                     <div class="setting-label">
+                      <span class="setting-name">Smart Reply Count</span>
+                      <span class="setting-hint">Number of reply suggestions to generate</span>
+                    </div>
+                    <div class="option-group">
+                      {#each [["2", "2"], ["4", "4"]] as [val, label]}
+                        <button
+                          class="option-btn {(settings.smart_reply_count || '4') === val ? 'selected' : ''}"
+                          onclick={() => saveSetting("smart_reply_count", val)}
+                        >{label}</button>
+                      {/each}
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card-row">
+                  <div class="setting-row-inline">
+                    <div class="setting-label">
+                      <span class="setting-name">Smart Reply Style</span>
+                      <span class="setting-hint">Controls the length and tone of generated replies</span>
+                    </div>
+                    <div class="option-group">
+                      {#each [["concise", "Concise"], ["mixed", "Mixed"], ["detailed", "Detailed"]] as [val, label]}
+                        <button
+                          class="option-btn {(settings.smart_reply_style || 'mixed') === val ? 'selected' : ''}"
+                          onclick={() => saveSetting("smart_reply_style", val)}
+                        >{label}</button>
+                      {/each}
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card-row">
+                  <div class="setting-row-inline">
+                    <div class="setting-label">
                       <span class="setting-name">Summary Cache</span>
                       <span class="setting-hint">Clear cached AI summaries to force re-generation</span>
                     </div>

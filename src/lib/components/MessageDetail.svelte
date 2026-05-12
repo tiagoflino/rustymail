@@ -521,16 +521,6 @@
         <span class="toolbar-icon">{@html iconMail}</span><span>Unread</span
         >
       </button>
-      {#if aiAvailable}
-        <button onclick={handleSummarize} class="toolbar-btn" style="margin-left: auto;" title="Summarize" disabled={aiSummaryLoading}>
-          {#if aiSummaryLoading}
-            <span class="toolbar-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="30 70" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/></circle></svg></span>
-          {:else}
-            <span class="toolbar-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 014 4c0 1.1-.4 2.1-1 2.8L12 12l-3-3.2A4 4 0 0112 2z"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 18h6"/><path d="M10 22h4"/></svg></span>
-          {/if}
-          <span>{aiSummaryLoading ? 'Working...' : 'Summarize'}</span>
-        </button>
-      {/if}
     </div>
     {#if $isMessagesLoading}
       <div class="message-scroll-area">
@@ -738,34 +728,51 @@
             </button>
           {/if}
         {/each}
-        {#if aiAvailable && $currentMessages.length > 0}
-          <div class="smart-replies-section">
-            {#if smartReplies.length > 0}
-              <div class="smart-replies-chips">
-                {#each smartReplies as reply}
+      </div>
+      {#if aiAvailable && $currentMessages.length > 0}
+        <div class="ai-action-bar">
+          {#if smartReplies.length > 0}
+            <div class="smart-replies-container">
+              <div class="smart-replies-grid">
+                {#each smartReplies as reply, i}
                   <button
-                    class="smart-reply-chip"
+                    class="smart-reply-card"
+                    class:positive={i < 2}
+                    class:negative={i >= 2}
                     onclick={() => {
                       const lastMsg = $currentMessages[$currentMessages.length - 1];
                       if (onsmartreply) onsmartreply(reply, lastMsg);
                     }}
-                  >{reply}</button>
+                  ><span class="reply-text">{reply}</span></button>
                 {/each}
               </div>
-            {:else}
-              <button class="smart-replies-btn" onclick={handleSmartReplies} disabled={smartRepliesLoading}>
-                {#if smartRepliesLoading}
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="30 70" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/></circle></svg>
-                  Generating replies...
-                {:else}
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 014 4c0 1.1-.4 2.1-1 2.8L12 12l-3-3.2A4 4 0 0112 2z"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 18h6"/><path d="M10 22h4"/></svg>
-                  Quick Replies
-                {/if}
+              <button class="ai-bar-dismiss" onclick={() => { smartReplies = []; }}>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                Dismiss
               </button>
-            {/if}
-          </div>
-        {/if}
-      </div>
+            </div>
+          {:else}
+            <div class="ai-bar-actions">
+              <button class="ai-bar-btn" onclick={handleSummarize} disabled={aiSummaryLoading}>
+                {#if aiSummaryLoading}
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="30 70" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/></circle></svg>
+                {:else}
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                {/if}
+                Summarize
+              </button>
+              <button class="ai-bar-btn" onclick={handleSmartReplies} disabled={smartRepliesLoading}>
+                {#if smartRepliesLoading}
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="30 70" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/></circle></svg>
+                {:else}
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+                {/if}
+                Quick Replies
+              </button>
+            </div>
+          {/if}
+        </div>
+      {/if}
     {:else}
       <div class="empty-state">No messages loaded for this thread.</div>
     {/if}
@@ -1418,56 +1425,93 @@
   .ai-card-skeleton .w60 { width: 60%; }
   .ai-card-skeleton .w70 { width: 70%; }
   .ai-card-skeleton .w80 { width: 80%; }
-  .smart-replies-section {
-    margin-top: 8px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
+  .ai-action-bar {
+    flex-shrink: 0;
+    padding: 8px 16px;
+    background: var(--bg-view);
+    border-top: 1px solid var(--border-color);
   }
-  .smart-replies-btn {
+  .ai-bar-actions {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 6px;
-    padding: 6px 12px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-pill);
-    background: transparent;
+  }
+  .ai-bar-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    border: none;
+    border-radius: var(--radius-standard);
+    background: var(--bg-control);
     color: var(--text-secondary);
-    font-size: var(--font-size-toolbar);
+    font-size: var(--font-size-small);
     font-family: var(--font-family);
     cursor: pointer;
-    transition: background 0.1s, color 0.1s;
+    transition: background 0.15s, color 0.15s;
   }
-  .smart-replies-btn:hover:not(:disabled) {
-    background: var(--sidebar-hover);
+  .ai-bar-btn:hover:not(:disabled) {
+    background: var(--sidebar-active);
     color: var(--text-primary);
   }
-  .smart-replies-btn:disabled {
-    opacity: 0.7;
+  .ai-bar-btn:disabled {
+    opacity: 0.6;
     cursor: not-allowed;
   }
-  .smart-replies-chips {
+  .smart-replies-container {
     display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
   }
-  .smart-reply-chip {
-    padding: 8px 14px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-pill);
-    background: transparent;
-    color: var(--text-primary);
-    font-size: var(--font-size-toolbar);
+  .ai-bar-dismiss {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border: none;
+    border-radius: var(--radius-standard);
+    background: none;
+    color: var(--text-secondary);
+    font-size: 10px;
     font-family: var(--font-family);
     cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
-    max-width: 300px;
-    text-align: left;
-    line-height: 1.4;
   }
-  .smart-reply-chip:hover {
-    background: var(--sidebar-hover);
+  .ai-bar-dismiss:hover {
+    color: var(--text-primary);
+    background: var(--bg-control);
+  }
+  .smart-replies-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    padding: 4px 0;
+    width: 100%;
+  }
+  .smart-reply-card {
+    padding: 10px 12px;
+    border-radius: var(--radius-standard, 6px);
+    border: 1px solid var(--border-color);
+    background: var(--bg-view);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-family: var(--font-family);
+    line-height: 1.4;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .smart-reply-card:hover {
     border-color: var(--accent-blue);
+  }
+  .smart-reply-card.positive {
+    border-left: 3px solid #34c759;
+  }
+  .smart-reply-card.negative {
+    border-left: 3px solid #ff9f0a;
+  }
+  .reply-text {
+    display: block;
   }
 </style>
