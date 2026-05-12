@@ -271,7 +271,7 @@ pub(crate) async fn get_contacts_inner(
         // FTS search with prefix match, fallback to LIKE on failure
         let fts_query = format!("\"{}\"*", sanitize_fts_query(query));
         let fts_ids: Result<Vec<(String,)>, _> = sqlx::query_as(
-            "SELECT c.id FROM contacts c WHERE c.account_id = ? AND (c.is_promoted = 1 OR c.source != 'discovered') AND c.rowid IN (SELECT rowid FROM contacts_fts WHERE contacts_fts MATCH ?) ORDER BY c.display_name ASC LIMIT ? OFFSET ?"
+            "SELECT c.id FROM contacts c WHERE c.account_id = ? AND c.rowid IN (SELECT rowid FROM contacts_fts WHERE contacts_fts MATCH ?) ORDER BY c.display_name ASC LIMIT ? OFFSET ?"
         )
         .bind(account_id)
         .bind(fts_query)
@@ -286,7 +286,7 @@ pub(crate) async fn get_contacts_inner(
                 // Fallback to LIKE search on display_name
                 let like_pattern = format!("%{}%", query);
                 let rows: Vec<(String,)> = sqlx::query_as(
-                    "SELECT id FROM contacts WHERE account_id = ? AND (is_promoted = 1 OR source != 'discovered') AND display_name LIKE ? ORDER BY display_name ASC LIMIT ? OFFSET ?"
+                    "SELECT id FROM contacts WHERE account_id = ? AND display_name LIKE ? ORDER BY display_name ASC LIMIT ? OFFSET ?"
                 )
                 .bind(account_id)
                 .bind(like_pattern)
@@ -302,7 +302,7 @@ pub(crate) async fn get_contacts_inner(
         // Also search contact_emails with LIKE
         let email_pattern = format!("%{}%", query);
         let email_ids: Vec<(String,)> = sqlx::query_as(
-            "SELECT DISTINCT ce.contact_id FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id WHERE c.account_id = ? AND (c.is_promoted = 1 OR c.source != 'discovered') AND ce.email LIKE ? LIMIT ?"
+            "SELECT DISTINCT ce.contact_id FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id WHERE c.account_id = ? AND ce.email LIKE ? LIMIT ?"
         )
         .bind(account_id)
         .bind(email_pattern)
