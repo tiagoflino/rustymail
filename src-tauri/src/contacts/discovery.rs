@@ -58,7 +58,7 @@ fn parse_address(raw: &str) -> (String, String) {
 fn parse_recipients(recipients: &str) -> Vec<(String, String)> {
     recipients
         .split(',')
-        .map(|r| parse_address(r))
+        .map(parse_address)
         .filter(|(_, email)| email.contains('@'))
         .collect()
 }
@@ -319,7 +319,7 @@ pub async fn backfill_discovered_contacts(
             processed += 1;
         }
 
-        if processed % 500 == 0 {
+        if processed.is_multiple_of(500) {
             tracing::info!("[ContactDiscovery] Processed {} messages so far...", processed);
         }
 

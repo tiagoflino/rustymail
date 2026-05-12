@@ -8,7 +8,7 @@ describe('ContactHoverCard.svelte', () => {
             display_name: 'Alice Anderson',
             company: 'TechCo',
             job_title: 'Engineer',
-            emails: [{ email: 'alice@tech.com', type: 'work', is_primary: true }],
+            emails: [{ id: 'e1', contact_id: '1', email: 'alice@tech.com', type: 'work', is_primary: true }],
         };
         render(ContactHoverCard, { contact, x: 100, y: 200 });
         expect(screen.getByText('Alice Anderson')).toBeInTheDocument();
@@ -19,7 +19,7 @@ describe('ContactHoverCard.svelte', () => {
     it('shows initials as avatar', () => {
         const contact = {
             display_name: 'Bob Builder',
-            emails: [{ email: 'bob@build.io', type: 'work', is_primary: true }],
+            emails: [{ id: 'e2', contact_id: '2', email: 'bob@build.io', type: 'work', is_primary: true }],
         };
         render(ContactHoverCard, { contact, x: 0, y: 0 });
         expect(screen.getByText('BB')).toBeInTheDocument();
@@ -28,7 +28,7 @@ describe('ContactHoverCard.svelte', () => {
     it('handles missing optional fields', () => {
         const contact = {
             display_name: 'Simple Contact',
-            emails: [{ email: 'simple@test.com', type: 'work', is_primary: true }],
+            emails: [{ id: 'e3', contact_id: '3', email: 'simple@test.com', type: 'work', is_primary: true }],
         };
         render(ContactHoverCard, { contact, x: 50, y: 50 });
         expect(screen.getByText('Simple Contact')).toBeInTheDocument();

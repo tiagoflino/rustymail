@@ -23,6 +23,11 @@ describe('ContactForm.svelte', () => {
     it('renders edit form with pre-filled fields', () => {
         const contact = {
             id: '1', display_name: 'Alice Smith', given_name: 'Alice', surname: 'Smith',
+            account_id: 'acc1', nickname: null, department: null, notes: null,
+            birthday: null, photo_uri: null, is_starred: false, source: 'local',
+            created_at: 1000, updated_at: 1000, email_count_sent: 0,
+            email_count_received: 0, first_seen_at: null, last_contacted_at: null,
+            is_promoted: true,
             company: 'TechCo', job_title: 'Dev',
             emails: [{ id: 'e1', contact_id: '1', email: 'alice@tech.com', type: 'work', is_primary: true }],
             phones: '[]', addresses: '[]', social_profiles: '[]', urls: '[]', relations: '[]', groups: [],
