@@ -34,6 +34,25 @@ pub async fn sync_gmail_data(
         let idle_manager = app_handle.state::<crate::provider::imap::idle::IdleManager>();
         idle_manager.start_for_account(config, app_handle.clone()).await;
 
+        // IMAP path — still do contact discovery from stored messages
+        let bg_pool = pool.inner().clone();
+        let bg_account_id = account.id.clone();
+        tokio::spawn(async move {
+            let email: String = sqlx::query_scalar("SELECT email FROM accounts WHERE id = ?")
+                .bind(&bg_account_id)
+                .fetch_optional(&bg_pool)
+                .await
+                .unwrap_or(None)
+                .unwrap_or_default();
+            if !email.is_empty() {
+                match crate::contacts::discovery::backfill_discovered_contacts(&bg_pool, &bg_account_id, &email).await {
+                    Ok(count) if count > 0 => tracing::info!("[ContactDiscovery] IMAP backfill: {} messages processed", count),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("[ContactDiscovery] IMAP backfill failed: {}", e),
+                }
+            }
+        });
+
         return Ok(SyncResult {
             new_message_ids: vec![],
             new_thread_ids: result.updated_thread_ids,
@@ -44,6 +63,31 @@ pub async fn sync_gmail_data(
         crate::outlook_api::fetch_and_store_outlook_folders(pool.inner(), &account.id, &account.access_token).await?;
         let folder = label_id.as_deref().unwrap_or("inbox");
         let delta = crate::outlook_api::outlook_delta_sync(pool.inner(), &account.id, &account.access_token, folder).await?;
+
+        // Outlook path — sync contacts + discovery
+        let bg_pool = pool.inner().clone();
+        let bg_account_id = account.id.clone();
+        tokio::spawn(async move {
+            tracing::info!("[ContactSync] Starting for Outlook account {}", bg_account_id);
+            match super::contacts::sync_contacts_inner(&bg_pool, &bg_account_id).await {
+                Ok(count) => tracing::info!("[ContactSync] Outlook sync: {} contacts", count),
+                Err(e) => tracing::warn!("[ContactSync] Outlook sync failed: {}", e),
+            }
+            let email: String = sqlx::query_scalar("SELECT email FROM accounts WHERE id = ?")
+                .bind(&bg_account_id)
+                .fetch_optional(&bg_pool)
+                .await
+                .unwrap_or(None)
+                .unwrap_or_default();
+            if !email.is_empty() {
+                match crate::contacts::discovery::backfill_discovered_contacts(&bg_pool, &bg_account_id, &email).await {
+                    Ok(count) if count > 0 => tracing::info!("[ContactDiscovery] Outlook backfill: {} messages", count),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("[ContactDiscovery] Outlook backfill failed: {}", e),
+                }
+            }
+        });
+
         return Ok(SyncResult {
             new_message_ids: vec![],
             new_thread_ids: delta.new_thread_ids,
@@ -107,26 +151,36 @@ pub async fn sync_gmail_data(
     let bg_pool_contacts = pool.inner().clone();
     let bg_account_id_contacts = account.id.clone();
     tokio::spawn(async move {
-        if let Err(e) = super::contacts::sync_contacts_inner(&bg_pool_contacts, &bg_account_id_contacts).await {
-            tracing::warn!("Contact sync failed: {}", e);
+        tracing::info!("[ContactSync] Starting for account {}", bg_account_id_contacts);
+
+        match super::contacts::sync_contacts_inner(&bg_pool_contacts, &bg_account_id_contacts).await {
+            Ok(count) => tracing::info!("[ContactSync] Provider sync complete: {} contacts synced", count),
+            Err(e) => tracing::warn!("[ContactSync] Provider sync failed: {}", e),
         }
-        // Backfill discovered contacts from message history
+
         let email: String = sqlx::query_scalar("SELECT email FROM accounts WHERE id = ?")
             .bind(&bg_account_id_contacts)
             .fetch_optional(&bg_pool_contacts)
             .await
             .unwrap_or(None)
             .unwrap_or_default();
-        if !email.is_empty() {
-            if let Err(e) = crate::contacts::discovery::backfill_discovered_contacts(
-                &bg_pool_contacts,
-                &bg_account_id_contacts,
-                &email,
-            )
-            .await
-            {
-                tracing::warn!("Contact discovery backfill failed: {}", e);
+
+        if email.is_empty() {
+            tracing::warn!("[ContactSync] No email found for account, skipping discovery");
+            return;
+        }
+
+        match crate::contacts::discovery::backfill_discovered_contacts(
+            &bg_pool_contacts, &bg_account_id_contacts, &email,
+        ).await {
+            Ok(count) => {
+                if count > 0 {
+                    tracing::info!("[ContactDiscovery] Backfill complete: {} messages processed", count);
+                } else {
+                    tracing::info!("[ContactDiscovery] Backfill skipped (already complete or no messages)");
+                }
             }
+            Err(e) => tracing::warn!("[ContactDiscovery] Backfill failed: {}", e),
         }
     });
 

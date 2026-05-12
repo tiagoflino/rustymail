@@ -71,6 +71,7 @@ pub async fn extract_contacts_from_message(
     recipients: &str,
     message_timestamp: i64,
 ) -> Result<(), String> {
+    tracing::debug!("[ContactDiscovery] Extracting from: sender={}, recipients={}", sender, recipients);
     let account_lower = account_email.to_lowercase();
 
     let (sender_name, sender_email) = parse_address(sender);
@@ -266,6 +267,8 @@ pub async fn backfill_discovered_contacts(
     account_id: &str,
     account_email: &str,
 ) -> Result<usize, String> {
+    tracing::info!("[ContactDiscovery] Backfill starting for account {}", account_id);
+
     // Check if already done
     let key = format!("discovery_backfill_{}", account_id);
     let done: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
@@ -288,6 +291,7 @@ pub async fn backfill_discovered_contacts(
             return Ok(0);
         }
         // Flag was set prematurely (0 messages were available) — re-run
+        tracing::info!("[ContactDiscovery] Re-running backfill (premature completion detected)");
     }
 
     // Check if discovery is enabled
@@ -298,6 +302,7 @@ pub async fn backfill_discovered_contacts(
     .await
     .unwrap_or(None);
     if enabled.as_deref() == Some("false") {
+        tracing::info!("[ContactDiscovery] Disabled by settings, skipping");
         return Ok(0);
     }
 
@@ -325,6 +330,10 @@ pub async fn backfill_discovered_contacts(
                 .await
                 .ok();
             processed += 1;
+        }
+
+        if processed % 500 == 0 && processed > 0 {
+            tracing::info!("[ContactDiscovery] Processed {} messages so far...", processed);
         }
 
         offset += batch_size;
