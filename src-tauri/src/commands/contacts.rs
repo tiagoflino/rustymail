@@ -318,6 +318,69 @@ pub(crate) async fn get_contacts_inner(
         }
 
         ids.truncate(limit as usize);
+
+        // On-demand discovery: if no results found, scan message history and extract
+        if ids.is_empty() {
+            let pattern = format!("%{}%", query);
+            let msg_matches: Vec<(String, String, i64)> = sqlx::query_as(
+                "SELECT DISTINCT sender, recipients, internal_date FROM messages WHERE account_id = ? AND (sender LIKE ? OR recipients LIKE ?) ORDER BY internal_date DESC LIMIT 50"
+            )
+            .bind(account_id)
+            .bind(&pattern)
+            .bind(&pattern)
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
+
+            if !msg_matches.is_empty() {
+                let account_email: String = sqlx::query_scalar(
+                    "SELECT email FROM accounts WHERE id = ?"
+                ).bind(account_id).fetch_one(pool).await.unwrap_or_default();
+
+                for (sender, recipients, timestamp) in &msg_matches {
+                    crate::contacts::discovery::extract_contacts_from_message(
+                        pool, account_id, &account_email, sender, recipients, *timestamp
+                    ).await.ok();
+                }
+
+                // Re-query for the newly created contacts
+                let new_email_ids: Vec<(String,)> = sqlx::query_as(
+                    "SELECT DISTINCT ce.contact_id FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id WHERE c.account_id = ? AND ce.email LIKE ? LIMIT ?"
+                )
+                .bind(account_id)
+                .bind(&pattern)
+                .bind(limit)
+                .fetch_all(pool)
+                .await
+                .unwrap_or_default();
+
+                for (id,) in new_email_ids {
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
+
+                // Also check by name
+                let new_name_ids: Vec<(String,)> = sqlx::query_as(
+                    "SELECT id FROM contacts WHERE account_id = ? AND display_name LIKE ? LIMIT ?"
+                )
+                .bind(account_id)
+                .bind(&pattern)
+                .bind(limit)
+                .fetch_all(pool)
+                .await
+                .unwrap_or_default();
+
+                for (id,) in new_name_ids {
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
+
+                ids.truncate(limit as usize);
+            }
+        }
+
         ids
     } else if let Some(gid) = group_id {
         let rows: Vec<(String,)> = sqlx::query_as(

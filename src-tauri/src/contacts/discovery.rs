@@ -267,33 +267,6 @@ pub async fn backfill_discovered_contacts(
     account_id: &str,
     account_email: &str,
 ) -> Result<usize, String> {
-    tracing::info!("[ContactDiscovery] Backfill starting for account {}", account_id);
-
-    // Check if already done
-    let key = format!("discovery_backfill_{}", account_id);
-    let done: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
-        .bind(&key)
-        .fetch_optional(pool)
-        .await
-        .unwrap_or(None);
-
-    if done.as_deref() == Some("true") {
-        // Verify we actually have discovered contacts - if not, the flag was set prematurely
-        let discovered_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM contacts WHERE account_id = ? AND source = 'discovered'",
-        )
-        .bind(account_id)
-        .fetch_one(pool)
-        .await
-        .unwrap_or(0);
-
-        if discovered_count > 0 {
-            return Ok(0);
-        }
-        // Flag was set prematurely (0 messages were available) — re-run
-        tracing::info!("[ContactDiscovery] Re-running backfill (premature completion detected)");
-    }
-
     // Check if discovery is enabled
     let enabled: Option<String> = sqlx::query_scalar(
         "SELECT value FROM settings WHERE key = 'contact_discovery_enabled'",
@@ -302,19 +275,30 @@ pub async fn backfill_discovered_contacts(
     .await
     .unwrap_or(None);
     if enabled.as_deref() == Some("false") {
-        tracing::info!("[ContactDiscovery] Disabled by settings, skipping");
         return Ok(0);
     }
 
+    // Get last processed timestamp (incremental — only process new messages)
+    let key = format!("discovery_last_ts_{}", account_id);
+    let last_ts: i64 = sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
+        .bind(&key)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None)
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
+
     let mut processed = 0usize;
+    let mut max_ts = last_ts;
     let mut offset = 0i64;
     let batch_size = 500i64;
 
     loop {
         let messages: Vec<(String, String, i64)> = sqlx::query_as(
-            "SELECT sender, recipients, internal_date FROM messages WHERE account_id = ? ORDER BY internal_date ASC LIMIT ? OFFSET ?",
+            "SELECT sender, recipients, internal_date FROM messages WHERE account_id = ? AND internal_date > ? ORDER BY internal_date ASC LIMIT ? OFFSET ?",
         )
         .bind(account_id)
+        .bind(last_ts)
         .bind(batch_size)
         .bind(offset)
         .fetch_all(pool)
@@ -329,10 +313,13 @@ pub async fn backfill_discovered_contacts(
             extract_contacts_from_message(pool, account_id, account_email, sender, recipients, *timestamp)
                 .await
                 .ok();
+            if *timestamp > max_ts {
+                max_ts = *timestamp;
+            }
             processed += 1;
         }
 
-        if processed % 500 == 0 && processed > 0 {
+        if processed % 500 == 0 {
             tracing::info!("[ContactDiscovery] Processed {} messages so far...", processed);
         }
 
@@ -340,10 +327,11 @@ pub async fn backfill_discovered_contacts(
         tokio::task::yield_now().await;
     }
 
-    // Only mark complete if we actually had messages to process
-    if processed > 0 {
-        sqlx::query("INSERT OR REPLACE INTO settings (key, value) VALUES (?, 'true')")
+    // Store the high-water mark for next run
+    if max_ts > last_ts {
+        sqlx::query("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
             .bind(&key)
+            .bind(max_ts.to_string())
             .execute(pool)
             .await
             .ok();
