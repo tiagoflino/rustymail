@@ -15,6 +15,7 @@
     iconSnooze,
   } from "$lib/components/icons";
   import SnoozePopover from "./SnoozePopover.svelte";
+  import AISummaryPanel from "./AISummaryPanel.svelte";
   import {
     selectedThreadId,
     currentMessages,
@@ -24,10 +25,12 @@
   } from "$lib/stores/messages";
   import { formatTime, decodeEntities } from "$lib/utils/formatters.js";
 
+  // AI Summary panel state
   let aiSummary = $state<string | null>(null);
   let aiSummaryLoading = $state(false);
   let aiStatusMessage = $state<string | null>(null);
   let aiAvailable = $state(false);
+  let aiPanelOpen = $state(false);
   let smartReplies = $state<string[]>([]);
   let smartRepliesLoading = $state(false);
 
@@ -37,11 +40,8 @@
 
   $effect(() => {
     const msgs = $currentMessages;
-    if (msgs.length > 0) {
-      for (const m of msgs) {
-        console.log(`[MsgDetail] id=${m.id} body_html=${m.body_html?.length ?? 0} body_plain=${m.body_plain?.length ?? 0}`);
-      }
-    }
+    // Debug logging removed for production - was: console.log message body metadata
+    void msgs;
   });
 
   $effect(() => {
@@ -217,6 +217,9 @@
 
   async function handleSummarize() {
     if (!$selectedThreadId || aiSummaryLoading) return;
+    
+    // Open the panel when starting summary generation
+    aiPanelOpen = true;
     aiSummaryLoading = true;
     aiSummary = null;
     aiStatusMessage = "Preparing AI...";
@@ -235,6 +238,14 @@
       aiSummaryLoading = false;
       aiStatusMessage = null;
     }
+  }
+
+  function handleAiPanelClose() {
+    aiPanelOpen = false;
+  }
+
+  function handleAiPanelCopy() {
+    // Copy is handled by AISummaryPanel component directly
   }
 
   async function handleSmartReplies() {
@@ -544,34 +555,6 @@
       <div class="error-state">{$messagesError}</div>
     {:else if $currentMessages.length > 0}
       <div class="message-scroll-area">
-        {#if aiSummaryLoading}
-          <div class="ai-card loading">
-            <div class="ai-card-header">
-              <span class="ai-card-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
-              <span class="ai-card-title">{aiStatusMessage || 'Generating summary...'}</span>
-            </div>
-            <div class="ai-card-skeleton">
-              <div class="skeleton-line w80"></div>
-              <div class="skeleton-line w60"></div>
-              <div class="skeleton-line w70"></div>
-            </div>
-          </div>
-        {/if}
-        {#if aiSummary && !aiSummaryLoading}
-          <div class="ai-card">
-            <div class="ai-card-header">
-              <span class="ai-card-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 014 4c0 1.1-.4 2.1-1 2.8L12 12l-3-3.2A4 4 0 0112 2z"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 18h6"/><path d="M10 22h4"/></svg></span>
-              <span class="ai-card-title">Summary</span>
-              <button class="ai-card-action" onclick={() => { if (aiSummary) { navigator.clipboard.writeText(aiSummary); addToast("Summary copied", "info", 2000); } }} title="Copy">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-              </button>
-              <button class="ai-card-action" onclick={() => { aiSummary = null; }} title="Dismiss">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            </div>
-            <div class="ai-card-body">{@html formatAiSummary(aiSummary)}</div>
-          </div>
-        {/if}
         {#if $currentMessages.length > 2}
           <div class="expand-all-row">
             <button class="expand-all-btn" onclick={expandAll}>
@@ -782,6 +765,18 @@
       <p>Select a conversation to read</p>
       <span class="empty-hint">Press <kbd>/</kbd> to search</span>
     </div>
+  {/if}
+  
+  <!-- AI Summary Panel (fixed overlay, outside scrollable area) -->
+  {#if aiPanelOpen}
+    <AISummaryPanel
+      isOpen={aiPanelOpen}
+      summary={aiSummary}
+      isLoading={aiSummaryLoading}
+      statusMessage={aiStatusMessage}
+      onClose={handleAiPanelClose}
+      onCopy={handleAiPanelCopy}
+    />
   {/if}
 </main>
 
@@ -1341,35 +1336,12 @@
     top: 8px;
     right: 0;
   }
-  .ai-card {
-    border: 1px solid var(--border-color);
-    border-radius: 10px;
-    padding: 14px 16px;
-    margin-bottom: 16px;
-    background: var(--bg-view);
-  }
-  .ai-card.loading {
-    opacity: 0.8;
-  }
-  .ai-card-header {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-bottom: 10px;
-  }
-  .ai-card-icon {
-    display: flex;
-    align-items: center;
-    color: var(--text-secondary);
-    flex-shrink: 0;
-  }
-  .ai-card-title {
-    font-size: var(--font-size-small);
-    font-weight: 600;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
+  /* message-scroll-area needs position relative for panel overlay */
+  .message-scroll-area {
     flex: 1;
+    position: relative;
+    overflow-y: auto;
+    overflow-x: hidden;
   }
   .ai-card-action {
     background: none;
