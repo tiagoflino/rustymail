@@ -44,5 +44,9 @@ AGENT.md
 _agent
 clean_comments.js
 
+# AI development plans
+docs/plans/
+plans/
+
 # Test coverage
 coverage/
