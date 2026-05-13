@@ -213,7 +213,7 @@ describe('sanitizeHtml', () => {
     it('escapes quotes in text', () => {
       const input = 'She said "hello"';
       const result = sanitizeHtml(input);
-      expect(result).toContain('"hello"');
+      expect(result).toContain('&quot;hello&quot;');
     });
   });
 
@@ -258,7 +258,7 @@ describe('sanitizeHtml', () => {
       const input = '<code>console.log("hi")</code>';
       const result = sanitizeHtml(input);
       expect(result).toContain('<code>');
-      expect(result).toContain('console.log("hi")');
+      expect(result).toContain('console.log(&quot;hi&quot;)');
     });
 
     it('allows ul, ol, li tags', () => {
@@ -357,8 +357,7 @@ describe('sanitizeHtml', () => {
       const input = '<p>Text < incomplete tag';
       const result = sanitizeHtml(input);
       expect(result).toContain('Text');
-      // The malformed tag should be escaped as text
-      expect(result).toContain('< incomplete');
+      expect(result).toContain('&lt; incomplete');
     });
 
     it('handles nested dangerous content', () => {
