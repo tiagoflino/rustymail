@@ -309,11 +309,10 @@
     width: 320px;
     min-width: 320px;
     height: calc(100vh - 72px);
-    background: var(--bg-sidebar);
+    background: var(--bg-view);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
-    border-left: 0.5px solid var(--border-color);
-    box-shadow: -2px 0 12px rgba(0, 0, 0, 0.08), 0 1px 4px rgba(0, 0, 0, 0.04);
+    border-left: 1px solid var(--border-color);
     transform: translateX(100%);
     transition: transform 200ms cubic-bezier(0.25, 0.1, 0.25, 1);
     display: flex;
@@ -326,36 +325,23 @@
     transform: translateX(0);
   }
 
-  /* Header - macOS style navigation bar */
+  /* Header */
   .panel-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     padding: 0 12px;
-    height: var(--toolbar-height);
-    border-bottom: 0.5px solid var(--border-color);
+    height: 36px;
     flex-shrink: 0;
+    border-bottom: 0.5px solid var(--border-color);
     background: var(--bg-sidebar);
-    position: relative;
-  }
-
-  /* Subtle top accent bar for AI branding */
-  .panel-header::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 2px;
-    background: linear-gradient(90deg, var(--accent-blue), #64d2ff, var(--accent-blue));
-    opacity: 0.7;
   }
 
   .panel-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-primary);
-    letter-spacing: -0.08px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    letter-spacing: normal;
   }
 
   .panel-actions {
@@ -364,17 +350,17 @@
   }
 
   .action-btn {
-    width: 28px;
-    height: 28px;
-    border: none;
-    background: transparent;
-    border-radius: var(--radius-standard);
-    color: var(--text-secondary);
-    cursor: pointer;
+    width: 24px;
+    height: 24px;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background 0.1s, color 0.1s;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.1s;
   }
 
   .action-btn:hover {
@@ -400,17 +386,17 @@
   }
 
   .summary-section h3 {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
+    color: var(--text-primary);
+    text-transform: none;
+    letter-spacing: normal;
     margin-bottom: 8px;
   }
 
   .summary-section p {
-    font-size: 13px;
-    line-height: 1.6;
+    font-size: var(--font-size-base);
+    line-height: 1.5;
     color: var(--text-primary);
     margin: 0;
   }
@@ -422,10 +408,11 @@
   }
 
   .summary-section li {
-    font-size: 13px;
+    font-size: var(--font-size-base);
     line-height: 1.5;
     color: var(--text-primary);
     padding: 4px 0 4px 20px;
+    margin-bottom: 6px;
     position: relative;
   }
 
@@ -453,6 +440,7 @@
     align-items: flex-start;
     gap: 8px;
     padding-left: 0;
+    color: var(--text-primary);
   }
 
   .action-items li .checkbox {
