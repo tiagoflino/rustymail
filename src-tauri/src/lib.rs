@@ -1,6 +1,7 @@
 mod commands;
 pub mod caldav_api;
 pub mod calendar_api;
+pub mod contacts;
 mod credentials;
 mod db;
 pub mod email_utils;
@@ -101,6 +102,7 @@ pub fn run() {
             commands::accounts::authenticate_gmail,
             commands::accounts::authenticate_microsoft,
             commands::accounts::check_auth_status,
+            commands::accounts::check_scopes_outdated,
             commands::accounts::get_accounts,
             commands::accounts::switch_account,
             commands::accounts::remove_account,
@@ -183,6 +185,23 @@ pub fn run() {
             commands::subscriptions::unsubscribe,
             commands::subscriptions::scan_subscriptions,
             commands::subscriptions::mark_unsubscribed,
+            commands::contacts::create_contact,
+            commands::contacts::get_contact,
+            commands::contacts::get_contacts,
+            commands::contacts::update_contact,
+            commands::contacts::delete_contact,
+            commands::contacts::search_contacts_v2,
+            commands::contacts::merge_contacts,
+            commands::contacts::get_contact_groups,
+            commands::contacts::create_contact_group,
+            commands::contacts::update_contact_group,
+            commands::contacts::delete_contact_group,
+            commands::contacts::set_contact_groups,
+            commands::contacts::import_contacts,
+            commands::contacts::export_contacts,
+            commands::contacts::sync_contacts,
+            commands::contacts::backfill_contacts,
+            commands::contacts::blocklist_discovered_email,
             tray::update_tray_unread,
             #[cfg(feature = "premium")]
             rustymail_premium::commands::llm::get_ai_status,
@@ -194,6 +213,14 @@ pub fn run() {
             rustymail_premium::commands::llm::summarize_thread,
             #[cfg(feature = "premium")]
             rustymail_premium::commands::llm::clear_ai_cache,
+            #[cfg(feature = "premium")]
+            rustymail_premium::commands::llm::ai_compose,
+            #[cfg(feature = "premium")]
+            rustymail_premium::commands::llm::ai_smart_replies,
+            #[cfg(feature = "premium")]
+            rustymail_premium::commands::llm::ai_extract_actions,
+            #[cfg(feature = "premium")]
+            rustymail_premium::commands::llm::ai_analyze_sentiment,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

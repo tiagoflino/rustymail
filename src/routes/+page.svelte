@@ -35,6 +35,7 @@
   import Compose from "$lib/components/Compose.svelte";
   import FullCalendar from "$lib/components/FullCalendar.svelte";
   import Subscriptions from "$lib/components/Subscriptions.svelte";
+  import Contacts from "$lib/components/Contacts.svelte";
   import Toasts from "$lib/components/Toasts.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import ThreadList from "$lib/components/ThreadList.svelte";
@@ -104,7 +105,7 @@
   let isLoadingThreads = $state(false);
   let showCompose = $state(false);
   let showCommandPalette = $state(false);
-  let viewMode = $state<"mail" | "calendar" | "subscriptions">("mail");
+  let viewMode = $state<"mail" | "calendar" | "subscriptions" | "contacts">("mail");
   let imapConnectionStates = $state<Record<string, string>>({});
   let snoozePopoverOpen = $state(false);
   let batchSnoozeOpen = $state(false);
@@ -1541,6 +1542,24 @@
     return match ? match[1] : str;
   }
 
+  function handleSmartReply(text: string, msg: LocalMessage) {
+    const thread = $threads.find((t) => t.id === msg.thread_id);
+    let subject = msg.subject || thread?.subject || "";
+    if (!subject.toLowerCase().startsWith("re:")) subject = `Re: ${subject}`;
+    const to = msg.sender || "";
+    const body = `<p>${text.replace(/\n/g, "<br>")}</p>`;
+
+    openCompose({
+      initialTo: to,
+      initialSubject: subject,
+      initialBodyHTML: body,
+      threadId: msg.thread_id,
+      inReplyTo: msg.id,
+      references: msg.id,
+      accountId: thread?.account_id ?? null,
+    });
+  }
+
   function handleReply(msg: LocalMessage) {
     const thread = $threads.find((t) => t.id === msg.thread_id);
     let subject = msg.subject || thread?.subject || "";
@@ -1712,6 +1731,26 @@
       invoke<string[]>("get_available_superstars", { accountId: null })
         .then((stars) => availableSuperstars.set(stars))
         .catch(() => availableSuperstars.set(["YELLOW_STAR"]));
+
+      // Check for outdated OAuth scopes
+      const scopeToastShown = sessionStorage.getItem('scope_toast_shown');
+      if (!scopeToastShown) {
+        try {
+          const outdated = await invoke<Array<{id: string, email: string, provider_type: string}>>('check_scopes_outdated');
+          if (outdated.length > 0) {
+            sessionStorage.setItem('scope_toast_shown', 'true');
+            for (const account of outdated) {
+              addToast(
+                `${account.email} needs updated permissions for contact sync`,
+                'info',
+                0,
+                { label: 'Re-authenticate', onClick: () => { invoke('authenticate_gmail'); } }
+              );
+            }
+          }
+        } catch {}
+      }
+
     }
 
     setTimeout(() => checkForUpdates(true), 5000);
@@ -1966,6 +2005,7 @@
       connectionState={activeAccount?.provider_type === 'imap' ? (imapConnectionStates[activeAccount.id] || '') : ''}
       ontogglecalendar={() => viewMode = viewMode === "calendar" ? "mail" : "calendar"}
       ontogglesubscriptions={() => viewMode = viewMode === "subscriptions" ? "mail" : "subscriptions"}
+      ontogglecontacts={() => { viewMode = viewMode === "contacts" ? "mail" : "contacts"; }}
       onsettings={() => (showSettings = true)}
       ontogglecollapse={toggleSidebar}
       onselectlabel={selectLabel}
@@ -2028,6 +2068,7 @@
         onforward={handleForward}
         oneditdraft={handleEditDraft}
         oniframeload={handleIframeLoad}
+        onsmartreply={handleSmartReply}
       />
 
       {#if batchSnoozeOpen}
@@ -2052,6 +2093,8 @@
       <FullCalendar {isMacOS} />
     {:else if viewMode === "subscriptions"}
       <Subscriptions accountId={activeAccount?.id ?? ""} {isMacOS} onselectsubscription={handleSelectSubscription} />
+    {:else if viewMode === "contacts"}
+      <Contacts />
     {/if}
   </div>
 
