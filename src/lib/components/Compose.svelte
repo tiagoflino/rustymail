@@ -71,6 +71,10 @@
   let templates = $state<Array<{id: string, name: string, subject: string, body_html: string}>>([]);
   let showSaveTemplateInput = $state(false);
   let newTemplateName = $state('');
+  let showAiCompose = $state(false);
+  let aiComposePrompt = $state('');
+  let aiComposeLoading = $state(false);
+  let aiAvailable = $state(false);
   const MAX_ATTACHMENT_SIZE = 25 * 1024 * 1024;
 
   function formatSize(bytes: number): string {
@@ -315,7 +319,53 @@
     }
   }
 
+  async function handleAiCompose() {
+    const prompt = aiComposePrompt.trim();
+    if (!prompt || aiComposeLoading) return;
+    aiComposeLoading = true;
+    try {
+      let senderName: string | null = null;
+      try {
+        senderName = (await invoke("get_setting", { key: "sender_name" })) as string;
+      } catch {}
+      const result: string = await invoke("ai_compose", {
+        prompt,
+        threadId: threadId || null,
+        senderName,
+      });
+      if (editorEl) {
+        const sigEl = editorEl.querySelector('.rustymail-signature');
+        if (sigEl) {
+          const sigHtml = sigEl.outerHTML;
+          let afterSig = '';
+          let sibling = sigEl.nextSibling;
+          while (sibling) {
+            afterSig += sibling instanceof Element ? sibling.outerHTML : sibling.textContent || '';
+            sibling = sibling.nextSibling;
+          }
+          editorEl.innerHTML = result + sigHtml + afterSig;
+        } else {
+          editorEl.innerHTML = result;
+        }
+        bodyHTML = editorEl.innerHTML;
+      }
+      showAiCompose = false;
+      aiComposePrompt = '';
+    } catch (e: any) {
+      addToast(`AI compose failed: ${e}`, "error", 5000);
+    } finally {
+      aiComposeLoading = false;
+    }
+  }
+
   onMount(async () => {
+    try {
+      await invoke("get_ai_status");
+      aiAvailable = true;
+    } catch {
+      aiAvailable = false;
+    }
+
     try {
       const sig = (await invoke("get_setting", { key: "signature" })) as string;
       let newHtml = initialBodyHTML;
@@ -935,6 +985,33 @@
             </div>
           {/if}
         </div>
+        {#if aiAvailable}
+          <div class="divider"></div>
+          <div class="ai-compose-wrap">
+            <button class="toolbar-btn ai-compose-btn" onclick={() => { showAiCompose = !showAiCompose; }} title="AI Compose">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 014 4c0 1.1-.4 2.1-1 2.8L12 12l-3-3.2A4 4 0 0112 2z"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 18h6"/><path d="M10 22h4"/></svg>
+            </button>
+            {#if showAiCompose}
+              <div class="ai-compose-backdrop" onclick={() => { showAiCompose = false; }} role="presentation"></div>
+              <div class="ai-compose-dropdown">
+                <div class="ai-compose-header">AI Compose</div>
+                <div class="ai-compose-form">
+                  <input
+                    type="text"
+                    class="ai-compose-input"
+                    placeholder="Describe the email you want to write..."
+                    bind:value={aiComposePrompt}
+                    onkeydown={(e) => { if (e.key === 'Enter') handleAiCompose(); if (e.key === 'Escape') { showAiCompose = false; } }}
+                    disabled={aiComposeLoading}
+                  />
+                  <button class="ai-compose-submit" disabled={!aiComposePrompt.trim() || aiComposeLoading} onclick={handleAiCompose}>
+                    {aiComposeLoading ? '...' : 'Generate'}
+                  </button>
+                </div>
+              </div>
+            {/if}
+          </div>
+        {/if}
         <div class="divider"></div>
         <button class="format-btn" title="Bold" onclick={() => format("bold")}
           >{@html iconBold}</button
@@ -1629,4 +1706,83 @@
     white-space: nowrap;
   }
   .template-save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .ai-compose-wrap {
+    position: relative;
+    display: flex;
+  }
+  .ai-compose-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    width: 32px;
+    height: 32px;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-standard);
+    color: var(--text-secondary);
+    cursor: pointer;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
+  }
+  .ai-compose-btn:hover {
+    background: var(--sidebar-hover);
+    color: var(--text-primary);
+  }
+  .ai-compose-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 99;
+  }
+  .ai-compose-dropdown {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    margin-bottom: 6px;
+    background: var(--bg-view);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-standard);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    z-index: 100;
+    min-width: 320px;
+    overflow: hidden;
+  }
+  .ai-compose-header {
+    padding: 8px 12px;
+    font-size: var(--font-size-small);
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .ai-compose-form {
+    display: flex;
+    gap: 6px;
+    padding: 8px 12px;
+  }
+  .ai-compose-input {
+    flex: 1;
+    padding: 6px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-standard);
+    background: var(--bg-view);
+    color: var(--text-primary);
+    font-size: var(--font-size-small);
+    font-family: inherit;
+  }
+  .ai-compose-input:focus { outline: none; border-color: var(--accent-blue); }
+  .ai-compose-input:disabled { opacity: 0.6; }
+  .ai-compose-submit {
+    padding: 6px 12px;
+    border: none;
+    background: var(--accent-blue);
+    color: white;
+    border-radius: var(--radius-standard);
+    font-size: var(--font-size-small);
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .ai-compose-submit:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

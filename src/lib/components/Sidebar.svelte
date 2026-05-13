@@ -52,6 +52,7 @@
     onthemecycle: () => void;
     ontogglecalendar: () => void;
     ontogglesubscriptions: () => void;
+    ontogglecontacts?: () => void;
     onsettings: () => void;
     ontogglecollapse: () => void;
     onselectlabel: (labelId: string) => void;
@@ -80,6 +81,7 @@
     onthemecycle,
     ontogglecalendar,
     ontogglesubscriptions,
+    ontogglecontacts,
     onsettings,
     ontogglecollapse,
     onselectlabel,
@@ -195,6 +197,16 @@
       title="Toggle Subscriptions"
     >
       {@html iconSubscriptions}
+    </button>
+    <button
+      class="btn-sidebar sidebar-contacts-btn"
+      onclick={() => ontogglecontacts?.()}
+      title="Contacts"
+    >
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.2">
+        <circle cx="8" cy="5" r="2.5"/>
+        <path d="M3 14c0-2.8 2.2-5 5-5s5 2.2 5 5"/>
+      </svg>
     </button>
   </div>
 
@@ -743,33 +755,28 @@
   .sidebar-compose {
     padding: 12px 12px 4px 12px;
     display: flex;
-    gap: 8px;
+    gap: 6px;
   }
   .sidebar-compose-btn {
     font-size: var(--font-size-base);
     font-weight: 500;
-    padding: 7px 14px;
+    padding: 7px 12px;
     background: var(--accent-blue);
     color: white;
     border: none;
     border-radius: var(--radius-standard);
     box-shadow: none;
+    white-space: nowrap;
   }
   .sidebar-compose-btn:hover {
     background: var(--accent-blue);
     opacity: 0.9;
   }
-  .sidebar-calendar-btn {
-    width: 36px;
-    padding: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--bg-view);
-    border: 1px solid var(--border-color);
-  }
-  .sidebar-subscriptions-btn {
-    width: 36px;
+  .sidebar-calendar-btn,
+  .sidebar-subscriptions-btn,
+  .sidebar-contacts-btn {
+    width: 30px;
+    flex-shrink: 0;
     padding: 0;
     display: flex;
     align-items: center;

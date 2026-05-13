@@ -155,7 +155,7 @@ pub async fn search_contacts(
 ) -> Result<Vec<ContactSuggestion>, String> {
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let account = get_active_account(pool.inner()).await?;
-    search_contacts_inner(pool.inner(), &account.id, &query).await
+    super::contacts::search_contacts_autocomplete(pool.inner(), &account.id, &query).await
 }
 
 #[allow(clippy::too_many_arguments)]
