@@ -546,6 +546,47 @@
                 </div>
               </div>
             </div>
+
+            <div class="section">
+              <div class="section-title">Contact Discovery</div>
+              <p class="section-desc">Automatically discover contacts from your email history based on interaction frequency.</p>
+              <div class="setting-card">
+                <div class="card-row">
+                  <label class="toggle-row">
+                    <div class="toggle-label">
+                      <span class="setting-name">Enable Contact Discovery</span>
+                      <span class="setting-hint">Automatically extract contacts from sent and received emails</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      class="toggle"
+                      checked={settings.contact_discovery_enabled === "true"}
+                      onchange={(e) => saveSetting("contact_discovery_enabled", e.currentTarget.checked ? "true" : "false")}
+                    />
+                  </label>
+                </div>
+                <div class="card-row last">
+                  <label class="toggle-row">
+                    <div class="toggle-label">
+                      <span class="setting-name">Promotion Threshold</span>
+                      <span class="setting-hint">Number of interactions before a discovered contact appears in your contact list (instant promotion on reciprocal exchange)</span>
+                    </div>
+                    <div class="slider-row">
+                      <input
+                        type="range"
+                        class="range-slider"
+                        min="2"
+                        max="10"
+                        step="1"
+                        value={parseInt(settings.contact_discovery_threshold || "3")}
+                        oninput={(e) => saveSetting("contact_discovery_threshold", e.currentTarget.value)}
+                      />
+                      <span class="slider-value">{settings.contact_discovery_threshold || "3"}</span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            </div>
           {:else if activeTab === "reading"}
             <div class="section">
               <div class="section-title">Reading Preferences</div>
@@ -1063,6 +1104,40 @@
                         <button
                           class="option-btn {(settings.ai_auto_unload || '5') === val ? 'selected' : ''}"
                           onclick={() => saveSetting("ai_auto_unload", val)}
+                        >{label}</button>
+                      {/each}
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card-row">
+                  <div class="setting-row-inline">
+                    <div class="setting-label">
+                      <span class="setting-name">Smart Reply Count</span>
+                      <span class="setting-hint">Number of reply suggestions to generate</span>
+                    </div>
+                    <div class="option-group">
+                      {#each [["2", "2"], ["4", "4"]] as [val, label]}
+                        <button
+                          class="option-btn {(settings.smart_reply_count || '4') === val ? 'selected' : ''}"
+                          onclick={() => saveSetting("smart_reply_count", val)}
+                        >{label}</button>
+                      {/each}
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card-row">
+                  <div class="setting-row-inline">
+                    <div class="setting-label">
+                      <span class="setting-name">Smart Reply Style</span>
+                      <span class="setting-hint">Controls the length and tone of generated replies</span>
+                    </div>
+                    <div class="option-group">
+                      {#each [["concise", "Concise"], ["mixed", "Mixed"], ["detailed", "Detailed"]] as [val, label]}
+                        <button
+                          class="option-btn {(settings.smart_reply_style || 'mixed') === val ? 'selected' : ''}"
+                          onclick={() => saveSetting("smart_reply_style", val)}
                         >{label}</button>
                       {/each}
                     </div>
