@@ -222,10 +222,6 @@ pub fn run() {
             rustymail_premium::commands::llm::ai_smart_replies,
             #[cfg(feature = "premium")]
             rustymail_premium::commands::llm::ai_extract_actions,
-            #[cfg(feature = "premium")]
-            rustymail_premium::commands::llm::extract_action_items,
-            #[cfg(feature = "premium")]
-            rustymail_premium::commands::llm::ai_analyze_sentiment,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
