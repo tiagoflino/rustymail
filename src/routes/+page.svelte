@@ -35,6 +35,7 @@
   import Compose from "$lib/components/Compose.svelte";
   import FullCalendar from "$lib/components/FullCalendar.svelte";
   import Subscriptions from "$lib/components/Subscriptions.svelte";
+  import FeedView from "$lib/components/FeedView.svelte";
   import Contacts from "$lib/components/Contacts.svelte";
   import Toasts from "$lib/components/Toasts.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
@@ -112,6 +113,7 @@
   let labelPickerOpen = $state(false);
   let snoozedCount = $state(0);
   let scheduledCount = $state(0);
+  let hasSubscriptions = $state(false);
 
   let isMacOS = $state(false);
   let sidebarCollapsed = $state(false);
@@ -376,6 +378,7 @@
       await checkSnoozedThreads();
       await checkScheduledSends();
       await refreshScheduledCount();
+      await loadSubscriptionCount();
 
       // Snoozed/Scheduled are virtual labels — skip Gmail sync, just reload local data
       if (isSnoozedView) {
@@ -972,6 +975,9 @@
       threads.set([]);
     }
 
+    // FEED is a virtual label — FeedView handles its own data loading
+    if (labelId === "FEED") return;
+
     await loadThreads(true);
 
     // SNOOZED and SCHEDULED are virtual labels — no Gmail sync needed
@@ -1339,6 +1345,15 @@
     try {
       scheduledCount = await invoke("get_scheduled_count") as number;
     } catch {}
+  }
+
+  async function loadSubscriptionCount() {
+    try {
+      const subs = await invoke<Array<{ id: number; sender_email: string }>>("get_subscriptions", { accountId: null as string | null, status: "active" });
+      hasSubscriptions = subs.length > 0;
+    } catch {
+      hasSubscriptions = false;
+    }
   }
 
   function handleSnoozeFromPalette(id: string) {
@@ -1726,6 +1741,7 @@
       await checkAndSetupSync();
       await checkScheduledSends();
       await refreshScheduledCount();
+      await loadSubscriptionCount();
 
       // Load available superstars
       invoke<string[]>("get_available_superstars", { accountId: null })
@@ -2006,6 +2022,8 @@
       ontogglecalendar={() => viewMode = viewMode === "calendar" ? "mail" : "calendar"}
       ontogglesubscriptions={() => viewMode = viewMode === "subscriptions" ? "mail" : "subscriptions"}
       ontogglecontacts={() => { viewMode = viewMode === "contacts" ? "mail" : "contacts"; }}
+      onfeed={() => selectLabel('FEED')}
+      {hasSubscriptions}
       onsettings={() => (showSettings = true)}
       ontogglecollapse={toggleSidebar}
       onselectlabel={selectLabel}
@@ -2014,6 +2032,9 @@
     />
 
     {#if viewMode === "mail"}
+      {#if $selectedLabelId === 'FEED'}
+        <FeedView {isMacOS} onselectthread={selectThread} />
+      {:else}
       <ThreadList
         bind:this={threadListRef}
         {isLoadingThreads}
@@ -2056,6 +2077,7 @@
         hasImportant={capabilities.has_important}
         accountProviderTypes={accountProviderMap}
       />
+      {/if}
 
       <MessageDetail
         {isMacOS}

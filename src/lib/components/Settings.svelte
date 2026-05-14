@@ -500,6 +500,32 @@
                 </div>
 
                 <div class="card-row">
+                  <div class="setting-label">
+                    <span class="setting-name">Subscription Scan Depth</span>
+                    <span class="setting-hint"
+                      >Messages to scan for subscriptions from the server</span
+                    >
+                  </div>
+                  <div class="slider-row">
+                    <input
+                      type="range"
+                      class="range-slider"
+                      min="0"
+                      max="4"
+                      step="1"
+                      value={(() => { const v = parseInt(settings.subscription_scan_depth) || 1000; if (v <= 100) return 0; if (v <= 500) return 1; if (v <= 1000) return 2; if (v <= 2000) return 3; return 4; })()}
+                      oninput={(e) => {
+                        const vals = [100, 500, 1000, 2000, 5000];
+                        saveSetting("subscription_scan_depth", String(vals[parseInt(e.currentTarget.value)]));
+                      }}
+                    />
+                    <span class="slider-value"
+                      >{settings.subscription_scan_depth || "1000"}</span
+                    >
+                  </div>
+                </div>
+
+                <div class="card-row">
                   <label class="toggle-row" style="border-bottom: none; padding: 0;">
                     <div class="toggle-label">
                       <span class="setting-name">Pre-fetch Message Bodies</span>
