@@ -783,7 +783,7 @@
     gap: 6px;
   }
   .sidebar-compose-btn {
-    font-size: var(--font-size-base);
+    font-size: 13px;
     font-weight: 500;
     padding: 7px 12px;
     background: var(--accent-blue);
