@@ -185,6 +185,7 @@ pub fn run() {
             commands::subscriptions::unsubscribe,
             commands::subscriptions::scan_subscriptions,
             commands::subscriptions::mark_unsubscribed,
+            commands::feed::get_feed_threads,
             commands::contacts::create_contact,
             commands::contacts::get_contact,
             commands::contacts::get_contacts,

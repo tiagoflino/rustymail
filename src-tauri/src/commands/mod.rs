@@ -11,6 +11,7 @@ pub mod snooze;
 pub mod sync;
 pub mod threads;
 pub mod subscriptions;
+pub mod feed;
 pub mod schedule;
 pub mod templates;
 
