@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"npm run check 2>&1\",\"timeout\":60000,\"description\":\"Verify all errors resolved\"}",
-  "error": "Exit code 1\n\n> tauri-app@0.7.1 check\n> svelte-kit sync && svelte-check --tsconfig ./jsconfig.json\n\n1775995208820 START \"/Users/tiagoflino/repositories/rustymail\"\n1775995208821 ERROR \"src/lib/components/SnoozePopover.test.js\" 32:38 \"Type 'Mock<Procedure | Constructable>' is not assignable to type '(until: number) => void'.\\n  Type 'MockInstance<Procedure | Constructable> & (new (...args: any[]) => any) & {}' is not assignable to type '(until: number) => void'.\\n    Type 'MockInstance<Procedure | ...",
-  "timestamp": "2026-04-12T12:00:08.926Z",
-  "retry_count": 2
-}
