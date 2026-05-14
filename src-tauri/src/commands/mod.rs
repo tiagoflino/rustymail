@@ -13,6 +13,7 @@ pub mod threads;
 pub mod subscriptions;
 pub mod schedule;
 pub mod templates;
+pub mod action_items;
 
 #[cfg(test)]
 pub(crate) mod test_helpers;

@@ -185,6 +185,9 @@ pub fn run() {
             commands::subscriptions::unsubscribe,
             commands::subscriptions::scan_subscriptions,
             commands::subscriptions::mark_unsubscribed,
+            commands::action_items::get_action_items,
+            commands::action_items::mark_action_complete,
+            commands::action_items::dismiss_action_item,
             commands::contacts::create_contact,
             commands::contacts::get_contact,
             commands::contacts::get_contacts,
@@ -219,6 +222,8 @@ pub fn run() {
             rustymail_premium::commands::llm::ai_smart_replies,
             #[cfg(feature = "premium")]
             rustymail_premium::commands::llm::ai_extract_actions,
+            #[cfg(feature = "premium")]
+            rustymail_premium::commands::llm::extract_action_items,
             #[cfg(feature = "premium")]
             rustymail_premium::commands::llm::ai_analyze_sentiment,
         ])
