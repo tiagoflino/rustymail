@@ -19,9 +19,15 @@ build:
 dev:
 	npm run tauri dev
 
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+	PREMIUM_FEATURES := premium,rustymail-premium/metal
+else
+	PREMIUM_FEATURES := premium,rustymail-premium/vulkan
+endif
+
 dev-premium:
-	
-	npm run tauri dev -- --features premium
+	npm run tauri dev -- --features $(PREMIUM_FEATURES)
 
 release:
 ifndef VERSION
