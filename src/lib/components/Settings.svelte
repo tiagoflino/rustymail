@@ -1250,7 +1250,12 @@
                 A light and fast cross-platform email client.
               </p>
               <div class="about-links">
-                <span class="about-link">Made with care by Tiago Fortunato</span>
+                <a class="about-link" href="https://github.com/tiagoflino/rustymail/blob/main/docs/PRIVACY.md" target="_blank" rel="noopener">Privacy Policy</a>
+                <span class="about-link-sep">|</span>
+                <a class="about-link" href="https://github.com/tiagoflino/rustymail/blob/main/docs/TERMS.md" target="_blank" rel="noopener">Terms of Service</a>
+              </div>
+              <div class="about-links" style="margin-top: 8px;">
+                <span class="about-link about-link-dim">Made with care by Tiago Fortunato</span>
               </div>
             </div>
           {/if}
@@ -1773,8 +1778,21 @@
   }
   .about-link {
     font-size: var(--font-size-toolbar);
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .about-link:hover {
+    text-decoration: underline;
+  }
+  .about-link-sep {
+    color: var(--text-secondary);
+    opacity: 0.3;
+    margin: 0 4px;
+  }
+  .about-link-dim {
     color: var(--text-secondary);
     opacity: 0.6;
+    font-size: var(--font-size-toolbar);
   }
 
   .btn-check-update {
