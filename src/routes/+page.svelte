@@ -36,6 +36,7 @@
   import FullCalendar from "$lib/components/FullCalendar.svelte";
   import Subscriptions from "$lib/components/Subscriptions.svelte";
   import Contacts from "$lib/components/Contacts.svelte";
+  import ActionsView from "$lib/components/ActionsView.svelte";
   import Toasts from "$lib/components/Toasts.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import ThreadList from "$lib/components/ThreadList.svelte";
@@ -105,7 +106,7 @@
   let isLoadingThreads = $state(false);
   let showCompose = $state(false);
   let showCommandPalette = $state(false);
-  let viewMode = $state<"mail" | "calendar" | "subscriptions" | "contacts">("mail");
+  let viewMode = $state<"mail" | "calendar" | "subscriptions" | "contacts" | "actions">("mail");
   let imapConnectionStates = $state<Record<string, string>>({});
   let snoozePopoverOpen = $state(false);
   let batchSnoozeOpen = $state(false);
@@ -2006,6 +2007,7 @@
       ontogglecalendar={() => viewMode = viewMode === "calendar" ? "mail" : "calendar"}
       ontogglesubscriptions={() => viewMode = viewMode === "subscriptions" ? "mail" : "subscriptions"}
       ontogglecontacts={() => { viewMode = viewMode === "contacts" ? "mail" : "contacts"; }}
+      ontoggleactions={() => { viewMode = viewMode === "actions" ? "mail" : "actions"; }}
       onsettings={() => (showSettings = true)}
       ontogglecollapse={toggleSidebar}
       onselectlabel={selectLabel}
@@ -2095,6 +2097,8 @@
       <Subscriptions accountId={activeAccount?.id ?? ""} {isMacOS} onselectsubscription={handleSelectSubscription} />
     {:else if viewMode === "contacts"}
       <Contacts />
+    {:else if viewMode === "actions"}
+      <ActionsView accountId={activeAccount?.id ?? undefined} {isMacOS} />
     {/if}
   </div>
 

@@ -701,6 +701,35 @@ async fn m021_add_smart_reply_settings(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+pub(crate) async fn m022_create_action_items(pool: &SqlitePool) -> Result<()> {
+    if !has_table(pool, "action_items").await {
+        sqlx::query(
+            "CREATE TABLE action_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id TEXT NOT NULL,
+                thread_id TEXT NOT NULL,
+                message_id TEXT,
+                description TEXT NOT NULL,
+                assignee TEXT,
+                deadline TEXT,
+                confidence REAL DEFAULT 0.0,
+                status TEXT DEFAULT 'pending',
+                created_at INTEGER NOT NULL,
+                completed_at INTEGER
+            )"
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query("CREATE INDEX idx_action_items_account ON action_items(account_id)")
+            .execute(pool).await?;
+        sqlx::query("CREATE INDEX idx_action_items_status ON action_items(account_id, status)")
+            .execute(pool).await?;
+        sqlx::query("CREATE INDEX idx_action_items_thread ON action_items(thread_id)")
+            .execute(pool).await?;
+    }
+    Ok(())
+}
+
 async fn m018_create_contacts(pool: &SqlitePool) -> Result<()> {
     if !has_table(pool, "contacts").await {
         sqlx::query(
@@ -904,7 +933,7 @@ pub(crate) async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 }
 
 async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()> {
-    for version in 1..=21i64 {
+    for version in 1..=22i64 {
         if !applied.contains(&version) {
             println!("[Migration] Running v{}...", version);
             match version {
@@ -929,6 +958,7 @@ async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()
                 19 => m019_add_scopes_version(pool).await?,
                 20 => m020_add_discovery_columns(pool).await?,
                 21 => m021_add_smart_reply_settings(pool).await?,
+                22 => m022_create_action_items(pool).await?,
                 _ => {}
             }
             sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
@@ -1123,7 +1153,7 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
             .fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 21);
+        assert_eq!(count, 22);
     }
 
     #[tokio::test]

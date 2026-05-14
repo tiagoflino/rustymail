@@ -53,6 +53,7 @@
     ontogglecalendar: () => void;
     ontogglesubscriptions: () => void;
     ontogglecontacts?: () => void;
+    ontoggleactions?: () => void;
     onsettings: () => void;
     ontogglecollapse: () => void;
     onselectlabel: (labelId: string) => void;
@@ -82,6 +83,7 @@
     ontogglecalendar,
     ontogglesubscriptions,
     ontogglecontacts,
+    ontoggleactions,
     onsettings,
     ontogglecollapse,
     onselectlabel,
@@ -208,6 +210,16 @@
         <path d="M3 14c0-2.8 2.2-5 5-5s5 2.2 5 5"/>
       </svg>
     </button>
+    <button
+      class="btn-sidebar sidebar-actions-btn"
+      onclick={() => ontoggleactions?.()}
+      title="Action Items"
+    >
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.2">
+        <polyline points="4 8 7 11 12 5"/>
+        <circle cx="8" cy="8" r="6.5"/>
+      </svg>
+    </button>
   </div>
 
   <div class="sidebar-content">
@@ -289,6 +301,19 @@
           <span class="icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span>
           <span class="label-text">Scheduled</span>
           {#if scheduledCount > 0}<span class="badge">{scheduledCount}</span>{/if}
+        </div>
+      </li>
+      <li>
+        <div
+          class="sidebar-item"
+          role="button" tabindex="0"
+          onclick={() => ontoggleactions?.()}
+          onkeydown={(e) => {
+            if (e.key === "Enter" || e.key === " ") ontoggleactions?.();
+          }}
+        >
+          <span class="icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></span>
+          <span class="label-text">Actions</span>
         </div>
       </li>
     </ul>
@@ -774,7 +799,8 @@
   }
   .sidebar-calendar-btn,
   .sidebar-subscriptions-btn,
-  .sidebar-contacts-btn {
+  .sidebar-contacts-btn,
+  .sidebar-actions-btn {
     width: 30px;
     flex-shrink: 0;
     padding: 0;
