@@ -1363,13 +1363,30 @@
     executeAction("snooze:" + snoozeOptions[index].compute());
   }
 
+  const STAR_CLICK_DELAY = 500;
+  let lastStarClick = $state<Record<string, number>>({});
+
   async function cycleStar(threadId: string, currentStarType: string | null) {
     const available = get(availableSuperstars);
-    const nextStar = getNextStar(currentStarType, available);
+    if (!available.length) return;
+
+    const now = Date.now();
+    const lastClick = lastStarClick[threadId] ?? 0;
+    lastStarClick[threadId] = now;
+    const isQuickClick = now - lastClick < STAR_CLICK_DELAY && lastClick > 0;
+
+    let nextStar: string | null;
+    if (!currentStarType) {
+      nextStar = available[0];
+    } else if (isQuickClick) {
+      nextStar = getNextStar(currentStarType, available);
+    } else {
+      nextStar = null;
+    }
+
     const newStarred = nextStar !== null;
     const currentList = get(threads);
 
-    // Optimistic update
     threads.update((list) =>
       list.map((t) => (t.id === threadId ? { ...t, starred: newStarred, star_type: nextStar } : t)),
     );

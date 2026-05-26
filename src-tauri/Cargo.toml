@@ -34,7 +34,7 @@ base64 = { version = "0.13", features = ["alloc"] }
 dirs = "6"
 dotenvy = "0.15"
 futures = "0.3"
-lettre = { version = "0.11.19", features = ["tokio1-native-tls"] }
+lettre = { version = "0.11.22", features = ["tokio1-native-tls"] }
 async-imap = { version = "0.10", default-features = false, features = ["runtime-tokio"] }
 async-native-tls = "0.5"
 tokio-native-tls = "0.3"
