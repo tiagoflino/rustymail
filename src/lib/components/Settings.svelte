@@ -1024,7 +1024,7 @@
                       {:else if aiStatus?.Ready != null}
                         Model loaded ({aiStatus.Ready.model_size_mb} MB, {aiStatus.Ready.n_layers} layers) — {aiStatus.Ready.gpu_offload ? 'GPU accelerated' : 'CPU only'}
                       {:else if aiStatus === "NotSetUp"}
-                        Model not downloaded — will download on first use (~1.5 GB)
+                        Model not downloaded — will download on first use (~1.4 GB)
                       {:else if aiStatus?.Downloading != null}
                         Downloading... {Math.round(aiStatus.Downloading.progress_pct)}%
                       {:else if aiStatus === "Loading"}
@@ -1142,6 +1142,21 @@
                       {/each}
                     </div>
                   </div>
+                </div>
+
+                <div class="card-row">
+                  <label class="toggle-row">
+                    <div class="toggle-label">
+                      <span class="setting-name">Auto-Extract Actions</span>
+                      <span class="setting-hint">Automatically extract action items when opening an email</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      class="toggle"
+                      checked={(settings.auto_extract_actions || 'false') === 'true'}
+                      onchange={(e) => saveSetting("auto_extract_actions", e.currentTarget.checked ? "true" : "false")}
+                    />
+                  </label>
                 </div>
 
                 <div class="card-row">

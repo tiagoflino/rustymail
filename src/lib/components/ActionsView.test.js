@@ -78,13 +78,13 @@ describe('ActionsView.svelte', () => {
         },
     ];
 
-    function mockInvokeHandler(opts = {}) {
+    function mockInvokeHandler(opts = /** @type {{ pending?: any[], completed?: any[] }} */ ({})) {
         const { pending = mockPendingItems, completed = mockCompletedItems } = opts;
         vi.mocked(invoke).mockImplementation(async (cmd, args) => {
             if (cmd === "mark_action_complete" || cmd === "dismiss_action_item") {
                 return null;
             }
-            if (args && args.status === "completed") return completed;
+            if (args && /** @type {any} */ (args).status === "completed") return completed;
             return pending;
         });
     }

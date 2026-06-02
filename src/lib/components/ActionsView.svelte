@@ -2,13 +2,16 @@
   import { invoke } from "@tauri-apps/api/core";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { addToast } from "$lib/stores/toast";
+  import { slide } from "svelte/transition";
 
   interface Props {
     accountId?: string;
     isMacOS?: boolean;
+    onselectthread?: (threadId: string) => void;
+    oncreateevent?: (description: string, deadline: string | null) => void;
   }
 
-  let { accountId, isMacOS = false }: Props = $props();
+  let { accountId, isMacOS = false, onselectthread, oncreateevent }: Props = $props();
 
   interface ActionItem {
     id: number;
@@ -88,6 +91,87 @@
     }
   }
 
+  let reExtracting = $state<Set<string>>(new Set());
+  let eventForm = $state<{ itemId: number; description: string; deadline: string | null } | null>(null);
+  let eventTitle = $state("");
+  let eventDate = $state("");
+  let eventTime = $state("09:00");
+  let eventAllDay = $state(true);
+  let eventSaving = $state(false);
+
+  function openEventForm(item: ActionItem) {
+    eventTitle = item.description;
+    eventDate = item.deadline && !isNaN(new Date(item.deadline).getTime())
+      ? new Date(item.deadline).toISOString().split('T')[0]
+      : new Date().toISOString().split('T')[0];
+    eventTime = "09:00";
+    eventAllDay = !item.deadline;
+    eventForm = { itemId: item.id, description: item.description, deadline: item.deadline };
+  }
+
+  function closeEventForm() {
+    eventForm = null;
+    eventSaving = false;
+  }
+
+  async function handleCreateEvent() {
+    if (!eventForm || !eventTitle.trim()) return;
+    eventSaving = true;
+    try {
+      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (eventAllDay) {
+        await invoke("create_event", {
+          event: {
+            summary: eventTitle.trim(),
+            description: eventTitle.trim(),
+            location: null,
+            start: { date: eventDate, dateTime: null, timeZone },
+            end: { date: eventDate, dateTime: null, timeZone },
+          }
+        });
+      } else {
+        const startDt = `${eventDate}T${eventTime}:00`;
+        const endDate = new Date(`${eventDate}T${eventTime}:00`);
+        endDate.setHours(endDate.getHours() + 1);
+        const endStr = endDate.toISOString().split('.')[0];
+        await invoke("create_event", {
+          event: {
+            summary: eventTitle.trim(),
+            description: eventTitle.trim(),
+            location: null,
+            start: { date: null, dateTime: startDt, timeZone },
+            end: { date: null, dateTime: endStr, timeZone },
+          }
+        });
+      }
+      addToast("Event created in calendar", "success", 3000);
+      closeEventForm();
+    } catch (e) {
+      addToast(`Failed to create event: ${e}`, "error", 5000);
+    } finally {
+      eventSaving = false;
+    }
+  }
+
+  async function handleReExtract(threadId: string) {
+    reExtracting = new Set([...reExtracting, threadId]);
+    try {
+      await invoke("delete_action_items_by_thread", { threadId });
+      const items = await invoke<any[]>("ai_extract_actions", { threadId });
+      if (items && items.length > 0) {
+        addToast(`${items.length} action${items.length > 1 ? 's' : ''} re-extracted`, "success", 3000);
+      }
+      loadItems();
+      loadPendingCount();
+    } catch (e) {
+      addToast(`Re-extraction failed: ${e}`, "error", 5000);
+    } finally {
+      const next = new Set(reExtracting);
+      next.delete(threadId);
+      reExtracting = next;
+    }
+  }
+
   function switchTab(tab: "pending" | "completed") {
     if (tab === activeTab) return;
     activeTab = tab;
@@ -143,17 +227,19 @@
   });
 
   let pendingBadge = $state(0);
+  let pendingBadgeLabel = $state("0");
 
   async function loadPendingCount() {
     try {
       const pendingItems = await invoke<ActionItem[]>("get_action_items", {
         accountId: accountId ?? null,
         status: "pending",
-        limit: 1,
       });
-      pendingBadge = pendingItems.length >= 100 ? "99+" : pendingItems.length;
+      pendingBadge = pendingItems.length >= 100 ? 99 : pendingItems.length;
+      pendingBadgeLabel = pendingItems.length >= 100 ? "99+" : String(pendingItems.length);
     } catch {
       pendingBadge = 0;
+      pendingBadgeLabel = "0";
     }
   }
 
@@ -197,7 +283,7 @@
       <button class="filter-tab" class:active={activeTab === "pending"} onclick={() => switchTab("pending")}>
         Pending
         {#if pendingBadge > 0}
-          <span class="tab-badge">{pendingBadge}</span>
+          <span class="tab-badge">{pendingBadgeLabel}</span>
         {/if}
       </button>
       <button class="filter-tab" class:active={activeTab === "completed"} onclick={() => switchTab("completed")}>
@@ -219,21 +305,49 @@
       </div>
     {:else if groupedItems.length === 0}
       <div class="state-container">
+        <div class="empty-icon">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" opacity="0.3">
+            <polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+          </svg>
+        </div>
         <span class="empty-text">
-          {activeTab === "pending" ? "No pending action items" : "No completed action items"}
+          {activeTab === "pending"
+            ? "No pending action items"
+            : "No completed action items"}
         </span>
+        <span class="empty-hint">Actions appear here when extracted from emails</span>
       </div>
     {:else}
       <div class="groups-list">
         {#each groupedItems as group}
           <div class="thread-group">
             <div class="thread-header">
-              <div class="thread-header-text">
+              <button
+                class="thread-header-text"
+                onclick={() => onselectthread?.(group.threadId)}
+                title="Open email"
+              >
                 <span class="thread-subject">{group.threadSubject}</span>
                 {#if group.threadSender}
                   <span class="thread-sender">{group.threadSender}</span>
                 {/if}
-              </div>
+              </button>
+              {#if activeTab === "pending"}
+                <button
+                  class="re-extract-btn"
+                  disabled={reExtracting.has(group.threadId)}
+                  onclick={() => handleReExtract(group.threadId)}
+                  title="Re-extract actions from this email"
+                >
+                  {#if reExtracting.has(group.threadId)}
+                    <div class="spinner-xs"></div>
+                  {:else}
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                    </svg>
+                  {/if}
+                </button>
+              {/if}
             </div>
             <div class="items-list">
               {#each group.items as item}
@@ -288,10 +402,19 @@
                     </div>
                   </div>
                   <div class="card-right">
-                    <span class="confidence-pill confidence-{confidenceColor(item.confidence)}">
-                      {formatConfidence(item.confidence)}
+                    <span class="confidence-bar" title="{formatConfidence(item.confidence)}">
+                      <span class="confidence-fill confidence-{confidenceColor(item.confidence)}" style="width: {Math.round(item.confidence * 100)}%"></span>
                     </span>
                     {#if activeTab === "pending"}
+                      <button
+                        class="event-btn"
+                        onclick={() => openEventForm(item)}
+                        title="Create calendar event"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+                        </svg>
+                      </button>
                       <button
                         class="dismiss-btn"
                         disabled={dismissingIds.has(item.id)}
@@ -310,6 +433,40 @@
                     {/if}
                   </div>
                 </div>
+                {#if eventForm?.itemId === item.id}
+                  <div class="event-form" transition:slide|local>
+                    <input
+                      class="event-form-input"
+                      type="text"
+                      bind:value={eventTitle}
+                      placeholder="Event title"
+                    />
+                    <div class="event-form-row">
+                      <input
+                        class="event-form-input"
+                        type="date"
+                        bind:value={eventDate}
+                      />
+                      {#if !eventAllDay}
+                        <input
+                          class="event-form-input event-time-input"
+                          type="time"
+                          bind:value={eventTime}
+                        />
+                      {/if}
+                    </div>
+                    <label class="event-all-day">
+                      <input type="checkbox" bind:checked={eventAllDay} />
+                      <span>All day</span>
+                    </label>
+                    <div class="event-form-actions">
+                      <button class="event-form-btn primary" onclick={handleCreateEvent} disabled={eventSaving}>
+                        {eventSaving ? 'Creating...' : 'Create Event'}
+                      </button>
+                      <button class="event-form-btn" onclick={closeEventForm}>Cancel</button>
+                    </div>
+                  </div>
+                {/if}
               {/each}
             </div>
           </div>
@@ -679,32 +836,32 @@
     flex-shrink: 0;
   }
 
-  .confidence-pill {
-    display: inline-block;
-    padding: 2px 7px;
-    border-radius: 4px;
-    font-size: 11px;
-    font-weight: 500;
-    white-space: nowrap;
+  .confidence-bar {
+    width: 48px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--border-color);
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .confidence-fill {
+    display: block;
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.3s ease;
   }
 
   .confidence-high {
-    background: rgba(52, 199, 89, 0.12);
-    color: #34c759;
+    background: #34c759;
   }
 
   .confidence-medium {
-    background: rgba(255, 159, 10, 0.12);
-    color: #c77c00;
-  }
-
-  :global([data-theme="dark"]) .confidence-medium {
-    color: #ff9f0a;
+    background: #ff9f0a;
   }
 
   .confidence-low {
-    background: rgba(142, 142, 147, 0.12);
-    color: #8e8e93;
+    background: #8e8e93;
   }
 
   .dismiss-btn {
@@ -722,12 +879,166 @@
     transition: all 0.15s;
   }
 
+  .event-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-radius: 6px;
+    transition: all 0.15s;
+  }
+
+  .event-btn:hover {
+    background: rgba(0, 122, 255, 0.1);
+    color: var(--accent-blue);
+  }
+
   .dismiss-btn:hover:not(:disabled) {
     background: var(--sidebar-hover);
     color: var(--text-primary);
   }
 
   .dismiss-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .re-extract-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-radius: 6px;
+    flex-shrink: 0;
+    transition: all 0.15s;
+  }
+
+  .re-extract-btn:hover:not(:disabled) {
+    background: var(--sidebar-hover);
+    color: var(--accent-blue);
+  }
+
+  .re-extract-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .thread-header-text {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-align: left;
+    font-family: inherit;
+  }
+
+  .thread-header-text:hover .thread-subject {
+    color: var(--accent-blue);
+  }
+
+  .empty-icon {
+    margin-bottom: 4px;
+  }
+
+  .empty-hint {
+    font-size: 12px;
+    color: var(--text-secondary);
+    opacity: 0.6;
+  }
+
+  .event-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    margin-top: 2px;
+    background: var(--bg-view);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+  }
+
+  .event-form-input {
+    padding: 6px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-family: inherit;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .event-form-input:focus {
+    outline: none;
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.15);
+  }
+
+  .event-form-row {
+    display: flex;
+    gap: 8px;
+  }
+
+  .event-time-input {
+    flex: 0 0 120px;
+  }
+
+  .event-all-day {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+
+  .event-form-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 2px;
+  }
+
+  .event-form-btn {
+    padding: 5px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .event-form-btn:hover:not(:disabled) {
+    background: var(--sidebar-hover);
+  }
+
+  .event-form-btn.primary {
+    background: var(--accent-blue);
+    color: white;
+    border-color: var(--accent-blue);
+  }
+
+  .event-form-btn.primary:hover:not(:disabled) {
+    opacity: 0.85;
+  }
+
+  .event-form-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
   }

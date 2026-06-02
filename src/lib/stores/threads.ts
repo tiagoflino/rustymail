@@ -12,6 +12,7 @@ export interface LocalThread {
     star_type?: string | null;
     has_attachments?: boolean;
     important?: boolean;
+    action_count?: number;
     account_id: string;
 }
 

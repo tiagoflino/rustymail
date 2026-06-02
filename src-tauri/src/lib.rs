@@ -188,6 +188,8 @@ pub fn run() {
             commands::action_items::get_action_items,
             commands::action_items::mark_action_complete,
             commands::action_items::dismiss_action_item,
+            commands::action_items::delete_action_items_by_thread,
+            commands::action_items::get_action_counts,
             commands::contacts::create_contact,
             commands::contacts::get_contact,
             commands::contacts::get_contacts,

@@ -113,6 +113,7 @@
   let labelPickerOpen = $state(false);
   let snoozedCount = $state(0);
   let scheduledCount = $state(0);
+  let pendingActionsCount = $state(0);
 
   let isMacOS = $state(false);
   let sidebarCollapsed = $state(false);
@@ -377,6 +378,7 @@
       await checkSnoozedThreads();
       await checkScheduledSends();
       await refreshScheduledCount();
+      refreshActionsBadge();
 
       // Snoozed/Scheduled are virtual labels — skip Gmail sync, just reload local data
       if (isSnoozedView) {
@@ -1342,6 +1344,13 @@
     } catch {}
   }
 
+  async function refreshActionsBadge() {
+    try {
+      const items = await invoke<any[]>("get_action_items", { status: "pending" });
+      pendingActionsCount = items.length;
+    } catch { pendingActionsCount = 0; }
+  }
+
   function handleSnoozeFromPalette(id: string) {
     const map: Record<string, number> = { snooze_later_today: 0, snooze_tomorrow: 1, snooze_next_week: 2 };
     const index = map[id];
@@ -1727,6 +1736,7 @@
       await checkAndSetupSync();
       await checkScheduledSends();
       await refreshScheduledCount();
+      refreshActionsBadge();
 
       // Load available superstars
       invoke<string[]>("get_available_superstars", { accountId: null })
@@ -1999,6 +2009,7 @@
       {selectedLabelId}
       snoozedCount={snoozedCount}
       scheduledCount={scheduledCount}
+      actionsBadge={pendingActionsCount}
       oncompose={() => openCompose()}
       onsync={() => performSync(true)}
       onthemecycle={cycleTheme}
@@ -2098,7 +2109,11 @@
     {:else if viewMode === "contacts"}
       <Contacts />
     {:else if viewMode === "actions"}
-      <ActionsView accountId={activeAccount?.id ?? undefined} {isMacOS} />
+      <ActionsView
+        accountId={activeAccount?.id ?? undefined}
+        {isMacOS}
+        onselectthread={(threadId) => { viewMode = "mail"; selectThread(threadId); }}
+      />
     {/if}
   </div>
 

@@ -54,6 +54,7 @@
     ontogglesubscriptions: () => void;
     ontogglecontacts?: () => void;
     ontoggleactions?: () => void;
+    actionsBadge?: number;
     onsettings: () => void;
     ontogglecollapse: () => void;
     onselectlabel: (labelId: string) => void;
@@ -75,6 +76,7 @@
     selectedLabelId,
     snoozedCount = 0,
     scheduledCount = 0,
+    actionsBadge = 0,
     showCalendarToggle = true,
     connectionState = '',
     oncompose,
@@ -179,47 +181,49 @@
 
   <div class="sidebar-compose">
     <button
-      class="btn-sidebar flex-grow sidebar-compose-btn"
+      class="btn-sidebar sidebar-compose-btn"
       onclick={oncompose}
     >
       <span class="icon">{@html iconPlus}</span><span class="sidebar-text"> Compose</span>
     </button>
-    {#if showCalendarToggle}
-    <button
-      class="btn-sidebar sidebar-calendar-btn"
-      onclick={ontogglecalendar}
-      title="Toggle Calendar"
-    >
-      {@html iconCalendar}
-    </button>
-    {/if}
-    <button
-      class="btn-sidebar sidebar-subscriptions-btn"
-      onclick={ontogglesubscriptions}
-      title="Toggle Subscriptions"
-    >
-      {@html iconSubscriptions}
-    </button>
-    <button
-      class="btn-sidebar sidebar-contacts-btn"
-      onclick={() => ontogglecontacts?.()}
-      title="Contacts"
-    >
-      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.2">
-        <circle cx="8" cy="5" r="2.5"/>
-        <path d="M3 14c0-2.8 2.2-5 5-5s5 2.2 5 5"/>
-      </svg>
-    </button>
-    <button
-      class="btn-sidebar sidebar-actions-btn"
-      onclick={() => ontoggleactions?.()}
-      title="Action Items"
-    >
-      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.2">
-        <polyline points="4 8 7 11 12 5"/>
-        <circle cx="8" cy="8" r="6.5"/>
-      </svg>
-    </button>
+    <div class="sidebar-compose-tools">
+      {#if showCalendarToggle}
+      <button
+        class="btn-sidebar sidebar-tool-btn"
+        onclick={ontogglecalendar}
+        title="Toggle Calendar"
+      >
+        {@html iconCalendar}
+      </button>
+      {/if}
+      <button
+        class="btn-sidebar sidebar-tool-btn"
+        onclick={ontogglesubscriptions}
+        title="Toggle Subscriptions"
+      >
+        {@html iconSubscriptions}
+      </button>
+      <button
+        class="btn-sidebar sidebar-tool-btn"
+        onclick={() => ontogglecontacts?.()}
+        title="Contacts"
+      >
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.2">
+          <circle cx="8" cy="5" r="2.5"/>
+          <path d="M3 14c0-2.8 2.2-5 5-5s5 2.2 5 5"/>
+        </svg>
+      </button>
+      <button
+        class="btn-sidebar sidebar-tool-btn"
+        onclick={() => ontoggleactions?.()}
+        title="Action Items"
+      >
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.2">
+          <polyline points="4 8 7 11 12 5"/>
+          <circle cx="8" cy="8" r="6.5"/>
+        </svg>
+      </button>
+    </div>
   </div>
 
   <div class="sidebar-content">
@@ -314,6 +318,7 @@
         >
           <span class="icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></span>
           <span class="label-text">Actions</span>
+          {#if actionsBadge > 0}<span class="badge">{actionsBadge}</span>{/if}
         </div>
       </li>
     </ul>
@@ -780,7 +785,13 @@
   .sidebar-compose {
     padding: 12px 12px 4px 12px;
     display: flex;
+    flex-direction: column;
     gap: 6px;
+  }
+  .sidebar-compose-tools {
+    display: flex;
+    gap: 6px;
+    justify-content: space-between;
   }
   .sidebar-compose-btn {
     font-size: 13px;
@@ -792,23 +803,17 @@
     border-radius: var(--radius-standard);
     box-shadow: none;
     white-space: nowrap;
+    width: 100%;
+    justify-content: center;
+  }
+  .sidebar-tool-btn {
+    flex: 1;
+    justify-content: center;
+    padding: 6px 0;
   }
   .sidebar-compose-btn:hover {
     background: var(--accent-blue);
     opacity: 0.9;
-  }
-  .sidebar-calendar-btn,
-  .sidebar-subscriptions-btn,
-  .sidebar-contacts-btn,
-  .sidebar-actions-btn {
-    width: 30px;
-    flex-shrink: 0;
-    padding: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--bg-view);
-    border: 1px solid var(--border-color);
   }
   .btn-sidebar.flex-grow {
     flex: 1;

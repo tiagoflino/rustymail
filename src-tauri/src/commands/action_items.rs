@@ -95,6 +95,53 @@ pub async fn dismiss_action_item(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn delete_action_items_by_thread(
+    app_handle: tauri::AppHandle,
+    thread_id: String,
+) -> Result<i64, String> {
+    let pool = app_handle.state::<SqlitePool>();
+
+    let deleted = sqlx::query("DELETE FROM action_items WHERE thread_id = ?")
+        .bind(&thread_id)
+        .execute(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(deleted.rows_affected() as i64)
+}
+
+#[derive(serde::Serialize)]
+pub struct ThreadActionCount {
+    pub thread_id: String,
+    pub count: i64,
+}
+
+#[tauri::command]
+pub async fn get_action_counts(
+    app_handle: tauri::AppHandle,
+    thread_ids: Vec<String>,
+) -> Result<Vec<ThreadActionCount>, String> {
+    if thread_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let pool = app_handle.state::<SqlitePool>();
+
+    let placeholders: Vec<String> = thread_ids.iter().enumerate().map(|(i, _)| format!("?{}", i + 1)).collect();
+    let sql = format!(
+        "SELECT thread_id, COUNT(*) as count FROM action_items WHERE status = 'pending' AND thread_id IN ({}) GROUP BY thread_id",
+        placeholders.join(",")
+    );
+
+    let mut query = sqlx::query_as::<_, (String, i64)>(&sql);
+    for id in &thread_ids {
+        query = query.bind(id);
+    }
+
+    let rows = query.fetch_all(pool.inner()).await.map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(|(thread_id, count)| ThreadActionCount { thread_id, count }).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

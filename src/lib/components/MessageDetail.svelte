@@ -107,6 +107,14 @@
     smartReplies = [];
   });
 
+  $effect(() => {
+    const tid = $selectedThreadId;
+    if (!tid || !aiAvailable) return;
+    invoke("get_setting", { key: "auto_extract_actions" }).then((val: any) => {
+      if (val === "true") handleExtractActions(true);
+    }).catch(() => {});
+  });
+
   function formatAiSummary(raw: string): string {
     let text = raw
       .replace(/\*\*([^*]+)\*\*\s*\n\s*(?=\()/g, '**$1** ')
@@ -271,13 +279,17 @@
     }
   }
 
-  async function handleExtractActions() {
+  async function handleExtractActions(silent = false) {
     if (!$selectedThreadId || extractActionsLoading) return;
     extractActionsLoading = true;
     try {
       await invoke("ensure_ai_ready");
-      await invoke("ai_extract_actions", { threadId: $selectedThreadId });
-      addToast("Actions extracted", "success", 3000);
+      const items = await invoke<any[]>("ai_extract_actions", { threadId: $selectedThreadId });
+      if (items && items.length > 0) {
+        addToast(`${items.length} action${items.length > 1 ? 's' : ''} extracted`, "success", 3000);
+      } else if (!silent) {
+        addToast("No actions found in this email", "info", 3000);
+      }
     } catch (e: any) {
       addToast(`Action extraction failed: ${e}`, "error", 5000);
     } finally {
@@ -767,7 +779,7 @@
                 {/if}
                 Quick Replies
               </button>
-              <button class="ai-bar-btn" onclick={handleExtractActions} disabled={extractActionsLoading}>
+              <button class="ai-bar-btn" onclick={() => handleExtractActions()} disabled={extractActionsLoading}>
                 {#if extractActionsLoading}
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="30 70" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/></circle></svg>
                 {:else}
