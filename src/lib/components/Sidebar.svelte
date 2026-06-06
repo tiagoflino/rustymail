@@ -46,6 +46,7 @@
     labels: Writable<LocalLabel[]>;
     selectedLabelId: Writable<string>;
     snoozedCount?: number;
+    mutedCount?: number;
     scheduledCount?: number;
     showCalendarToggle?: boolean;
     connectionState?: string;
@@ -77,6 +78,7 @@
     labels,
     selectedLabelId,
     snoozedCount = 0,
+    mutedCount = 0,
     scheduledCount = 0,
     showCalendarToggle = true,
     connectionState = '',

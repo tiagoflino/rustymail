@@ -46,6 +46,7 @@
   import UpdateModal from "$lib/components/UpdateModal.svelte";
   import LabelPicker from "$lib/components/LabelPicker.svelte";
   import SnoozePopover from "$lib/components/SnoozePopover.svelte";
+  import MutePopover from "$lib/components/MutePopover.svelte";
   import { shortcutManager } from "$lib/shortcut-manager";
   import { addToast } from "$lib/stores/toast";
   import { pendingUpdate } from "$lib/utils/updater";
@@ -54,6 +55,7 @@
     prepareQuotedHtml,
   } from "$lib/utils/formatters.js";
   import { snoozeOptions } from "$lib/utils/snooze";
+  import { muteOptions } from "$lib/utils/mute";
 
   interface LocalLabel {
     id: string;
@@ -110,8 +112,11 @@
   let imapConnectionStates = $state<Record<string, string>>({});
   let snoozePopoverOpen = $state(false);
   let batchSnoozeOpen = $state(false);
+  let mutePopoverOpen = $state(false);
+  let batchMuteOpen = $state(false);
   let labelPickerOpen = $state(false);
   let snoozedCount = $state(0);
+  let mutedCount = $state(0);
   let scheduledCount = $state(0);
   let hasSubscriptions = $state(false);
 
@@ -373,6 +378,7 @@
     const realLabelId = isUnified ? syncLabelId.replace("UNIFIED_", "") : syncLabelId;
 
     const isSnoozedView = syncLabelId === "SNOOZED" || syncLabelId === "UNIFIED_SNOOZED" || syncLabelId === "SCHEDULED";
+    const isMutedView = syncLabelId === "MUTED" || syncLabelId === "UNIFIED_MUTED";
 
     try {
       await checkSnoozedThreads();
@@ -380,8 +386,8 @@
       await refreshScheduledCount();
       await loadSubscriptionCount();
 
-      // Snoozed/Scheduled are virtual labels — skip Gmail sync, just reload local data
-      if (isSnoozedView) {
+      // Snoozed/Muted/Scheduled are virtual labels — skip Gmail sync, just reload local data
+      if (isSnoozedView || isMutedView) {
         await loadThreads(true);
         return;
       }
@@ -610,6 +616,43 @@
         hasMoreRemote = false;
       } catch (e) {
         console.error("Failed to load snoozed threads", e);
+        threads.set([]);
+        totalCount = 0;
+        hasMoreRemote = false;
+      } finally {
+        isLoadingThreads = false;
+      }
+      return;
+    }
+
+    if ($selectedLabelId === "MUTED" || $selectedLabelId === "UNIFIED_MUTED") {
+      try {
+        const mutedInfo: any[] = await invoke("get_muted_threads");
+        const mutedList = mutedInfo.map(m => ({
+          id: m.thread_id,
+          subject: m.subject,
+          sender: m.sender,
+          snippet: m.muted_until
+            ? `Muted until ${new Date(m.muted_until * 1000).toLocaleString()}`
+            : "Muted forever",
+          date: new Date(m.created_at * 1000).toISOString(),
+          unread: 0,
+          starred: false,
+          star_type: null,
+          important: false,
+          labels: ["MUTED"],
+          message_count: 0,
+          has_attachments: false,
+          account_id: m.account_id,
+          history_id: "",
+          internal_date: m.created_at,
+        }));
+        threads.set(mutedList);
+        mutedCount = mutedList.length;
+        totalCount = mutedList.length;
+        hasMoreRemote = false;
+      } catch (e) {
+        console.error("Failed to load muted threads", e);
         threads.set([]);
         totalCount = 0;
         hasMoreRemote = false;
@@ -1143,6 +1186,56 @@
       return;
     }
 
+    if (action === "unmute") {
+      const previousList = currentList;
+      threads.set(currentList.filter((t) => t.id !== threadId));
+      selectedThreadId.set(null);
+      currentMessages.set([]);
+      try {
+        await invoke("unmute_thread", { threadId: threadId });
+        addToast("Conversation unmuted.", "info");
+        if ($selectedLabelId === "MUTED" || $selectedLabelId === "UNIFIED_MUTED") {
+          mutedCount = Math.max(0, mutedCount - 1);
+        }
+      } catch (e) {
+        console.error("unmute failed", e);
+        addToast(`Failed to unmute: ${e}`, "error", 5000);
+        threads.set(previousList);
+      }
+      return;
+    }
+
+    if (action.startsWith("mute:")) {
+      const untilStr = action.split(":").slice(1).join(":");
+      const until = untilStr === "forever" ? null : Number(untilStr);
+      const previousList = currentList;
+      threads.set(currentList.filter((t) => t.id !== threadId));
+      selectedThreadId.set(null);
+      currentMessages.set([]);
+      try {
+        await invoke("mute_thread", { threadId: threadId, mutedUntil: until });
+        mutedCount += 1;
+        addToast("Conversation muted.", "info", 6000, {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              await invoke("unmute_thread", { threadId: threadId });
+              mutedCount = Math.max(0, mutedCount - 1);
+              await loadThreads(true);
+            } catch (e) {
+              console.error("Undo mute failed", e);
+              addToast(`Failed to undo mute: ${e}`, "error", 5000);
+            }
+          },
+        });
+      } catch (e) {
+        console.error("mute failed", e);
+        addToast(`Failed to mute: ${e}`, "error", 5000);
+        threads.set(previousList);
+      }
+      return;
+    }
+
     if (action === "archive" || action === "trash" || action === "untrash") {
       threads.set(currentList.filter((t) => t.id !== threadId));
       selectedThreadId.set(null);
@@ -1186,7 +1279,7 @@
 
   const SYSTEM_LABEL_IDS = new Set([
     "INBOX", "SENT", "DRAFT", "TRASH", "SPAM", "STARRED", "IMPORTANT",
-    "UNREAD", "CHAT", "VOICEMAIL", "SNOOZED",
+    "UNREAD", "CHAT", "VOICEMAIL", "SNOOZED", "MUTED",
   ]);
 
   let userLabels = $derived(
@@ -1209,7 +1302,7 @@
     clearSelection();
 
     // Optimistic removal for actions that remove threads from current view
-    if (["archive", "trash", "restore", "snooze", "unsnooze", "movetolabel"].includes(action)) {
+    if (["archive", "trash", "restore", "snooze", "unsnooze", "mute", "unmute", "movetolabel"].includes(action)) {
       threads.update(ts => ts.filter(t => !idSet.has(t.id)));
       selectedThreadId.set(null);
       currentMessages.set([]);
@@ -1297,6 +1390,26 @@
             delete labelLastSyncMap["UNIFIED_INBOX"];
           }
           break;
+        case "mute":
+          result = await invoke("batch_snooze_threads", { threadIds: ids, snoozedUntil: extraArgs });
+          if (result.succeeded > 0) addToast(`${result.succeeded} thread${result.succeeded > 1 ? 's' : ''} muted`, "info");
+          break;
+        case "unmute":
+          let unmuteSucceeded = 0;
+          const unmuteFailed: string[] = [];
+          for (const id of ids) {
+            try {
+              await invoke("unmute_thread", { threadId: id });
+              unmuteSucceeded++;
+            } catch { unmuteFailed.push(id); }
+          }
+          result = { succeeded: unmuteSucceeded, failed_ids: unmuteFailed };
+          if (unmuteSucceeded > 0) {
+            addToast(`${unmuteSucceeded} thread${unmuteSucceeded > 1 ? 's' : ''} unmuted`, "info");
+            delete labelLastSyncMap["INBOX"];
+            delete labelLastSyncMap["UNIFIED_INBOX"];
+          }
+          break;
         case "movetolabel":
           result = await invoke("batch_move_to_label", { threadIds: ids, addLabels: [extraArgs], removeLabels: ["INBOX"] });
           if (result.succeeded > 0) addToast(`${result.succeeded} thread${result.succeeded > 1 ? 's' : ''} moved`, "info");
@@ -1305,7 +1418,7 @@
       if (result?.failed_ids?.length > 0) {
         addToast(`${result.failed_ids.length} thread${result.failed_ids.length > 1 ? 's' : ''} failed`, "error");
         // Restore optimistically removed threads on partial failure
-        if (["archive", "trash", "restore", "snooze", "unsnooze", "movetolabel"].includes(action) && result.failed_ids.length > 0) {
+        if (["archive", "trash", "restore", "snooze", "unsnooze", "mute", "unmute", "movetolabel"].includes(action) && result.failed_ids.length > 0) {
           forceRefreshThreads();
         }
       }
@@ -2030,6 +2143,7 @@
       {labels}
       {selectedLabelId}
       snoozedCount={snoozedCount}
+      mutedCount={mutedCount}
       scheduledCount={scheduledCount}
       oncompose={() => openCompose()}
       onsync={() => performSync(true)}
@@ -2087,8 +2201,11 @@
         onbatchstar={(_ids, starred) => executeBatchAction("star", starred)}
         onbatchsnooze={() => { batchSnoozeOpen = true; }}
         onbatchunsnooze={(ids) => executeBatchAction("unsnooze")}
+        onbatchmute={() => { batchMuteOpen = true; }}
+        onbatchunmute={(ids) => executeBatchAction("unmute")}
         onbatchmovetolabel={() => { labelPickerOpen = true; }}
         isSnoozedView={$selectedLabelId === "SNOOZED" || $selectedLabelId === "UNIFIED_SNOOZED"}
+        isMutedView={$selectedLabelId === "MUTED" || $selectedLabelId === "UNIFIED_MUTED"}
         isTrashView={$selectedLabelId === "TRASH"}
         hasSuperstars={capabilities.has_superstars}
         hasImportant={capabilities.has_important}
@@ -2115,6 +2232,15 @@
           <SnoozePopover
             onsnooze={(until) => { batchSnoozeOpen = false; executeBatchAction("snooze", until); }}
             onclose={() => { batchSnoozeOpen = false; }}
+          />
+        </div>
+      {/if}
+
+      {#if batchMuteOpen}
+        <div class="batch-popover-overlay">
+          <MutePopover
+            onmute={(until) => { batchMuteOpen = false; executeBatchAction("mute", until); }}
+            onclose={() => { batchMuteOpen = false; }}
           />
         </div>
       {/if}
