@@ -7,6 +7,7 @@ pub mod messages;
 pub mod misc;
 pub mod search;
 pub mod settings;
+pub mod routing;
 pub mod snooze;
 pub mod sync;
 pub mod threads;

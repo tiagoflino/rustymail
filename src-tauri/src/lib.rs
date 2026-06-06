@@ -9,6 +9,7 @@ mod gmail_api;
 pub mod outlook_api;
 mod page_token_store;
 pub mod provider;
+mod sender_routing;
 mod subscription_detector;
 mod tray;
 
@@ -132,6 +133,10 @@ pub fn run() {
             commands::threads::set_thread_star,
             commands::threads::get_available_superstars,
             commands::threads::toggle_thread_important,
+            commands::routing::check_new_sender,
+            commands::routing::set_sender_routing,
+            commands::routing::get_sender_routing,
+            commands::routing::get_all_sender_routings,
             commands::snooze::snooze_thread,
             commands::snooze::unsnooze_thread,
             commands::snooze::get_snoozed_threads,
