@@ -56,6 +56,7 @@
     ontogglecontacts?: () => void;
     onfeed?: () => void;
     onsettings: () => void;
+    onprivacyreport?: () => void;
     ontogglecollapse: () => void;
     onselectlabel: (labelId: string) => void;
     onswitchaccount: (accountId: string) => void;
@@ -87,6 +88,7 @@
     ontogglecontacts,
     onfeed,
     onsettings,
+    onprivacyreport,
     ontogglecollapse,
     onselectlabel,
     onswitchaccount,
@@ -212,6 +214,13 @@
         <circle cx="8" cy="5" r="2.5"/>
         <path d="M3 14c0-2.8 2.2-5 5-5s5 2.2 5 5"/>
       </svg>
+    </button>
+    <button
+      class="btn-sidebar sidebar-privacy-btn"
+      onclick={() => onprivacyreport?.()}
+      title="Privacy Report"
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
     </button>
   </div>
 

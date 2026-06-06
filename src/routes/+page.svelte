@@ -46,6 +46,7 @@
   import UpdateModal from "$lib/components/UpdateModal.svelte";
   import LabelPicker from "$lib/components/LabelPicker.svelte";
   import SnoozePopover from "$lib/components/SnoozePopover.svelte";
+  import PrivacyReport from "$lib/components/PrivacyReport.svelte";
   import { shortcutManager } from "$lib/shortcut-manager";
   import { addToast } from "$lib/stores/toast";
   import { pendingUpdate } from "$lib/utils/updater";
@@ -110,6 +111,7 @@
   let imapConnectionStates = $state<Record<string, string>>({});
   let snoozePopoverOpen = $state(false);
   let batchSnoozeOpen = $state(false);
+  let showPrivacyReport = $state(false);
   let labelPickerOpen = $state(false);
   let snoozedCount = $state(0);
   let scheduledCount = $state(0);
@@ -2042,6 +2044,7 @@
       onfeed={() => selectLabel('FEED')}
       {hasSubscriptions}
       onsettings={() => (showSettings = true)}
+      onprivacyreport={() => (showPrivacyReport = true)}
       ontogglecollapse={toggleSidebar}
       onselectlabel={selectLabel}
       onswitchaccount={switchAccount}
@@ -2136,6 +2139,10 @@
       <Contacts />
     {/if}
   </div>
+
+  {#if showPrivacyReport}
+    <PrivacyReport onclose={() => showPrivacyReport = false} />
+  {/if}
 
   <Settings
     bind:show={showSettings}
