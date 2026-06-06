@@ -10,6 +10,7 @@ pub mod outlook_api;
 mod page_token_store;
 pub mod provider;
 mod subscription_detector;
+pub mod tracking_detector;
 mod tray;
 
 use tauri::{Emitter, Manager};
@@ -174,6 +175,7 @@ pub fn run() {
             commands::misc::get_log_path,
             commands::misc::get_recent_logs,
             commands::misc::open_log_directory,
+            commands::misc::scan_tracking_content,
             commands::templates::create_template,
             commands::templates::update_template,
             commands::templates::delete_template,

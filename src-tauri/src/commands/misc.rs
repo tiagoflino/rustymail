@@ -94,6 +94,30 @@ pub async fn open_log_directory(app_handle: tauri::AppHandle) -> Result<(), Stri
         .map_err(|e| format!("Failed to open directory: {}", e))
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+pub struct TrackingScanResult {
+    pub trackers_found: usize,
+    pub trackers_blocked: usize,
+    pub cleaned_html: String,
+    pub tracker_details: Vec<crate::tracking_detector::DetectedTracker>,
+}
+
+#[tauri::command]
+pub async fn scan_tracking_content(html: String) -> Result<TrackingScanResult, String> {
+    let mut trackers = crate::tracking_detector::detect_trackers(&html);
+    let found = trackers.len();
+    let (cleaned_html, blocked) = crate::tracking_detector::block_trackers(&html);
+    for t in &mut trackers {
+        t.blocked = true;
+    }
+    Ok(TrackingScanResult {
+        trackers_found: found,
+        trackers_blocked: blocked,
+        cleaned_html,
+        tracker_details: trackers,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

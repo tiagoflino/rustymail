@@ -3,7 +3,7 @@ use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
 use std::str::FromStr;
 use tauri::Manager;
 
-const CURRENT_SCHEMA_VERSION: &str = "3";
+const CURRENT_SCHEMA_VERSION: &str = "4";
 
 pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
     let schema = r#"
@@ -136,6 +136,18 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         PRIMARY KEY (thread_id, account_id)
     );
 
+    CREATE TABLE IF NOT EXISTS tracking_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id TEXT NOT NULL,
+        message_id TEXT,
+        sender_email TEXT NOT NULL,
+        tracker_type TEXT NOT NULL,
+        details TEXT,
+        url_snippet TEXT,
+        blocked INTEGER NOT NULL DEFAULT 1,
+        detected_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS scheduled_sends (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         account_id TEXT NOT NULL,
@@ -192,6 +204,7 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
     CREATE INDEX IF NOT EXISTS idx_threads_account ON threads(account_id);
     CREATE INDEX IF NOT EXISTS idx_labels_account ON labels(account_id);
     CREATE INDEX IF NOT EXISTS idx_snoozed_account_until ON snoozed_threads(account_id, snoozed_until);
+    CREATE INDEX IF NOT EXISTS idx_tracking_events_account ON tracking_events(account_id, detected_at);
     CREATE INDEX IF NOT EXISTS idx_subscriptions_account ON subscriptions(account_id);
     CREATE INDEX IF NOT EXISTS idx_subscriptions_sender ON subscriptions(sender_email);
     CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions(account_id, status);
@@ -334,6 +347,8 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         ("smart_reply_count", "4"),
         ("smart_reply_style", "mixed"),
         ("subscription_scan_depth", "1000"),
+        ("block_tracking_pixels", "true"),
+        ("block_remote_images", "false"),
     ];
     for (key, value) in defaults {
         let _ = sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)")
@@ -694,6 +709,31 @@ async fn m020_add_discovery_columns(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+async fn m022_create_tracking_events(pool: &SqlitePool) -> Result<()> {
+    if !has_table(pool, "tracking_events").await {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS tracking_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id TEXT NOT NULL,
+                message_id TEXT,
+                sender_email TEXT NOT NULL,
+                tracker_type TEXT NOT NULL,
+                details TEXT,
+                url_snippet TEXT,
+                blocked INTEGER NOT NULL DEFAULT 1,
+                detected_at INTEGER NOT NULL
+            )"
+        ).execute(pool).await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_tracking_events_account ON tracking_events(account_id, detected_at)")
+            .execute(pool).await?;
+    }
+    sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES ('block_tracking_pixels', 'true')")
+        .execute(pool).await?;
+    sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES ('block_remote_images', 'false')")
+        .execute(pool).await?;
+    Ok(())
+}
+
 async fn m021_add_smart_reply_settings(pool: &SqlitePool) -> Result<()> {
     sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES ('smart_reply_count', '4')")
         .execute(pool).await?;
@@ -888,6 +928,12 @@ pub(crate) async fn run_migrations(pool: &SqlitePool) -> Result<()> {
                 .execute(pool)
                 .await;
         }
+        if has_table(pool, "tracking_events").await {
+            let _ = sqlx::query("INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)")
+                .bind(22i64)
+                .execute(pool)
+                .await;
+        }
         if has_column(pool, "imap_config", "caldav_url").await {
             let _ = sqlx::query("INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)")
                 .bind(17i64)
@@ -905,7 +951,7 @@ pub(crate) async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 }
 
 async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()> {
-    for version in 1..=21i64 {
+    for version in 1..=22i64 {
         if !applied.contains(&version) {
             println!("[Migration] Running v{}...", version);
             match version {
@@ -930,6 +976,7 @@ async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()
                 19 => m019_add_scopes_version(pool).await?,
                 20 => m020_add_discovery_columns(pool).await?,
                 21 => m021_add_smart_reply_settings(pool).await?,
+                22 => m022_create_tracking_events(pool).await?,
                 _ => {}
             }
             sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
@@ -967,7 +1014,7 @@ mod tests {
         for expected in &[
             "accounts", "attachments", "drafts", "history_state", "labels",
             "message_labels", "messages", "messages_fts", "schema_migrations",
-            "settings", "snoozed_threads", "subscriptions", "templates", "thread_labels", "threads",
+            "settings", "snoozed_threads", "subscriptions", "templates", "thread_labels", "threads", "tracking_events",
         ] {
             assert!(names.contains(expected), "Missing table: {expected}");
         }
@@ -987,7 +1034,7 @@ mod tests {
             "idx_contact_emails_contact", "idx_contact_emails_email", "idx_contacts_account",
             "idx_labels_account", "idx_message_labels_label",
             "idx_messages_account", "idx_messages_internal_date", "idx_messages_thread",
-            "idx_snoozed_account_until",
+            "idx_snoozed_account_until", "idx_tracking_events_account",
             "idx_thread_labels_label", "idx_thread_labels_thread", "idx_threads_account",
         ] {
             assert!(names.contains(expected), "Missing index: {expected}");
@@ -1124,7 +1171,7 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
             .fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 21);
+        assert_eq!(count, 22);
     }
 
     #[tokio::test]
