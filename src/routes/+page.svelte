@@ -35,6 +35,7 @@
   import Compose from "$lib/components/Compose.svelte";
   import FullCalendar from "$lib/components/FullCalendar.svelte";
   import Subscriptions from "$lib/components/Subscriptions.svelte";
+  import FeedView from "$lib/components/FeedView.svelte";
   import Contacts from "$lib/components/Contacts.svelte";
   import ActionsView from "$lib/components/ActionsView.svelte";
   import Toasts from "$lib/components/Toasts.svelte";
@@ -114,6 +115,7 @@
   let snoozedCount = $state(0);
   let scheduledCount = $state(0);
   let pendingActionsCount = $state(0);
+  let hasSubscriptions = $state(false);
 
   let isMacOS = $state(false);
   let sidebarCollapsed = $state(false);
@@ -379,6 +381,7 @@
       await checkScheduledSends();
       await refreshScheduledCount();
       refreshActionsBadge();
+      await loadSubscriptionCount();
 
       // Snoozed/Scheduled are virtual labels — skip Gmail sync, just reload local data
       if (isSnoozedView) {
@@ -975,6 +978,9 @@
       threads.set([]);
     }
 
+    // FEED is a virtual label — FeedView handles its own data loading
+    if (labelId === "FEED") return;
+
     await loadThreads(true);
 
     // SNOOZED and SCHEDULED are virtual labels — no Gmail sync needed
@@ -1351,6 +1357,15 @@
     } catch { pendingActionsCount = 0; }
   }
 
+  async function loadSubscriptionCount() {
+    try {
+      const subs = await invoke<Array<{ id: number; sender_email: string }>>("get_subscriptions", { accountId: null as string | null, status: "active" });
+      hasSubscriptions = subs.length > 0;
+    } catch {
+      hasSubscriptions = false;
+    }
+  }
+
   function handleSnoozeFromPalette(id: string) {
     const map: Record<string, number> = { snooze_later_today: 0, snooze_tomorrow: 1, snooze_next_week: 2 };
     const index = map[id];
@@ -1358,13 +1373,30 @@
     executeAction("snooze:" + snoozeOptions[index].compute());
   }
 
+  const STAR_CLICK_DELAY = 500;
+  let lastStarClick = $state<Record<string, number>>({});
+
   async function cycleStar(threadId: string, currentStarType: string | null) {
     const available = get(availableSuperstars);
-    const nextStar = getNextStar(currentStarType, available);
+    if (!available.length) return;
+
+    const now = Date.now();
+    const lastClick = lastStarClick[threadId] ?? 0;
+    lastStarClick[threadId] = now;
+    const isQuickClick = now - lastClick < STAR_CLICK_DELAY && lastClick > 0;
+
+    let nextStar: string | null;
+    if (!currentStarType) {
+      nextStar = available[0];
+    } else if (isQuickClick) {
+      nextStar = getNextStar(currentStarType, available);
+    } else {
+      nextStar = null;
+    }
+
     const newStarred = nextStar !== null;
     const currentList = get(threads);
 
-    // Optimistic update
     threads.update((list) =>
       list.map((t) => (t.id === threadId ? { ...t, starred: newStarred, star_type: nextStar } : t)),
     );
@@ -1737,6 +1769,7 @@
       await checkScheduledSends();
       await refreshScheduledCount();
       refreshActionsBadge();
+      await loadSubscriptionCount();
 
       // Load available superstars
       invoke<string[]>("get_available_superstars", { accountId: null })
@@ -2019,6 +2052,8 @@
       ontogglesubscriptions={() => viewMode = viewMode === "subscriptions" ? "mail" : "subscriptions"}
       ontogglecontacts={() => { viewMode = viewMode === "contacts" ? "mail" : "contacts"; }}
       ontoggleactions={() => { viewMode = viewMode === "actions" ? "mail" : "actions"; }}
+      onfeed={() => selectLabel('FEED')}
+      {hasSubscriptions}
       onsettings={() => (showSettings = true)}
       ontogglecollapse={toggleSidebar}
       onselectlabel={selectLabel}
@@ -2027,6 +2062,9 @@
     />
 
     {#if viewMode === "mail"}
+      {#if $selectedLabelId === 'FEED'}
+        <FeedView {isMacOS} onselectthread={selectThread} />
+      {:else}
       <ThreadList
         bind:this={threadListRef}
         {isLoadingThreads}
@@ -2069,6 +2107,7 @@
         hasImportant={capabilities.has_important}
         accountProviderTypes={accountProviderMap}
       />
+      {/if}
 
       <MessageDetail
         {isMacOS}

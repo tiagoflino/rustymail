@@ -119,9 +119,9 @@ describe('ActionsView.svelte', () => {
 
         expect(screen.getByText('Alice')).toBeInTheDocument();
         expect(screen.getByText('Charlie')).toBeInTheDocument();
-        expect(screen.getByText('95%')).toBeInTheDocument();
-        expect(screen.getByText('60%')).toBeInTheDocument();
-        expect(screen.getByText('85%')).toBeInTheDocument();
+        expect(screen.getByTitle('95%')).toBeInTheDocument();
+        expect(screen.getByTitle('60%')).toBeInTheDocument();
+        expect(screen.getByTitle('85%')).toBeInTheDocument();
     });
 
     it('marks an action item as complete', async () => {

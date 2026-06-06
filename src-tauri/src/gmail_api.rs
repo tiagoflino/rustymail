@@ -76,11 +76,15 @@ pub struct MessagePartBody {
     pub attachment_id: Option<String>,
 }
 
+fn default_mime_type() -> String {
+    "text/plain".to_string()
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MessagePart {
     #[serde(rename = "partId")]
     pub part_id: Option<String>,
-    #[serde(rename = "mimeType")]
+    #[serde(rename = "mimeType", default = "default_mime_type")]
     pub mime_type: String,
     pub filename: Option<String>,
     pub headers: Option<Vec<MessagePartHeader>>,
@@ -891,6 +895,139 @@ pub async fn fetch_message_metadata(
     }
 
     res.json::<GmailMessage>().await.map_err(|e| e.to_string())
+}
+
+pub async fn batch_fetch_message_metadata(
+    access_token: &str,
+    message_ids: &[String],
+) -> Result<Vec<GmailMessage>, String> {
+    let client = Client::new();
+
+    let mut all_results: Vec<GmailMessage> = Vec::new();
+
+    for chunk in message_ids.chunks(100) {
+        let boundary = format!("batch_{}", uuid::Uuid::new_v4());
+        let mut body_parts = Vec::new();
+
+        for msg_id in chunk {
+            let part_body = format!(
+                "GET /gmail/v1/users/me/messages/{}?format=metadata\r\nAuthorization: Bearer {}\r\n\r\n",
+                msg_id, access_token
+            );
+            let part = format!(
+                "--{}\r\nContent-Type: application/http\r\n\r\n{}",
+                boundary, part_body
+            );
+            body_parts.push(part);
+        }
+
+        body_parts.push(format!("--{}--\r\n", boundary));
+        let full_body = body_parts.concat();
+
+        let res = client
+            .post(gmail_api_url("/batch/gmail/v1"))
+            .header("Content-Type", format!("multipart/mixed; boundary={}", boundary))
+            .body(full_body)
+            .send()
+            .await
+            .map_err(|e| format!("Gmail batch request failed: {}", e))?;
+
+        if !res.status().is_success() {
+            return Err(format!("Gmail batch API error: {}", res.status()));
+        }
+
+        let content_type = res
+            .headers()
+            .get("Content-Type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+
+        let outer_boundary = extract_boundary(&content_type)
+            .ok_or_else(|| "Could not parse batch response boundary".to_string())?;
+
+        let response_body = res.text().await.map_err(|e| e.to_string())?;
+
+        for part in response_body.split(&format!("--{}", outer_boundary)) {
+            let part = part.trim();
+            if part.is_empty() || part.starts_with("--") {
+                continue;
+            }
+
+            let json_start = if let Some(pos) = part.rfind("\r\n\r\n") {
+                pos + 4
+            } else if let Some(pos) = part.rfind("\n\n") {
+                pos + 2
+            } else {
+                continue;
+            };
+
+            let json_str = &part[json_start..];
+            let trimmed = json_str.trim();
+            if let Ok(msg) = serde_json::from_str::<GmailMessage>(trimmed) {
+                all_results.push(msg);
+            }
+        }
+    }
+
+    Ok(all_results)
+}
+
+#[derive(Deserialize)]
+struct MessagesListResponse {
+    messages: Option<Vec<MessageIdEntry>>,
+    #[serde(rename = "nextPageToken")]
+    next_page_token: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MessageIdEntry {
+    id: String,
+}
+
+pub async fn list_recent_message_ids(
+    access_token: &str,
+    max_results: i32,
+    page_token: Option<&str>,
+) -> Result<(Vec<String>, Option<String>), String> {
+    let client = Client::new();
+    let mut params = vec![("maxResults", max_results.to_string())];
+    if let Some(token) = page_token {
+        params.push(("pageToken", token.to_string()));
+    }
+    let res = client
+        .get(gmail_api_url("/gmail/v1/users/me/messages"))
+        .query(&params)
+        .header("Authorization", format!("Bearer {}", access_token))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !res.status().is_success() {
+        return Err(format!("Gmail API error: {}", res.status()));
+    }
+    let response: MessagesListResponse = res.json().await.map_err(|e| e.to_string())?;
+    let ids = response.messages.unwrap_or_default().into_iter().map(|m| m.id).collect();
+    Ok((ids, response.next_page_token))
+}
+
+fn extract_boundary(content_type: &str) -> Option<String> {
+    for line in content_type.lines() {
+        if let Some(pos) = line.find("boundary=") {
+            let start = pos + 9;
+            let mut end = start;
+            for ch in line[start..].chars() {
+                if ch.is_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+                    end += ch.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            if end > start {
+                return Some(line[start..end].to_string());
+            }
+        }
+    }
+    None
 }
 
 pub async fn get_stale_thread_ids(pool: &SqlitePool, account_id: &str) -> Vec<String> {
@@ -3880,5 +4017,108 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("404"));
+    }
+
+    #[tokio::test]
+    async fn test_batch_fetch_message_metadata_via_mock() {
+        let server = httpmock::MockServer::start();
+
+        let response_body = "\
+--batch_abc\r
+Content-Type: application/http\r
+\r
+HTTP/1.1 200 OK\r
+Content-Type: application/json; charset=UTF-8\r
+\r
+{\"id\":\"msg1\",\"threadId\":\"t1\",\"internalDate\":\"1000\",\"payload\":{\"headers\":[{\"name\":\"List-Unsubscribe\",\"value\":\"<https://unsub.example.com>\"}]}}\r
+--batch_abc\r
+Content-Type: application/http\r
+\r
+HTTP/1.1 200 OK\r
+Content-Type: application/json; charset=UTF-8\r
+\r
+{\"id\":\"msg2\",\"threadId\":\"t2\",\"internalDate\":\"2000\",\"payload\":{\"headers\":[{\"name\":\"From\",\"value\":\"News <noreply@example.com>\"}]}}\r
+--batch_abc--\r\n";
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/batch/gmail/v1");
+            then.status(200)
+                .header("Content-Type", "multipart/mixed; boundary=batch_abc")
+                .body(response_body);
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = batch_fetch_message_metadata(
+                "fake_token",
+                &vec!["msg1".to_string(), "msg2".to_string()],
+            )
+            .await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok());
+        let messages = result.unwrap();
+        assert_eq!(messages.len(), 2);
+        assert!(messages.iter().any(|m| m.id == "msg1"));
+        assert!(messages.iter().any(|m| m.id == "msg2"));
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn test_batch_fetch_message_metadata_empty_ids() {
+        let server = httpmock::MockServer::start();
+
+        let response_body = "\
+--empty_boundary--\r\n";
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/batch/gmail/v1");
+            then.status(200)
+                .header("Content-Type", "multipart/mixed; boundary=empty_boundary")
+                .body(response_body);
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = batch_fetch_message_metadata("fake_token", &vec![]).await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_ok());
+        let messages = result.unwrap();
+        assert!(messages.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_batch_fetch_message_metadata_api_error() {
+        let server = httpmock::MockServer::start();
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/batch/gmail/v1");
+            then.status(400).body("Bad Request");
+        });
+
+        let result = {
+            let _guard = MOCK_ENV_LOCK.lock().unwrap();
+            std::env::set_var("TEST_GMAIL_API_BASE", server.base_url());
+            let r = batch_fetch_message_metadata(
+                "fake_token",
+                &vec!["msg1".to_string()],
+            )
+            .await;
+            std::env::remove_var("TEST_GMAIL_API_BASE");
+            r
+        };
+
+        assert!(result.is_err());
+        mock.assert();
     }
 }

@@ -294,6 +294,203 @@ pub async fn scan_subscriptions_inner(
     access_token: &str,
 ) -> Result<ScanResult, String> {
     tracing::info!("Scanning subscriptions for {}", account_id);
+
+    let depth_setting = crate::commands::settings::get_setting_inner(pool, "subscription_scan_depth")
+        .await
+        .unwrap_or_else(|_| "500".to_string());
+    let scan_depth: i32 = depth_setting.parse().unwrap_or(500);
+
+    let mut seen_senders = std::collections::HashSet::new();
+    let mut api_messages_scanned: i64 = 0;
+    let mut api_subscriptions_found = 0;
+
+    if scan_depth > 0 {
+        let provider_type = super::accounts::get_provider_type(pool, account_id).await;
+        tracing::info!("Remote scan provider: {} depth: {}", provider_type, scan_depth);
+
+        if let Some(h) = app_handle {
+            let _ = h.emit("scan-progress", format!("Scanning {} messages from {} server...", scan_depth, provider_type));
+        }
+
+        match provider_type.as_str() {
+            "gmail" => {
+                let mut all_ids: Vec<String> = Vec::new();
+                let mut page_token: Option<String> = None;
+
+                loop {
+                    let (ids, next_token) = match crate::gmail_api::list_recent_message_ids(
+                        access_token,
+                        scan_depth.min(500),
+                        page_token.as_deref(),
+                    )
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(e) => {
+                            tracing::warn!("Gmail list messages failed: {}", e);
+                            break;
+                        }
+                    };
+                    all_ids.extend(ids);
+                    if let Some(h) = app_handle {
+                        let _ = h.emit("scan-progress", format!("Fetched {} message IDs from Gmail", all_ids.len()));
+                    }
+                    page_token = next_token;
+                    if all_ids.len() >= scan_depth as usize || page_token.is_none() {
+                        break;
+                    }
+                }
+
+                all_ids.truncate(scan_depth as usize);
+                tracing::info!("Gmail remote scan: {} message IDs to fetch", all_ids.len());
+
+                let messages = crate::gmail_api::batch_fetch_message_metadata(access_token, &all_ids).await.unwrap_or_default();
+                tracing::info!("Gmail batch fetch returned {} messages", messages.len());
+
+                for gmail_msg in &messages {
+                    api_messages_scanned += 1;
+                    if api_messages_scanned % 100 == 0 {
+                        if let Some(h) = app_handle {
+                            let _ = h.emit("scan-progress", format!("Scanned {} messages from Gmail API", api_messages_scanned));
+                        }
+                    }
+
+                    let from = gmail_msg.payload.as_ref()
+                        .and_then(|p| p.headers.as_ref())
+                        .and_then(|h| h.iter().find(|hdr| hdr.name.eq_ignore_ascii_case("From")))
+                        .map(|h| h.value.as_str())
+                        .unwrap_or("");
+                    if from.is_empty() { continue; }
+
+                    if let Some(payload) = &gmail_msg.payload {
+                        if let Some(headers) = &payload.headers {
+                            let header_refs: Vec<(&str, &str)> = headers.iter().map(|h| (h.name.as_str(), h.value.as_str())).collect();
+                            let input = DetectionInput { headers: header_refs, body_plain: None, body_html: None, sender: from };
+                            let result = detect(&input);
+                            if result.is_subscription {
+                                if seen_senders.contains(&result.sender_email) { continue; }
+                                seen_senders.insert(result.sender_email.clone());
+                                let internal_date: i64 = gmail_msg.internal_date.parse().unwrap_or(0);
+                                let _ = sqlx::query(
+                                    "INSERT INTO subscriptions (account_id, sender_email, sender_name, detection_method, detection_details, unsubscribe_url, unsubscribe_mailto, supports_one_click, first_seen, last_seen, message_count)
+                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                                     ON CONFLICT(account_id, sender_email) DO UPDATE SET
+                                        detection_method = excluded.detection_method, detection_details = excluded.detection_details,
+                                        unsubscribe_url = COALESCE(excluded.unsubscribe_url, subscriptions.unsubscribe_url),
+                                        unsubscribe_mailto = COALESCE(excluded.unsubscribe_mailto, subscriptions.unsubscribe_mailto),
+                                        supports_one_click = MAX(subscriptions.supports_one_click, excluded.supports_one_click),
+                                        message_count = message_count + 1, last_seen = MAX(subscriptions.last_seen, excluded.last_seen)"
+                                )
+                                .bind(account_id).bind(&result.sender_email).bind(&result.sender_name)
+                                .bind(result.methods.join(", ")).bind(&result.details)
+                                .bind(&result.unsubscribe_url).bind(&result.unsubscribe_mailto)
+                                .bind(if result.supports_one_click { 1 } else { 0 })
+                                .bind(internal_date).bind(internal_date)
+                                .execute(pool).await;
+                                api_subscriptions_found += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            "imap" => {
+                match crate::provider::imap::operations::imap_remote_scan(pool, account_id, scan_depth).await {
+                    Ok(headers) => {
+                        tracing::info!("IMAP remote scan returned {} messages", headers.len());
+                        for hdr in &headers {
+                            api_messages_scanned += 1;
+                            if api_messages_scanned % 100 == 0 {
+                                if let Some(h) = app_handle {
+                                    let _ = h.emit("scan-progress", format!("Scanned {} messages from IMAP server", api_messages_scanned));
+                                }
+                            }
+                            let header_refs: Vec<(&str, &str)> = hdr.headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+                            let input = DetectionInput { headers: header_refs, body_plain: None, body_html: None, sender: &hdr.sender };
+                            let result = detect(&input);
+                            if result.is_subscription {
+                                if seen_senders.contains(&result.sender_email) { continue; }
+                                seen_senders.insert(result.sender_email.clone());
+                                let _ = sqlx::query(
+                                    "INSERT INTO subscriptions (account_id, sender_email, sender_name, detection_method, detection_details, unsubscribe_url, unsubscribe_mailto, supports_one_click, first_seen, last_seen, message_count)
+                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                                     ON CONFLICT(account_id, sender_email) DO UPDATE SET
+                                        detection_method = excluded.detection_method, detection_details = excluded.detection_details,
+                                        unsubscribe_url = COALESCE(excluded.unsubscribe_url, subscriptions.unsubscribe_url),
+                                        unsubscribe_mailto = COALESCE(excluded.unsubscribe_mailto, subscriptions.unsubscribe_mailto),
+                                        supports_one_click = MAX(subscriptions.supports_one_click, excluded.supports_one_click),
+                                        message_count = message_count + 1, last_seen = MAX(subscriptions.last_seen, excluded.last_seen)"
+                                )
+                                .bind(account_id).bind(&result.sender_email).bind(&result.sender_name)
+                                .bind(result.methods.join(", ")).bind(&result.details)
+                                .bind(&result.unsubscribe_url).bind(&result.unsubscribe_mailto)
+                                .bind(if result.supports_one_click { 1 } else { 0 })
+                                .bind(hdr.date).bind(hdr.date)
+                                .execute(pool).await;
+                                api_subscriptions_found += 1;
+                            }
+                        }
+                    }
+                    Err(e) => tracing::warn!("IMAP remote scan failed: {}", e),
+                }
+            }
+            "outlook" => {
+                let mut skip = 0;
+                loop {
+                    match crate::outlook_api::list_outlook_messages_with_headers(access_token, scan_depth.min(500), skip).await {
+                        Ok((messages, next_skip)) => {
+                            tracing::info!("Outlook list returned {} messages (skip={})", messages.len(), skip);
+                            for msg in &messages {
+                                api_messages_scanned += 1;
+                                if api_messages_scanned % 100 == 0 {
+                                    if let Some(h) = app_handle {
+                                        let _ = h.emit("scan-progress", format!("Scanned {} messages from Outlook server", api_messages_scanned));
+                                    }
+                                }
+                                let header_refs: Vec<(&str, &str)> = msg.headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+                                let sender = format!("{} <{}>", msg.from_name.as_deref().unwrap_or(""), msg.from_address.as_deref().unwrap_or(""));
+                                let input = DetectionInput { headers: header_refs, body_plain: None, body_html: None, sender: &sender };
+                                let result = detect(&input);
+                                if result.is_subscription {
+                                    if seen_senders.contains(&result.sender_email) { continue; }
+                                    seen_senders.insert(result.sender_email.clone());
+                                    let internal_date: i64 = msg.received_date_time.parse().unwrap_or(0);
+                                    let _ = sqlx::query(
+                                        "INSERT INTO subscriptions (account_id, sender_email, sender_name, detection_method, detection_details, unsubscribe_url, unsubscribe_mailto, supports_one_click, first_seen, last_seen, message_count)
+                                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                                         ON CONFLICT(account_id, sender_email) DO UPDATE SET
+                                            detection_method = excluded.detection_method, detection_details = excluded.detection_details,
+                                            unsubscribe_url = COALESCE(excluded.unsubscribe_url, subscriptions.unsubscribe_url),
+                                            unsubscribe_mailto = COALESCE(excluded.unsubscribe_mailto, subscriptions.unsubscribe_mailto),
+                                            supports_one_click = MAX(subscriptions.supports_one_click, excluded.supports_one_click),
+                                            message_count = message_count + 1, last_seen = MAX(subscriptions.last_seen, excluded.last_seen)"
+                                    )
+                                    .bind(account_id).bind(&result.sender_email).bind(&result.sender_name)
+                                    .bind(result.methods.join(", ")).bind(&result.details)
+                                    .bind(&result.unsubscribe_url).bind(&result.unsubscribe_mailto)
+                                    .bind(if result.supports_one_click { 1 } else { 0 })
+                                    .bind(internal_date).bind(internal_date)
+                                    .execute(pool).await;
+                                    api_subscriptions_found += 1;
+                                }
+                            }
+                            if next_skip.is_none() || api_messages_scanned >= scan_depth as i64 { break; }
+                            skip = next_skip.unwrap();
+                        }
+                        Err(e) => {
+                            tracing::warn!("Outlook remote scan failed: {}", e);
+                            break;
+                        }
+                    }
+                }
+            }
+            _ => {
+                tracing::info!("No remote scan available for provider '{}'", provider_type);
+            }
+        }
+
+        tracing::info!("Remote scan complete: {} scanned, {} subscriptions found", api_messages_scanned, api_subscriptions_found);
+    }
+
     #[derive(sqlx::FromRow)]
     #[allow(dead_code)]
     struct MsgRow {
@@ -336,6 +533,11 @@ pub async fn scan_subscriptions_inner(
         let result = detect(&input);
 
         if result.is_subscription {
+            if seen_senders.contains(&result.sender_email) {
+                continue;
+            }
+            seen_senders.insert(result.sender_email.clone());
+
             let insert_result = sqlx::query(
                 "INSERT INTO subscriptions (account_id, sender_email, sender_name, detection_method, detection_details, unsubscribe_url, unsubscribe_mailto, supports_one_click, first_seen, last_seen, message_count)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
@@ -502,8 +704,8 @@ pub async fn scan_subscriptions_inner(
     }
 
     Ok(ScanResult {
-        messages_scanned,
-        subscriptions_found,
+        messages_scanned: api_messages_scanned + messages_scanned,
+        subscriptions_found: api_subscriptions_found + subscriptions_found,
         subscriptions_updated,
         enriched,
     })
@@ -745,6 +947,71 @@ mod tests {
         };
         let json = serde_json::to_string(&scan_result).unwrap();
         assert!(json.contains("messages_scanned"));
+    }
+
+    #[tokio::test]
+    async fn test_scan_respects_depth_setting() {
+        let pool = setup_test_db().await;
+
+        crate::commands::settings::update_setting_inner(&pool, "subscription_scan_depth", "0").await.unwrap();
+
+        insert_account(&pool, "acc1", "user@gmail.com", "User", 1, 1000).await;
+        insert_thread(&pool, "thread1", "acc1").await;
+        insert_message(&pool, "msg1", "thread1", "acc1", "newsletter@example.com", "user@gmail.com", "Newsletter", 1000).await;
+
+        sqlx::query("UPDATE messages SET body_html = '<html><body><a href=\"https://example.com/unsubscribe\">unsubscribe</a></body></html>' WHERE id = 'msg1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let result = scan_subscriptions_inner(None, &pool, "acc1", "fake_token").await.unwrap();
+
+        assert_eq!(result.messages_scanned, 1);
+        assert_eq!(result.subscriptions_found, 1);
+    }
+
+    #[tokio::test]
+    async fn test_scan_skips_already_detected_senders() {
+        let pool = setup_test_db().await;
+
+        crate::commands::settings::update_setting_inner(&pool, "subscription_scan_depth", "0").await.unwrap();
+
+        insert_account(&pool, "acc1", "user@gmail.com", "User", 1, 1000).await;
+        insert_thread(&pool, "thread1", "acc1").await;
+        insert_message(&pool, "msg1", "thread1", "acc1", "newsletter@example.com", "user@gmail.com", "Newsletter", 1000).await;
+
+        sqlx::query("UPDATE messages SET body_html = '<html><body><a href=\"https://example.com/unsubscribe\">unsubscribe</a></body></html>' WHERE id = 'msg1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Pre-insert an existing subscription so the UPSERT updates it rather than inserts
+        sqlx::query(
+            "INSERT INTO subscriptions (account_id, sender_email, sender_name, detection_method, first_seen, last_seen, status) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind("acc1")
+        .bind("newsletter@example.com")
+        .bind("Newsletter")
+        .bind("user_corrected")
+        .bind(1000)
+        .bind(2000)
+        .bind("active")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let result = scan_subscriptions_inner(None, &pool, "acc1", "fake_token").await.unwrap();
+
+        assert_eq!(result.messages_scanned, 1);
+
+        // Verify no duplicate subscription was created
+        let count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM subscriptions WHERE sender_email = 'newsletter@example.com' AND account_id = 'acc1'"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count.0, 1);
     }
 
     #[tokio::test]

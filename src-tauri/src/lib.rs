@@ -190,6 +190,7 @@ pub fn run() {
             commands::action_items::dismiss_action_item,
             commands::action_items::delete_action_items_by_thread,
             commands::action_items::get_action_counts,
+            commands::feed::get_feed_threads,
             commands::contacts::create_contact,
             commands::contacts::get_contact,
             commands::contacts::get_contacts,
@@ -224,6 +225,8 @@ pub fn run() {
             rustymail_premium::commands::llm::ai_smart_replies,
             #[cfg(feature = "premium")]
             rustymail_premium::commands::llm::ai_extract_actions,
+            #[cfg(feature = "premium")]
+            rustymail_premium::commands::llm::ai_analyze_sentiment,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

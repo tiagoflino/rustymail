@@ -299,7 +299,7 @@ pub async fn fetch_and_store_outlook_folders(
 // 2. Delta sync
 // ---------------------------------------------------------------------------
 
-fn parse_received_datetime(dt_str: &str) -> i64 {
+pub fn parse_received_datetime(dt_str: &str) -> i64 {
     chrono::DateTime::parse_from_rfc3339(dt_str)
         .map(|d| d.timestamp_millis())
         .unwrap_or(0)
@@ -695,6 +695,115 @@ pub async fn fetch_outlook_message_body(
     .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 3b. List messages with internet message headers
+// ---------------------------------------------------------------------------
+
+pub struct OutlookMessageHeader {
+    pub id: String,
+    pub from_name: Option<String>,
+    pub from_address: Option<String>,
+    pub subject: String,
+    pub received_date_time: String,
+    pub headers: Vec<(String, String)>,
+}
+
+#[derive(Deserialize)]
+struct OutlookMessageListResponse {
+    value: Vec<OutlookMessageEntry>,
+    #[serde(rename = "@odata.nextLink")]
+    next_link: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct OutlookMessageEntry {
+    id: String,
+    from: Option<GraphEmailAddress>,
+    subject: Option<String>,
+    #[serde(rename = "receivedDateTime")]
+    received_date_time: Option<String>,
+    #[serde(rename = "internetMessageHeaders")]
+    internet_message_headers: Option<Vec<GraphHeader>>,
+}
+
+#[derive(Deserialize)]
+struct GraphHeader {
+    name: Option<String>,
+    value: Option<String>,
+}
+
+fn extract_next_skip(next_link: &str) -> Option<i32> {
+    let query = next_link.split('?').nth(1)?;
+    for pair in query.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        if parts.next()? == "$skip" {
+            return parts.next()?.parse::<i32>().ok();
+        }
+    }
+    None
+}
+
+pub async fn list_outlook_messages_with_headers(
+    access_token: &str,
+    top: i32,
+    skip: i32,
+) -> Result<(Vec<OutlookMessageHeader>, Option<i32>), String> {
+    let client = Client::new();
+    let path = format!(
+        "/v1.0/me/messages?$top={}&$skip={}&$select=id,from,subject,receivedDateTime,internetMessageHeaders",
+        top, skip
+    );
+    let res = graph_request(&client, reqwest::Method::GET, &path, access_token)
+        .send()
+        .await
+        .map_err(|e| format!("Outlook list messages failed: {}", e))?;
+
+    if !res.status().is_success() {
+        return Err(format!("Failed to list Outlook messages: {}", res.status()));
+    }
+
+    let list_resp: OutlookMessageListResponse = res.json().await.map_err(|e| e.to_string())?;
+
+    let messages: Vec<OutlookMessageHeader> = list_resp
+        .value
+        .into_iter()
+        .map(|entry| {
+            let headers = entry
+                .internet_message_headers
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|h| {
+                    let name = h.name?;
+                    let value = h.value?;
+                    Some((name, value))
+                })
+                .collect();
+
+            OutlookMessageHeader {
+                id: entry.id,
+                from_name: entry
+                    .from
+                    .as_ref()
+                    .and_then(|f| f.email_address.name.clone()),
+                from_address: entry
+                    .from
+                    .as_ref()
+                    .and_then(|f| f.email_address.address.clone()),
+                subject: entry.subject.unwrap_or_default(),
+                received_date_time: entry.received_date_time.unwrap_or_default(),
+                headers,
+            }
+        })
+        .collect();
+
+    let next_skip = list_resp
+        .next_link
+        .as_ref()
+        .and_then(|link| extract_next_skip(link));
+
+    Ok((messages, next_skip))
 }
 
 // ---------------------------------------------------------------------------
@@ -2479,5 +2588,133 @@ mod tests {
         assert_eq!(created.summary.as_deref(), Some("New Meeting"));
 
         std::env::remove_var("TEST_GRAPH_API_BASE");
+    }
+
+    #[tokio::test]
+    async fn test_list_outlook_messages_with_headers_via_mock() {
+        let _guard = MOCK_ENV_LOCK.lock().unwrap();
+        let server = httpmock::MockServer::start();
+        std::env::set_var(
+            "TEST_GRAPH_API_BASE",
+            format!("http://{}", server.address()),
+        );
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/v1.0/me/messages");
+            then.status(200)
+                .header("Content-Type", "application/json")
+                .body(
+                    r#"{
+                    "value": [
+                        {
+                            "id": "msg1",
+                            "from": {"emailAddress": {"name": "Newsletter", "address": "newsletter@example.com"}},
+                            "subject": "Weekly Update",
+                            "receivedDateTime": "2024-01-15T10:30:00Z",
+                            "internetMessageHeaders": [
+                                {"name": "List-Unsubscribe", "value": "<https://unsub.example.com>"},
+                                {"name": "From", "value": "Newsletter <noreply@example.com>"}
+                            ]
+                        },
+                        {
+                            "id": "msg2",
+                            "from": {"emailAddress": {"name": "Support", "address": "support@example.com"}},
+                            "subject": "Your Ticket",
+                            "receivedDateTime": "2024-01-16T12:00:00Z",
+                            "internetMessageHeaders": [
+                                {"name": "From", "value": "Support <support@example.com>"}
+                            ]
+                        }
+                    ],
+                    "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/messages?$skip=500"
+                }"#,
+                );
+        });
+
+        let (messages, next_skip) =
+            list_outlook_messages_with_headers("test-token", 100, 0)
+                .await
+                .unwrap();
+
+        mock.assert();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].id, "msg1");
+        assert_eq!(messages[0].from_name.as_deref(), Some("Newsletter"));
+        assert_eq!(messages[0].from_address.as_deref(), Some("newsletter@example.com"));
+        assert_eq!(messages[0].subject, "Weekly Update");
+        assert!(messages[0].headers.iter().any(|(k, v)| k == "List-Unsubscribe"));
+        assert_eq!(next_skip, Some(500));
+
+        std::env::remove_var("TEST_GRAPH_API_BASE");
+    }
+
+    #[tokio::test]
+    async fn test_list_outlook_messages_with_headers_empty() {
+        let _guard = MOCK_ENV_LOCK.lock().unwrap();
+        let server = httpmock::MockServer::start();
+        std::env::set_var(
+            "TEST_GRAPH_API_BASE",
+            format!("http://{}", server.address()),
+        );
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/v1.0/me/messages");
+            then.status(200)
+                .header("Content-Type", "application/json")
+                .body(r#"{"value": []}"#);
+        });
+
+        let (messages, next_skip) =
+            list_outlook_messages_with_headers("test-token", 100, 0)
+                .await
+                .unwrap();
+
+        mock.assert();
+        assert!(messages.is_empty());
+        assert!(next_skip.is_none());
+
+        std::env::remove_var("TEST_GRAPH_API_BASE");
+    }
+
+    #[tokio::test]
+    async fn test_list_outlook_messages_with_headers_api_error() {
+        let _guard = MOCK_ENV_LOCK.lock().unwrap();
+        let server = httpmock::MockServer::start();
+        std::env::set_var(
+            "TEST_GRAPH_API_BASE",
+            format!("http://{}", server.address()),
+        );
+
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/v1.0/me/messages");
+            then.status(401).body("Unauthorized");
+        });
+
+        let result = list_outlook_messages_with_headers("bad-token", 100, 0).await;
+
+        assert!(result.is_err());
+        mock.assert();
+
+        std::env::remove_var("TEST_GRAPH_API_BASE");
+    }
+
+    #[test]
+    fn test_extract_next_skip() {
+        assert_eq!(
+            extract_next_skip("https://graph.microsoft.com/v1.0/me/messages?$skip=500"),
+            Some(500)
+        );
+        assert_eq!(
+            extract_next_skip("https://graph.microsoft.com/v1.0/me/messages?$top=100&$skip=200"),
+            Some(200)
+        );
+        assert_eq!(
+            extract_next_skip("https://graph.microsoft.com/v1.0/me/messages?$top=100"),
+            None
+        );
+        assert_eq!(extract_next_skip("no-query"), None);
     }
 }

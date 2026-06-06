@@ -11,6 +11,7 @@
     iconCalendar,
     iconSnooze,
     iconSubscriptions,
+    iconNewspaper,
   } from "$lib/components/icons";
   import { isSyncing, lastSyncError } from "$lib/stores/threads";
   import { buildLabelTree, type LabelTreeNode } from "$lib/utils/labelTree";
@@ -55,11 +56,13 @@
     ontogglecontacts?: () => void;
     ontoggleactions?: () => void;
     actionsBadge?: number;
+    onfeed?: () => void;
     onsettings: () => void;
     ontogglecollapse: () => void;
     onselectlabel: (labelId: string) => void;
     onswitchaccount: (accountId: string) => void;
     onaddaccount: () => void;
+    hasSubscriptions?: boolean;
   }
 
   let {
@@ -86,11 +89,13 @@
     ontogglesubscriptions,
     ontogglecontacts,
     ontoggleactions,
+    onfeed,
     onsettings,
     ontogglecollapse,
     onselectlabel,
     onswitchaccount,
     onaddaccount,
+    hasSubscriptions = false,
   }: Props = $props();
 
   let showAccountDropdown = $state(false);
@@ -321,6 +326,20 @@
           {#if actionsBadge > 0}<span class="badge">{actionsBadge}</span>{/if}
         </div>
       </li>
+      {#if hasSubscriptions}
+        <li>
+          <div
+            class="sidebar-item {$selectedLabelId === 'FEED' ? 'active' : ''}"
+            role="button"
+            tabindex="0"
+            onclick={() => onfeed?.()}
+            onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") onfeed?.(); }}
+          >
+            <span class="icon">{@html iconNewspaper}</span>
+            <span class="label-text">Feed</span>
+          </div>
+        </li>
+      {/if}
     </ul>
 
     {#snippet labelTreeNode(nodes: LabelTreeNode[], depth: number)}
