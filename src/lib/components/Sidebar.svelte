@@ -12,6 +12,7 @@
     iconSnooze,
     iconSubscriptions,
     iconNewspaper,
+    iconMute,
   } from "$lib/components/icons";
   import { isSyncing, lastSyncError } from "$lib/stores/threads";
   import { buildLabelTree, type LabelTreeNode } from "$lib/utils/labelTree";
@@ -225,7 +226,8 @@
             { id: 'UNIFIED_SENT', name: 'SENT', display: 'Sent' },
             { id: 'UNIFIED_DRAFT', name: 'DRAFT', display: 'Drafts' },
             { id: 'UNIFIED_TRASH', name: 'TRASH', display: 'Trash' },
-            { id: 'UNIFIED_SNOOZED', name: 'SNOOZED', display: 'Snoozed' }
+            { id: 'UNIFIED_SNOOZED', name: 'SNOOZED', display: 'Snoozed' },
+            { id: 'UNIFIED_MUTED', name: 'MUTED', display: 'Muted' }
           ] as uLabel}
             <li>
               <div

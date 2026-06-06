@@ -87,8 +87,11 @@
     onbatchstar: (ids: string[], starred: boolean) => void;
     onbatchsnooze: (ids: string[], until: number) => void;
     onbatchunsnooze: (ids: string[]) => void;
+    onbatchmute?: (ids: string[], until: number | null) => void;
+    onbatchunmute?: (ids: string[]) => void;
     onbatchmovetolabel: (ids: string[], labelId: string) => void;
     isSnoozedView?: boolean;
+    isMutedView?: boolean;
     isTrashView?: boolean;
     hasSuperstars?: boolean;
     hasImportant?: boolean;
@@ -129,6 +132,8 @@
     onbatchstar,
     onbatchsnooze,
     onbatchunsnooze,
+    onbatchmute,
+    onbatchunmute,
     onbatchmovetolabel,
     isSnoozedView = false,
     isTrashView = false,
@@ -441,6 +446,17 @@
             <button class="bulk-action" title="Snooze" onclick={() => onbatchsnooze([...$selectedThreadIds], 0)}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
             </button>
+          {/if}
+          {#if onbatchmute && onbatchunmute}
+            {#if isMutedView}
+              <button class="bulk-action" title="Unmute" onclick={() => onbatchunmute([...$selectedThreadIds])}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 010 14.14"/><path d="M15.54 8.46a5 5 0 010 7.07"/></svg>
+              </button>
+            {:else}
+              <button class="bulk-action" title="Mute" onclick={() => onbatchmute([...$selectedThreadIds], null)}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+              </button>
+            {/if}
           {/if}
           <button class="bulk-action" title="Move to Label" onclick={() => onbatchmovetolabel([...$selectedThreadIds], '')}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
