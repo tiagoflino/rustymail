@@ -9,6 +9,8 @@ mod gmail_api;
 pub mod outlook_api;
 mod page_token_store;
 pub mod provider;
+mod embedding_scheduler;
+mod semantic_search;
 mod subscription_detector;
 mod tray;
 
@@ -156,6 +158,8 @@ pub fn run() {
             commands::search::get_hydration_progress,
             commands::search::get_search_suggestions,
             commands::search::save_recent_search,
+            commands::semantic::semantic_search_query,
+            commands::semantic::get_embedding_status,
             commands::compose::send_message,
             commands::compose::save_draft,
             commands::compose::delete_draft,
