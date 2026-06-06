@@ -37,6 +37,7 @@
   import Subscriptions from "$lib/components/Subscriptions.svelte";
   import FeedView from "$lib/components/FeedView.svelte";
   import Contacts from "$lib/components/Contacts.svelte";
+  import ActionsView from "$lib/components/ActionsView.svelte";
   import Toasts from "$lib/components/Toasts.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import ThreadList from "$lib/components/ThreadList.svelte";
@@ -106,13 +107,14 @@
   let isLoadingThreads = $state(false);
   let showCompose = $state(false);
   let showCommandPalette = $state(false);
-  let viewMode = $state<"mail" | "calendar" | "subscriptions" | "contacts">("mail");
+  let viewMode = $state<"mail" | "calendar" | "subscriptions" | "contacts" | "actions">("mail");
   let imapConnectionStates = $state<Record<string, string>>({});
   let snoozePopoverOpen = $state(false);
   let batchSnoozeOpen = $state(false);
   let labelPickerOpen = $state(false);
   let snoozedCount = $state(0);
   let scheduledCount = $state(0);
+  let pendingActionsCount = $state(0);
   let hasSubscriptions = $state(false);
 
   let isMacOS = $state(false);
@@ -378,6 +380,7 @@
       await checkSnoozedThreads();
       await checkScheduledSends();
       await refreshScheduledCount();
+      refreshActionsBadge();
       await loadSubscriptionCount();
 
       // Snoozed/Scheduled are virtual labels — skip Gmail sync, just reload local data
@@ -1347,6 +1350,13 @@
     } catch {}
   }
 
+  async function refreshActionsBadge() {
+    try {
+      const items = await invoke<any[]>("get_action_items", { status: "pending" });
+      pendingActionsCount = items.length;
+    } catch { pendingActionsCount = 0; }
+  }
+
   async function loadSubscriptionCount() {
     try {
       const subs = await invoke<Array<{ id: number; sender_email: string }>>("get_subscriptions", { accountId: null as string | null, status: "active" });
@@ -1758,6 +1768,7 @@
       await checkAndSetupSync();
       await checkScheduledSends();
       await refreshScheduledCount();
+      refreshActionsBadge();
       await loadSubscriptionCount();
 
       // Load available superstars
@@ -2031,6 +2042,7 @@
       {selectedLabelId}
       snoozedCount={snoozedCount}
       scheduledCount={scheduledCount}
+      actionsBadge={pendingActionsCount}
       oncompose={() => openCompose()}
       onsync={() => performSync(true)}
       onthemecycle={cycleTheme}
@@ -2039,6 +2051,7 @@
       ontogglecalendar={() => viewMode = viewMode === "calendar" ? "mail" : "calendar"}
       ontogglesubscriptions={() => viewMode = viewMode === "subscriptions" ? "mail" : "subscriptions"}
       ontogglecontacts={() => { viewMode = viewMode === "contacts" ? "mail" : "contacts"; }}
+      ontoggleactions={() => { viewMode = viewMode === "actions" ? "mail" : "actions"; }}
       onfeed={() => selectLabel('FEED')}
       {hasSubscriptions}
       onsettings={() => (showSettings = true)}
@@ -2134,6 +2147,12 @@
       <Subscriptions accountId={activeAccount?.id ?? ""} {isMacOS} onselectsubscription={handleSelectSubscription} />
     {:else if viewMode === "contacts"}
       <Contacts />
+    {:else if viewMode === "actions"}
+      <ActionsView
+        accountId={activeAccount?.id ?? undefined}
+        {isMacOS}
+        onselectthread={(threadId) => { viewMode = "mail"; selectThread(threadId); }}
+      />
     {/if}
   </div>
 

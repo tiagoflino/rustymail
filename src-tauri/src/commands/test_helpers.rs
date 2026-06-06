@@ -6,6 +6,7 @@ pub async fn setup_test_db() -> SqlitePool {
     let options = SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
     let pool = SqlitePool::connect_with(options).await.unwrap();
     crate::db::apply_schema(&pool).await.unwrap();
+    crate::db::m022_create_action_items(&pool).await.unwrap();
     pool
 }
 

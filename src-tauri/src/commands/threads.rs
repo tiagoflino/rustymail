@@ -17,6 +17,7 @@ pub struct LocalThread {
     pub has_attachments: bool,
     pub important: bool,
     pub account_id: String,
+    pub action_count: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -73,6 +74,7 @@ pub(crate) async fn get_threads_inner(
         star_type: Option<String>,
         has_attachments: Option<i32>,
         important: Option<i32>,
+        action_count: Option<i32>,
         account_id: String,
     }
 
@@ -89,6 +91,7 @@ pub(crate) async fn get_threads_inner(
                  LIMIT 1) as star_type,
                 EXISTS (SELECT 1 FROM messages m6 WHERE m6.thread_id = t.id AND m6.has_attachments = 1) as has_attachments,
                 EXISTS (SELECT 1 FROM thread_labels tl2 WHERE tl2.thread_id = t.id AND tl2.label_id = 'IMPORTANT') as important,
+                (SELECT COUNT(*) FROM action_items ai WHERE ai.thread_id = t.id AND ai.status = 'pending') as action_count,
                 t.account_id
          FROM threads t
     "#;
@@ -225,6 +228,7 @@ pub(crate) async fn get_threads_inner(
             star_type: r.star_type,
             has_attachments: r.has_attachments.unwrap_or(0) == 1,
             important: r.important.unwrap_or(0) == 1,
+            action_count: r.action_count.unwrap_or(0),
             account_id: r.account_id,
         })
         .collect())
@@ -422,6 +426,7 @@ pub(crate) async fn get_unified_threads_inner(
         star_type: Option<String>,
         has_attachments: Option<i32>,
         important: Option<i32>,
+        action_count: Option<i32>,
         account_id: String,
     }
 
@@ -437,6 +442,7 @@ pub(crate) async fn get_unified_threads_inner(
                  LIMIT 1) as star_type,
                 EXISTS (SELECT 1 FROM messages m6 WHERE m6.thread_id = t.id AND m6.has_attachments = 1) as has_attachments,
                 EXISTS (SELECT 1 FROM thread_labels tl2 WHERE tl2.thread_id = t.id AND tl2.label_id = 'IMPORTANT') as important,
+                (SELECT COUNT(*) FROM action_items ai WHERE ai.thread_id = t.id AND ai.status = 'pending') as action_count,
                 t.account_id
          FROM threads t
     "#;
@@ -577,6 +583,7 @@ pub(crate) async fn get_unified_threads_inner(
             star_type: r.star_type,
             has_attachments: r.has_attachments.unwrap_or(0) == 1,
             important: r.important.unwrap_or(0) == 1,
+            action_count: r.action_count.unwrap_or(0),
             account_id: r.account_id,
         })
         .collect())
@@ -907,6 +914,7 @@ pub(crate) async fn fetch_threads_by_ids(
                  LIMIT 1) as star_type,
                 EXISTS (SELECT 1 FROM messages m6 WHERE m6.thread_id = t.id AND m6.has_attachments = 1) as has_attachments,
                 EXISTS (SELECT 1 FROM thread_labels tl2 WHERE tl2.thread_id = t.id AND tl2.label_id = 'IMPORTANT') as important,
+                (SELECT COUNT(*) FROM action_items ai WHERE ai.thread_id = t.id AND ai.status = 'pending') as action_count,
                 t.account_id
          FROM threads t
          WHERE t.id IN ({}) AND t.account_id = ?
@@ -927,6 +935,7 @@ pub(crate) async fn fetch_threads_by_ids(
         star_type: Option<String>,
         has_attachments: Option<i32>,
         important: Option<i32>,
+        action_count: Option<i32>,
         account_id: String,
     }
 
@@ -951,6 +960,7 @@ pub(crate) async fn fetch_threads_by_ids(
             star_type: r.star_type,
             has_attachments: r.has_attachments.unwrap_or(0) == 1,
             important: r.important.unwrap_or(0) == 1,
+            action_count: r.action_count.unwrap_or(0),
             account_id: r.account_id,
         })
         .collect())

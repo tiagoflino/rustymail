@@ -81,6 +81,7 @@ pub(crate) async fn get_feed_threads_inner(
             has_attachments: r.has_attachments.unwrap_or(0) == 1,
             important: r.important.unwrap_or(0) == 1,
             account_id: r.account_id,
+            action_count: 0,
         })
         .collect())
 }

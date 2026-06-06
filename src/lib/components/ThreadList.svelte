@@ -554,6 +554,9 @@
               <span class="important-icon">{@html thread.important ? iconImportantArrowFilled : iconImportantArrow}</span>
             </button>
             {/if}
+            {#if thread.action_count && thread.action_count > 0}
+              <span class="action-pill" title="{thread.action_count} action item{thread.action_count > 1 ? 's' : ''}">{thread.action_count}</span>
+            {/if}
             <div class="thread-unread-dot"></div>
           </div>
           <div class="thread-content">
@@ -962,6 +965,21 @@
     margin-left: -2px;
     margin-top: 5px;
     pointer-events: none;
+  }
+  .action-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 17px;
+    padding: 0 5px;
+    background: var(--accent-blue);
+    color: white;
+    font-size: 10px;
+    font-weight: 600;
+    border-radius: 8px;
+    flex-shrink: 0;
+    margin-left: 2px;
   }
   .thread-unread-dot {
     width: 8px;

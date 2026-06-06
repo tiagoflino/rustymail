@@ -33,6 +33,7 @@
   let aiPanelOpen = $state(false);
   let smartReplies = $state<string[]>([]);
   let smartRepliesLoading = $state(false);
+  let extractActionsLoading = $state(false);
 
   let expandedMessages = $state(new Set<string>());
   let lastExpandedThreadId: string | null = null;
@@ -104,6 +105,14 @@
     $selectedThreadId;
     aiSummary = null;
     smartReplies = [];
+  });
+
+  $effect(() => {
+    const tid = $selectedThreadId;
+    if (!tid || !aiAvailable) return;
+    invoke("get_setting", { key: "auto_extract_actions" }).then((val: any) => {
+      if (val === "true") handleExtractActions(true);
+    }).catch(() => {});
   });
 
   function formatAiSummary(raw: string): string {
@@ -267,6 +276,24 @@
       addToast(`Smart replies failed: ${e}`, "error", 5000);
     } finally {
       smartRepliesLoading = false;
+    }
+  }
+
+  async function handleExtractActions(silent = false) {
+    if (!$selectedThreadId || extractActionsLoading) return;
+    extractActionsLoading = true;
+    try {
+      await invoke("ensure_ai_ready");
+      const items = await invoke<any[]>("ai_extract_actions", { threadId: $selectedThreadId });
+      if (items && items.length > 0) {
+        addToast(`${items.length} action${items.length > 1 ? 's' : ''} extracted`, "success", 3000);
+      } else if (!silent) {
+        addToast("No actions found in this email", "info", 3000);
+      }
+    } catch (e: any) {
+      addToast(`Action extraction failed: ${e}`, "error", 5000);
+    } finally {
+      extractActionsLoading = false;
     }
   }
 
@@ -751,6 +778,14 @@
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
                 {/if}
                 Quick Replies
+              </button>
+              <button class="ai-bar-btn" onclick={() => handleExtractActions()} disabled={extractActionsLoading}>
+                {#if extractActionsLoading}
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="30 70" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/></circle></svg>
+                {:else}
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+                {/if}
+                Extract Actions
               </button>
             </div>
           {/if}
