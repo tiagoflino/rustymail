@@ -650,14 +650,29 @@
                   <iframe
                     title="Email Body"
                     style="width:100%;height:0;border:none;overflow:hidden;background:#f5f5f5;border-radius:6px;opacity:0;transition:opacity .15s;"
-                    onload={(e) => {
+                    onload={async (e) => {
                       const iframe = e.currentTarget as HTMLIFrameElement;
                       oniframeload(iframe);
                       try {
                         const doc = iframe.contentDocument;
                         if (!doc) return;
                         doc.open();
-                        doc.write('<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light only"><style>body{margin:0;padding:0;background:#f5f5f5;overflow:hidden}html,body{height:auto!important;min-height:0!important}.quote-toggle{display:inline-block;cursor:pointer;padding:2px 8px;margin:4px 0;border-radius:4px;background:rgba(0,0,0,0.06);color:#666;font-size:12px;border:none;line-height:1;font-family:-apple-system,sans-serif}.quote-toggle:hover{background:rgba(0,0,0,0.1)}.quote-hidden{display:none}</style></head><body><div style="max-width:680px;margin:0 auto;padding:12px;">' + msg.body_html + '</div></body></html>');
+
+                        // Apply privacy protections before rendering HTML
+                        let displayHtml = msg.body_html;
+                        try {
+                          const imageMode = await invoke("get_setting", { key: "image_load_mode" });
+                          if (imageMode === "ask" || imageMode === "never") {
+                            displayHtml = await invoke("proxy_remote_images", { html: displayHtml });
+                          }
+                          const blockPixels = await invoke("get_setting", { key: "block_tracking_pixels" });
+                          if (blockPixels === "true") {
+                            const scanResult = await invoke("scan_tracking_content", { html: displayHtml });
+                            displayHtml = scanResult.cleaned_html;
+                          }
+                        } catch (_) { /* if commands not available, render as-is */ }
+
+                        doc.write('<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light only"><style>body{margin:0;padding:0;background:#f5f5f5;overflow:hidden}html,body{height:auto!important;min-height:0!important}.quote-toggle{display:inline-block;cursor:pointer;padding:2px 8px;margin:4px 0;border-radius:4px;background:rgba(0,0,0,0.06);color:#666;font-size:12px;border:none;line-height:1;font-family:-apple-system,sans-serif}.quote-toggle:hover{background:rgba(0,0,0,0.1)}.quote-hidden{display:none}</style></head><body><div style="max-width:680px;margin:0 auto;padding:12px;">' + displayHtml + '</div></body></html>');
                         doc.close();
                         doc.querySelectorAll('.gmail_quote,blockquote').forEach((q: Element) => {
                           if (q.closest('.quote-hidden')) return;

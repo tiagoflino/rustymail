@@ -9,6 +9,7 @@ mod gmail_api;
 pub mod outlook_api;
 mod page_token_store;
 pub mod provider;
+mod image_proxy;
 mod subscription_detector;
 mod tray;
 
@@ -174,6 +175,7 @@ pub fn run() {
             commands::misc::get_log_path,
             commands::misc::get_recent_logs,
             commands::misc::open_log_directory,
+            commands::misc::proxy_remote_images,
             commands::templates::create_template,
             commands::templates::update_template,
             commands::templates::delete_template,

@@ -784,6 +784,35 @@
             </div>
 
             <div class="section">
+              <div class="section-title">Privacy</div>
+              <p class="section-desc">Control tracking protection and remote content loading.</p>
+              <div class="setting-card">
+                <div class="card-row">
+                  <label class="toggle-row">
+                    <div class="toggle-label">
+                      <span class="setting-name">Block Tracking Pixels</span>
+                      <span class="setting-hint">Detect and block invisible 1x1 tracking images, beacons, and read receipts. All detection runs locally.</span>
+                    </div>
+                    <input type="checkbox" class="toggle" checked={settings.block_tracking_pixels !== "false"} onchange={(e) => saveSetting("block_tracking_pixels", e.currentTarget.checked ? "true" : "false")} />
+                  </label>
+                </div>
+                <div class="card-row last">
+                  <div class="setting-row-inline">
+                    <div class="setting-label">
+                      <span class="setting-name">Remote Images</span>
+                      <span class="setting-hint">Control how remote images in emails are loaded</span>
+                    </div>
+                    <div class="option-group">
+                      {#each [["always", "Always Load"], ["ask", "Ask First"], ["never", "Never"]] as [val, label]}
+                        <button class="option-btn {(settings.image_load_mode || 'ask') === val ? 'selected' : ''}" onclick={() => saveSetting("image_load_mode", val)}>{label}</button>
+                      {/each}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="section">
               <div class="section-title">Attachments</div>
               <p class="section-desc">
                 Configure how attachments are handled.
