@@ -784,6 +784,33 @@
             </div>
 
             <div class="section">
+              <div class="section-title">Privacy</div>
+              <p class="section-desc">
+                Control how Rustymail protects your privacy.
+              </p>
+              <div class="setting-card">
+                <div class="card-row">
+                  <label class="toggle-row">
+                    <div class="toggle-label">
+                      <span class="setting-name">Block Tracking Pixels</span>
+                      <span class="setting-hint">Detect and block invisible 1x1 tracking images in emails. Blocks beacons, read receipts, and marketing trackers. All detection runs locally — no data leaves your device.</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      class="toggle"
+                      checked={settings.block_tracking_pixels !== "false"}
+                      onchange={(e) =>
+                        saveSetting(
+                          "block_tracking_pixels",
+                          e.currentTarget.checked ? "true" : "false",
+                        )}
+                    />
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div class="section">
               <div class="section-title">Attachments</div>
               <p class="section-desc">
                 Configure how attachments are handled.
