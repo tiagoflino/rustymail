@@ -1042,11 +1042,38 @@
     isSearching.set(true);
     hasMoreRemote = false;
     try {
-      await invoke("save_recent_search", { query });
-      const results: LocalThread[] = (await invoke("search_messages", {
-        query,
-      })) as LocalThread[];
-      threads.set(results);
+      // Semantic search: queries starting with "? " use natural language
+      if (query.startsWith("? ")) {
+        const nlQuery = query.slice(2);
+        const results: any[] = await invoke("semantic_search_query", {
+          query: nlQuery,
+          limit: 20,
+        });
+        const threadResults: LocalThread[] = results.map((r: any) => ({
+          id: r.thread_id,
+          subject: r.subject,
+          sender: r.sender,
+          snippet: r.snippet + `  [match: ${Math.round(r.score * 100)}%]`,
+          date: "",
+          unread: 0,
+          starred: false,
+          star_type: null,
+          important: false,
+          labels: [],
+          message_count: 0,
+          has_attachments: false,
+          account_id: activeAccount?.id ?? "",
+          history_id: "",
+          internal_date: 0,
+        }));
+        threads.set(threadResults);
+      } else {
+        await invoke("save_recent_search", { query });
+        const results: LocalThread[] = (await invoke("search_messages", {
+          query,
+        })) as LocalThread[];
+        threads.set(results);
+      }
     } catch (e) {
       console.error("Search failed", e);
     } finally {
