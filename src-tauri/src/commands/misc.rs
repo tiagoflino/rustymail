@@ -94,6 +94,13 @@ pub async fn open_log_directory(app_handle: tauri::AppHandle) -> Result<(), Stri
         .map_err(|e| format!("Failed to open directory: {}", e))
 }
 
+#[tauri::command]
+pub async fn proxy_remote_images(html: String) -> Result<String, String> {
+    let (result, count) = crate::image_proxy::block_remote_images(&html);
+    tracing::info!("Blocked {count} remote images in email");
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -334,6 +334,7 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         ("smart_reply_count", "4"),
         ("smart_reply_style", "mixed"),
         ("subscription_scan_depth", "1000"),
+        ("image_load_mode", "ask"),
     ];
     for (key, value) in defaults {
         let _ = sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)")
