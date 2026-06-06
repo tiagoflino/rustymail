@@ -94,6 +94,66 @@ pub async fn open_log_directory(app_handle: tauri::AppHandle) -> Result<(), Stri
         .map_err(|e| format!("Failed to open directory: {}", e))
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+pub struct PrivacyReport {
+    pub total_blocked: i64,
+    pub unique_senders_tracked: i64,
+    pub blocked_this_week: i64,
+    pub top_trackers: Vec<TrackerSender>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+pub struct TrackerSender {
+    pub sender_email: String,
+    pub tracker_count: i64,
+    pub tracker_types: String,
+}
+
+#[tauri::command]
+pub async fn get_privacy_report(app_handle: tauri::AppHandle) -> Result<PrivacyReport, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+
+    let now = chrono::Utc::now().timestamp();
+    let week_ago = now - 7 * 86400;
+
+    let total_blocked: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM tracking_events WHERE account_id = ? AND blocked = 1"
+    ).bind(&account.id).fetch_one(pool.inner()).await.map_err(|e| e.to_string())?;
+
+    let unique_senders: (i64,) = sqlx::query_as(
+        "SELECT COUNT(DISTINCT sender_email) FROM tracking_events WHERE account_id = ?"
+    ).bind(&account.id).fetch_one(pool.inner()).await.map_err(|e| e.to_string())?;
+
+    let blocked_this_week: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM tracking_events WHERE account_id = ? AND blocked = 1 AND detected_at > ?"
+    ).bind(&account.id).bind(week_ago).fetch_one(pool.inner()).await.map_err(|e| e.to_string())?;
+
+    #[derive(sqlx::FromRow)]
+    struct TopTrackerRow {
+        sender_email: String,
+        tracker_count: i64,
+        tracker_types: Option<String>,
+    }
+
+    let top_trackers: Vec<TopTrackerRow> = sqlx::query_as(
+        "SELECT sender_email, COUNT(*) as tracker_count, GROUP_CONCAT(DISTINCT tracker_type) as tracker_types
+         FROM tracking_events WHERE account_id = ? GROUP BY sender_email
+         ORDER BY tracker_count DESC LIMIT 5"
+    ).bind(&account.id).fetch_all(pool.inner()).await.map_err(|e| e.to_string())?;
+
+    Ok(PrivacyReport {
+        total_blocked: total_blocked.0,
+        unique_senders_tracked: unique_senders.0,
+        blocked_this_week: blocked_this_week.0,
+        top_trackers: top_trackers.into_iter().map(|t| TrackerSender {
+            sender_email: t.sender_email,
+            tracker_count: t.tracker_count,
+            tracker_types: t.tracker_types.unwrap_or_default(),
+        }).collect(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -174,6 +174,7 @@ pub fn run() {
             commands::misc::get_log_path,
             commands::misc::get_recent_logs,
             commands::misc::open_log_directory,
+            commands::misc::get_privacy_report,
             commands::templates::create_template,
             commands::templates::update_template,
             commands::templates::delete_template,
