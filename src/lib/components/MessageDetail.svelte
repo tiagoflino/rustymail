@@ -15,6 +15,7 @@
     iconSnooze,
   } from "$lib/components/icons";
   import SnoozePopover from "./SnoozePopover.svelte";
+  import MutePopover from "./MutePopover.svelte";
   import AISummaryPanel from "./AISummaryPanel.svelte";
   import {
     selectedThreadId,
@@ -86,9 +87,12 @@
     }
   });
 
+  let showMutePopover = $state(false);
+
   $effect(() => {
     $selectedThreadId;
     showSnoozePopover = false;
+    showMutePopover = false;
   });
 
   onMount(async () => {
@@ -318,6 +322,7 @@
     isMacOS: boolean;
     isTrashView: boolean;
     isSnoozedView?: boolean;
+    isMutedView?: boolean;
     showSnoozePopover?: boolean;
     onaction: (action: string) => void;
     onreply: (msg: LocalMessage) => void;
@@ -332,6 +337,7 @@
     isMacOS,
     isTrashView,
     isSnoozedView = false,
+    isMutedView = false,
     showSnoozePopover = $bindable(false),
     onaction,
     onreply,
@@ -502,6 +508,38 @@
                   onaction("snooze:" + until);
                 }}
                 onclose={() => showSnoozePopover = false}
+              />
+            </div>
+          </div>
+        {/if}
+      {/if}
+      {#if isMutedView}
+        <button
+          onclick={() => onaction("unmute")}
+          class="toolbar-btn"
+          title="Unmute"
+        >
+          <span class="toolbar-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 010 14.14"/><path d="M15.54 8.46a5 5 0 010 7.07"/></svg></span><span>Unmute</span>
+        </button>
+      {:else}
+        <button
+          onclick={() => showMutePopover = !showMutePopover}
+          class="toolbar-btn"
+          title="Mute (M)"
+          aria-expanded={showMutePopover}
+          aria-haspopup="menu"
+        >
+          <span class="toolbar-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg></span><span>Mute</span>
+        </button>
+        {#if showMutePopover}
+          <div class="snooze-popover-anchor">
+            <div class="snooze-popover-position">
+              <MutePopover
+                onmute={(until) => {
+                  showMutePopover = false;
+                  onaction("mute:" + (until != null ? String(until) : "forever"));
+                }}
+                onclose={() => showMutePopover = false}
               />
             </div>
           </div>

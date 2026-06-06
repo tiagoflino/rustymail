@@ -2217,6 +2217,7 @@
         {isMacOS}
         isTrashView={$selectedLabelId === "TRASH"}
         isSnoozedView={$selectedLabelId === "SNOOZED" || $selectedLabelId === "UNIFIED_SNOOZED"}
+        isMutedView={$selectedLabelId === "MUTED" || $selectedLabelId === "UNIFIED_MUTED"}
         bind:showSnoozePopover={snoozePopoverOpen}
         onaction={executeAction}
         onreply={handleReply}
