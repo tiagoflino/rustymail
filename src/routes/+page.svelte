@@ -47,6 +47,7 @@
   import UpdateModal from "$lib/components/UpdateModal.svelte";
   import LabelPicker from "$lib/components/LabelPicker.svelte";
   import SnoozePopover from "$lib/components/SnoozePopover.svelte";
+  import NewSenderPrompt from "$lib/components/NewSenderPrompt.svelte";
   import { shortcutManager } from "$lib/shortcut-manager";
   import { addToast } from "$lib/stores/toast";
   import { pendingUpdate } from "$lib/utils/updater";
@@ -111,6 +112,7 @@
   let imapConnectionStates = $state<Record<string, string>>({});
   let snoozePopoverOpen = $state(false);
   let batchSnoozeOpen = $state(false);
+  let newSenderPrompt = $state<{ email: string; name?: string } | null>(null);
   let labelPickerOpen = $state(false);
   let snoozedCount = $state(0);
   let scheduledCount = $state(0);
@@ -2141,6 +2143,25 @@
             onclose={() => { labelPickerOpen = false; }}
           />
         </div>
+      {/if}
+
+      {#if newSenderPrompt}
+        <NewSenderPrompt
+          senderEmail={newSenderPrompt.email}
+          senderName={newSenderPrompt.name}
+          onroute={async (routing) => {
+            const email = newSenderPrompt.email;
+            const name = newSenderPrompt.name;
+            newSenderPrompt = null;
+            try {
+              await invoke("set_sender_routing", { senderEmail: email, senderName: name, routing });
+              addToast(`Future emails from ${name || email} will go to ${routing}.`, "info");
+            } catch (e) {
+              addToast(`Failed to set routing: ${e}`, "error", 5000);
+            }
+          }}
+          onclose={() => { newSenderPrompt = null; }}
+        />
       {/if}
     {:else if viewMode === "calendar"}
       <FullCalendar {isMacOS} />
