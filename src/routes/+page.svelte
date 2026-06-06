@@ -384,6 +384,7 @@
       await refreshScheduledCount();
       refreshActionsBadge();
       await loadSubscriptionCount();
+      await checkNewSenders();
 
       // Snoozed/Scheduled are virtual labels — skip Gmail sync, just reload local data
       if (isSnoozedView) {
@@ -1062,6 +1063,28 @@
   function clearSearch() {
     searchQuery.set("");
     loadThreads(true);
+  }
+
+  async function checkNewSenders() {
+    if (!newSenderPrompt) {
+      try {
+        const enabled = await invoke("get_setting", { key: "smart_routing_enabled" });
+        if (enabled !== "true") return;
+        const currentThreads = get(threads);
+        // Check up to 5 most recent senders
+        const checked = new Set<string>();
+        for (const t of currentThreads.slice(0, 5)) {
+          const sender = t.sender?.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/)?.[0];
+          if (!sender || checked.has(sender)) continue;
+          checked.add(sender);
+          const isNew = await invoke("check_new_sender", { senderEmail: sender });
+          if (isNew) {
+            newSenderPrompt = { email: sender, name: t.sender };
+            break; // Show one at a time
+          }
+        }
+      } catch (_) { /* routing not available */ }
+    }
   }
 
   async function handleSelectSubscription(senderEmail: string) {
