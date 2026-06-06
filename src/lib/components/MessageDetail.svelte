@@ -15,6 +15,7 @@
     iconSnooze,
   } from "$lib/components/icons";
   import SnoozePopover from "./SnoozePopover.svelte";
+  import SentimentBadge from "./SentimentBadge.svelte";
   import AISummaryPanel from "./AISummaryPanel.svelte";
   import {
     selectedThreadId,
@@ -33,6 +34,8 @@
   let aiPanelOpen = $state(false);
   let smartReplies = $state<string[]>([]);
   let smartRepliesLoading = $state(false);
+  let sentiment = $state<'urgent' | 'angry' | 'warning' | 'positive' | 'neutral' | 'inquisitive' | null>(null);
+  let urgency = $state<'high' | 'medium' | 'low' | null>(null);
 
   let expandedMessages = $state(new Set<string>());
   let lastExpandedThreadId: string | null = null;
@@ -269,6 +272,27 @@
       smartRepliesLoading = false;
     }
   }
+
+  async function handleSentimentAnalysis() {
+    if (!$selectedThreadId || !aiAvailable) return;
+    try {
+      await invoke("ensure_ai_ready");
+      const result = await invoke("ai_analyze_sentiment", {
+        threadId: $selectedThreadId,
+      });
+      sentiment = result.sentiment;
+      urgency = result.urgency;
+    } catch (_) { /* sentiment not critical — ignore */ }
+  }
+
+  $effect(() => {
+    const tid = $selectedThreadId;
+    if (tid && aiAvailable) {
+      sentiment = null;
+      urgency = null;
+      handleSentimentAnalysis();
+    }
+  });
 
   function toggleMessage(id: string) {
     const next = new Set(expandedMessages);
