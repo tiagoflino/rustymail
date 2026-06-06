@@ -12,6 +12,8 @@ export interface LocalThread {
     star_type?: string | null;
     has_attachments?: boolean;
     important?: boolean;
+    sentiment?: 'urgent' | 'angry' | 'warning' | 'positive' | 'neutral' | 'inquisitive' | null;
+    urgency?: 'high' | 'medium' | 'low' | null;
     account_id: string;
 }
 

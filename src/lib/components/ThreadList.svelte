@@ -15,6 +15,7 @@
   import { selectedThreadId, selectedThreadIds, lastSelectedIndex, toggleThreadSelection, clearSelection, selectAll } from "$lib/stores/messages";
   import { formatTime, decodeEntities } from "$lib/utils/formatters.js";
   import CategoryTabs from "./CategoryTabs.svelte";
+  import SentimentBadge from "./SentimentBadge.svelte";
 
   interface AccountInfo {
     id: string;
@@ -584,6 +585,11 @@
                   {/if}
                 {/if}
                 {thread.sender}
+                {#if thread.sentiment}
+                  <span class="thread-sentiment-dot">
+                    <SentimentBadge sentiment={thread.sentiment} urgency={thread.urgency} compact={true} />
+                  </span>
+                {/if}
               </span>
               <span class="thread-meta">
                 {#if thread.has_attachments}
@@ -1004,6 +1010,12 @@
     align-items: center;
     flex-shrink: 0;
     opacity: 0.6;
+  }
+  .thread-sentiment-dot {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    margin-left: 4px;
   }
   .thread-time {
     font-size: var(--font-size-small);
