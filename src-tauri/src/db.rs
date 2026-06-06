@@ -3,7 +3,7 @@ use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
 use std::str::FromStr;
 use tauri::Manager;
 
-const CURRENT_SCHEMA_VERSION: &str = "3";
+const CURRENT_SCHEMA_VERSION: &str = "4";
 
 pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
     let schema = r#"
@@ -136,6 +136,14 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
         PRIMARY KEY (thread_id, account_id)
     );
 
+    CREATE TABLE IF NOT EXISTS muted_threads (
+        thread_id TEXT NOT NULL,
+        account_id TEXT NOT NULL,
+        muted_until INTEGER,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (thread_id, account_id)
+    );
+
     CREATE TABLE IF NOT EXISTS scheduled_sends (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         account_id TEXT NOT NULL,
@@ -192,6 +200,7 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
     CREATE INDEX IF NOT EXISTS idx_threads_account ON threads(account_id);
     CREATE INDEX IF NOT EXISTS idx_labels_account ON labels(account_id);
     CREATE INDEX IF NOT EXISTS idx_snoozed_account_until ON snoozed_threads(account_id, snoozed_until);
+    CREATE INDEX IF NOT EXISTS idx_muted_account_until ON muted_threads(account_id, muted_until);
     CREATE INDEX IF NOT EXISTS idx_subscriptions_account ON subscriptions(account_id);
     CREATE INDEX IF NOT EXISTS idx_subscriptions_sender ON subscriptions(sender_email);
     CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions(account_id, status);
@@ -694,6 +703,28 @@ async fn m020_add_discovery_columns(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+async fn m022_create_muted_threads(pool: &SqlitePool) -> Result<()> {
+    if !has_table(pool, "muted_threads").await {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS muted_threads (
+                thread_id TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                muted_until INTEGER,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (thread_id, account_id)
+            )"
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_muted_account_until ON muted_threads(account_id, muted_until)"
+        )
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
 async fn m021_add_smart_reply_settings(pool: &SqlitePool) -> Result<()> {
     sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES ('smart_reply_count', '4')")
         .execute(pool).await?;
@@ -894,6 +925,12 @@ pub(crate) async fn run_migrations(pool: &SqlitePool) -> Result<()> {
                 .execute(pool)
                 .await;
         }
+        if has_table(pool, "muted_threads").await {
+            let _ = sqlx::query("INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)")
+                .bind(22i64)
+                .execute(pool)
+                .await;
+        }
         let applied_after: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
             .fetch_all(pool)
             .await
@@ -905,7 +942,7 @@ pub(crate) async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 }
 
 async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()> {
-    for version in 1..=21i64 {
+    for version in 1..=22i64 {
         if !applied.contains(&version) {
             println!("[Migration] Running v{}...", version);
             match version {
@@ -930,6 +967,7 @@ async fn run_pending_migrations(pool: &SqlitePool, applied: &[i64]) -> Result<()
                 19 => m019_add_scopes_version(pool).await?,
                 20 => m020_add_discovery_columns(pool).await?,
                 21 => m021_add_smart_reply_settings(pool).await?,
+                22 => m022_create_muted_threads(pool).await?,
                 _ => {}
             }
             sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
@@ -967,7 +1005,7 @@ mod tests {
         for expected in &[
             "accounts", "attachments", "drafts", "history_state", "labels",
             "message_labels", "messages", "messages_fts", "schema_migrations",
-            "settings", "snoozed_threads", "subscriptions", "templates", "thread_labels", "threads",
+            "muted_threads", "settings", "snoozed_threads", "subscriptions", "templates", "thread_labels", "threads",
         ] {
             assert!(names.contains(expected), "Missing table: {expected}");
         }
@@ -987,7 +1025,7 @@ mod tests {
             "idx_contact_emails_contact", "idx_contact_emails_email", "idx_contacts_account",
             "idx_labels_account", "idx_message_labels_label",
             "idx_messages_account", "idx_messages_internal_date", "idx_messages_thread",
-            "idx_snoozed_account_until",
+            "idx_muted_account_until", "idx_snoozed_account_until",
             "idx_thread_labels_label", "idx_thread_labels_thread", "idx_threads_account",
         ] {
             assert!(names.contains(expected), "Missing index: {expected}");
@@ -1124,7 +1162,7 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations")
             .fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 21);
+        assert_eq!(count, 22);
     }
 
     #[tokio::test]
@@ -1415,6 +1453,158 @@ mod tests {
             .execute(&pool).await;
 
         assert!(dup.is_err(), "Duplicate email should be rejected by unique index");
+    }
+
+    #[tokio::test]
+    async fn test_muted_threads_table_exists_after_schema() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+
+        let result: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='muted_threads'"
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(result.0, 1);
+    }
+
+    #[tokio::test]
+    async fn test_muted_threads_insert_and_query() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+
+        let now = chrono::Utc::now().timestamp();
+        let muted_until = now + 86400; // 24 hours
+
+        sqlx::query(
+            "INSERT INTO muted_threads (thread_id, account_id, muted_until, created_at) VALUES (?, ?, ?, ?)"
+        )
+        .bind("t1").bind("acc1").bind(muted_until).bind(now)
+        .execute(&pool).await.unwrap();
+
+        let row: (String, String, Option<i64>) = sqlx::query_as(
+            "SELECT thread_id, account_id, muted_until FROM muted_threads WHERE thread_id = 't1'"
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(row.0, "t1");
+        assert_eq!(row.1, "acc1");
+        assert_eq!(row.2, Some(muted_until));
+    }
+
+    #[tokio::test]
+    async fn test_muted_threads_forever_mute_null_until() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+
+        let now = chrono::Utc::now().timestamp();
+
+        sqlx::query(
+            "INSERT INTO muted_threads (thread_id, account_id, muted_until, created_at) VALUES (?, ?, NULL, ?)"
+        )
+        .bind("t_forever").bind("acc1").bind(now)
+        .execute(&pool).await.unwrap();
+
+        let muted_until: Option<i64> = sqlx::query_scalar(
+            "SELECT muted_until FROM muted_threads WHERE thread_id = 't_forever'"
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(muted_until, None);
+    }
+
+    #[tokio::test]
+    async fn test_muted_threads_unique_per_account() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+
+        let now = chrono::Utc::now().timestamp();
+
+        sqlx::query(
+            "INSERT INTO muted_threads (thread_id, account_id, muted_until, created_at) VALUES (?, ?, ?, ?)"
+        )
+        .bind("t1").bind("acc1").bind(now + 3600).bind(now)
+        .execute(&pool).await.unwrap();
+
+        let dup = sqlx::query(
+            "INSERT INTO muted_threads (thread_id, account_id, muted_until, created_at) VALUES (?, ?, ?, ?)"
+        )
+        .bind("t1").bind("acc1").bind(now + 7200).bind(now)
+        .execute(&pool).await;
+
+        assert!(dup.is_err(), "Duplicate thread_id+account_id should fail");
+    }
+
+    #[tokio::test]
+    async fn test_muted_threads_find_expired() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+
+        let now = chrono::Utc::now().timestamp();
+
+        // Insert one expired and one active
+        sqlx::query(
+            "INSERT INTO muted_threads (thread_id, account_id, muted_until, created_at) VALUES (?, ?, ?, ?)"
+        ).bind("t_expired").bind("acc1").bind(now - 100).bind(now - 200)
+        .execute(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO muted_threads (thread_id, account_id, muted_until, created_at) VALUES (?, ?, ?, ?)"
+        ).bind("t_active").bind("acc1").bind(now + 3600).bind(now)
+        .execute(&pool).await.unwrap();
+
+        // Forever mute (should not be expired)
+        sqlx::query(
+            "INSERT INTO muted_threads (thread_id, account_id, muted_until, created_at) VALUES (?, ?, NULL, ?)"
+        ).bind("t_forever").bind("acc1").bind(now)
+        .execute(&pool).await.unwrap();
+
+        let expired: Vec<(String,)> = sqlx::query_as(
+            "SELECT thread_id FROM muted_threads WHERE account_id = ? AND muted_until IS NOT NULL AND muted_until <= ?"
+        ).bind("acc1").bind(now)
+        .fetch_all(&pool).await.unwrap();
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].0, "t_expired");
+    }
+
+    #[tokio::test]
+    async fn test_muted_threads_delete() {
+        let pool = test_pool().await;
+        apply_schema(&pool).await.unwrap();
+
+        let now = chrono::Utc::now().timestamp();
+
+        sqlx::query(
+            "INSERT INTO muted_threads (thread_id, account_id, muted_until, created_at) VALUES (?, ?, ?, ?)"
+        ).bind("t1").bind("acc1").bind(now + 3600).bind(now)
+        .execute(&pool).await.unwrap();
+
+        sqlx::query("DELETE FROM muted_threads WHERE thread_id = ? AND account_id = ?")
+            .bind("t1").bind("acc1")
+            .execute(&pool).await.unwrap();
+
+        let count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM muted_threads WHERE thread_id = 't1'"
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(count.0, 0);
+    }
+
+    #[tokio::test]
+    async fn test_migration_022_creates_muted_threads() {
+        let pool = test_pool().await;
+        // Create minimal schema without muted_threads (simulating old DB)
+        sqlx::query("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY, email TEXT, display_name TEXT, avatar_url TEXT, token_expiry INTEGER, is_active INTEGER DEFAULT 1, created_at INTEGER, credential_source TEXT DEFAULT 'builtin', provider_type TEXT DEFAULT 'gmail')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            .execute(&pool).await.unwrap();
+        // Mark 1-21 as done
+        for v in 1..=21i64 {
+            sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
+                .bind(v).execute(&pool).await.unwrap();
+        }
+
+        // Run pending migrations (should apply 22)
+        let applied: Vec<i64> = sqlx::query_scalar("SELECT version FROM schema_migrations")
+            .fetch_all(&pool).await.unwrap();
+        run_pending_migrations(&pool, &applied).await.unwrap();
+
+        assert!(has_table(&pool, "muted_threads").await, "muted_threads table should exist after migration 22");
     }
 
     #[tokio::test]
