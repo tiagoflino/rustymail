@@ -59,9 +59,8 @@
     low: '#8E8E93',
   };
 
-  $derived config = sentiment ? sentimentConfig[sentiment] : null;
-
-  const urgencyColor = urgency ? urgencyConfig[urgency] : null;
+  let config = $derived(sentiment ? sentimentConfig[sentiment] : null);
+  let urgencyColor = $derived(urgency ? urgencyConfig[urgency] : null);
 </script>
 
 {#if config || urgencyColor}
