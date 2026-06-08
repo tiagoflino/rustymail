@@ -52,7 +52,7 @@ jobs:
 
       - name: Check premium build
         if: env.HAS_PREMIUM_KEY == 'true'
-        run: cargo check --manifest-path src-tauri/Cargo.toml --features premium
+        run: cargo check --manifest-path src-tauri/Cargo.toml --features premium-cpu
 
   security:
     runs-on: ubuntu-latest
