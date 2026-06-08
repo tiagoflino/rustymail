@@ -44,10 +44,7 @@ jobs:
           targets: ${{ matrix.target }}
           
       - if: matrix.os == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf cmake
-          # Remove libvulkan-dev if pre-installed — CMake auto-detects it and fails without glslc
-          sudo apt-get remove -y libvulkan-dev 2>/dev/null || true
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf cmake
 
       - if: contains(matrix.os, 'macos')
         run: |
@@ -86,4 +83,4 @@ jobs:
           updaterJsonPreferNsis: true
           releaseDraft: false
           prerelease: false
-          args: --features ${{ contains(matrix.os, 'macos') && 'premium-metal' || 'premium-vulkan' }}
+          args: --features ${{ contains(matrix.os, 'macos') && 'premium-metal' || 'premium-cpu' }}
