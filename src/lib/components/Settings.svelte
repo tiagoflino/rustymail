@@ -77,7 +77,8 @@
   let aiStatus: any = $state(null);
   let aiModelDownloaded = $state(false);
   let aiModelSize = $state('');
-  let aiDevices: Array<{name: string, description: string, backend: string}> = $state([]);
+  let aiDevices: Array<{name: string, description: string, backend: string, is_gpu?: boolean}> = $state([]);
+  let hasGpuDevice = $derived(aiDevices.some(d => d.is_gpu));
   let settingsTemplates = $state<Array<{id: string, name: string, subject: string, body_html: string}>>([]);
   let editingTemplateId = $state<string | null>(null);
   let editingTemplateName = $state('');
@@ -1046,17 +1047,27 @@
                     <span class="setting-name">Model Status</span>
                     <span class="setting-hint">
                       {#if aiStatus === null}
-                        AI features not available
-                      {:else if aiStatus?.Ready != null}
-                        Model loaded ({aiStatus.Ready.model_size_mb} MB, {aiStatus.Ready.n_layers} layers) — {aiStatus.Ready.gpu_offload ? 'GPU accelerated' : 'CPU only'}
-                      {:else if aiStatus === "NotSetUp"}
-                        Model not downloaded — will download on first use (~1.4 GB)
-                      {:else if aiStatus?.Downloading != null}
-                        Downloading... {Math.round(aiStatus.Downloading.progress_pct)}%
-                      {:else if aiStatus === "Loading"}
-                        Loading model...
+                        AI engine not available — premium features are disabled on this build.
                       {:else if aiStatus?.Error != null}
-                        Error: {aiStatus.Error}
+                        <span class="ai-error">Error: {aiStatus.Error}</span>
+                      {:else if aiStatus === "NotSetUp"}
+                        Model not downloaded — will download on first use (~1.5 GB).
+                      {:else if aiStatus?.Downloading != null}
+                        Downloading model... {Math.round(aiStatus.Downloading.progress_pct)}%
+                      {:else if aiStatus === "Loading"}
+                        Loading model into memory...
+                      {:else if aiStatus.Ready != null}
+                        Model loaded: {aiStatus.Ready.model_size_mb} MB, {aiStatus.Ready.n_layers} total layers.
+                        {#if aiStatus.Ready.gpu_offload}
+                          <span class="ai-gpu-active">{aiStatus.Ready.backend || 'GPU'}</span> — {aiStatus.Ready.gpu_layers} layers offloaded.
+                        {:else if hasGpuDevice}
+                          GPU available but model running on CPU.
+                          <span class="ai-hint">Select GPU in Inference Backend below, then reload the model.</span>
+                        {:else}
+                          Running on CPU — no compatible GPU detected on this system.
+                        {/if}
+                      {:else}
+                        Unknown state.
                       {/if}
                     </span>
                   </div>
@@ -1065,15 +1076,45 @@
                 {#if aiDevices.length > 0}
                   <div class="card-row">
                     <div class="setting-label">
-                      <span class="setting-name">Hardware</span>
+                      <span class="setting-name">Detected Hardware</span>
                       <span class="setting-hint">
-                        {#each aiDevices as dev}
-                          {dev.description || dev.name} ({dev.backend}){aiDevices.indexOf(dev) < aiDevices.length - 1 ? ', ' : ''}
+                        {#each aiDevices as dev, i}
+                          <span class="ai-device {dev.is_gpu ? 'ai-device-gpu' : ''}">
+                            {dev.description || dev.name} <span class="ai-device-backend">({dev.backend})</span>
+                          </span>{i < aiDevices.length - 1 ? ', ' : ''}
                         {/each}
                       </span>
                     </div>
                   </div>
                 {/if}
+
+                <div class="card-row">
+                  <div class="setting-row-inline">
+                    <div class="setting-label">
+                      <span class="setting-name">Inference Backend</span>
+                      <span class="setting-hint">
+                        {#if hasGpuDevice}
+                          GPU acceleration significantly improves AI response speed.
+                          Switch to CPU to save power or if you experience instability.
+                        {:else}
+                          No compatible GPU detected. The model will run on CPU.
+                          Performance will be slower but fully functional.
+                        {/if}
+                      </span>
+                    </div>
+                    <div class="option-group">
+                      <button
+                        class="option-btn {(settings.ai_backend || 'gpu') === 'gpu' ? 'selected' : ''} {!hasGpuDevice ? 'option-btn-disabled' : ''}"
+                        disabled={!hasGpuDevice}
+                        onclick={() => saveSetting("ai_backend", "gpu")}
+                      >GPU</button>
+                      <button
+                        class="option-btn {(settings.ai_backend || 'gpu') === 'cpu' || (!hasGpuDevice && (settings.ai_backend || 'gpu') === 'gpu') ? 'selected' : ''}"
+                        onclick={() => saveSetting("ai_backend", "cpu")}
+                      >CPU</button>
+                    </div>
+                  </div>
+                </div>
 
                 <div class="card-row">
                   <div class="setting-row-inline">
@@ -1092,32 +1133,30 @@
                   </div>
                 </div>
 
-                {#if !aiStatus?.Ready?.gpu_offload}
-                  <div class="card-row">
-                    <div class="setting-label">
-                      <span class="setting-name">CPU Thread Limit</span>
-                      <span class="setting-hint">
-                        {settings.ai_threads === "0" || !settings.ai_threads
-                          ? "Auto (use all available cores)"
-                          : `Limited to ${settings.ai_threads} threads`}
-                      </span>
-                    </div>
-                    <div class="slider-row">
-                      <input
-                        type="range"
-                        class="range-slider"
-                        min="0"
-                        max="16"
-                        step="1"
-                        value={parseInt(settings.ai_threads || "0")}
-                        oninput={(e) => saveSetting("ai_threads", e.currentTarget.value)}
-                      />
-                      <span class="slider-value">
-                        {parseInt(settings.ai_threads || "0") === 0 ? "Auto" : settings.ai_threads}
-                      </span>
-                    </div>
+                <div class="card-row">
+                  <div class="setting-label">
+                    <span class="setting-name">CPU Thread Limit</span>
+                    <span class="setting-hint">
+                      {settings.ai_threads === "0" || !settings.ai_threads
+                        ? "Auto (use all available cores)"
+                        : `Limited to ${settings.ai_threads} threads`}
+                    </span>
                   </div>
-                {/if}
+                  <div class="slider-row">
+                    <input
+                      type="range"
+                      class="range-slider"
+                      min="0"
+                      max="16"
+                      step="1"
+                      value={parseInt(settings.ai_threads || "0")}
+                      oninput={(e) => saveSetting("ai_threads", e.currentTarget.value)}
+                    />
+                    <span class="slider-value">
+                      {parseInt(settings.ai_threads || "0") === 0 ? "Auto" : settings.ai_threads}
+                    </span>
+                  </div>
+                </div>
 
                 <div class="card-row">
                   <div class="setting-row-inline">
@@ -2009,4 +2048,12 @@
     font-family: inherit;
     width: 200px;
   }
+  .ai-error { color: #FF3B30; font-weight: 500; }
+  .ai-gpu-active { color: #34C759; font-weight: 600; }
+  .ai-hint { color: var(--text-secondary); font-style: italic; }
+  .ai-device { display: inline; }
+  .ai-device-gpu { font-weight: 600; }
+  .ai-device-backend { color: var(--text-secondary); font-size: 11px; }
+  .option-btn-disabled { opacity: 0.4; cursor: not-allowed; }
+  .option-btn-disabled:hover { background: transparent; }
 </style>

@@ -459,7 +459,17 @@ pub async fn start_oauth_flow(app_handle: tauri::AppHandle) -> Result<(), String
     let account_id = email.clone();
     tracing::info!("OAuth flow completed for {}", account_id);
 
-    crate::credentials::store_tokens(&account_id, &access_token, &refresh_token)?;
+    // Store tokens with a timeout — the keyring can hang if dbus/secret-service
+    // is not responding (e.g., after face-recognition login without keyring unlock).
+    tracing::info!("Storing tokens in keyring for {}", account_id);
+    let aid = account_id.clone();
+    let at = access_token.clone();
+    let rt = refresh_token.clone();
+    match crate::credentials::with_keyring_timeout(move || crate::credentials::store_tokens(&aid, &at, &rt), "store_oauth_tokens").await {
+        Ok(Ok(())) => tracing::info!("Tokens stored successfully in keyring"),
+        Ok(Err(e)) => return Err(e),
+        Err(e) => return Err(e),
+    }
 
     let _ = sqlx::query("UPDATE accounts SET is_active = 0")
         .execute(pool.inner())
@@ -681,7 +691,14 @@ pub(crate) async fn refresh_and_update(
     let expires_in = body["expires_in"].as_i64().unwrap_or(3500);
     let new_expiry = chrono::Utc::now().timestamp() + expires_in;
 
-    crate::credentials::update_access_token(account_id, new_access_token)?;
+    // Update access token with timeout — keyring can hang
+    let aid = account_id.to_string();
+    let nat = new_access_token.to_string();
+    match crate::credentials::with_keyring_timeout(move || crate::credentials::update_access_token(&aid, &nat), "update_access_token").await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(e),
+        Err(e) => return Err(e),
+    }
 
     let http = reqwest::Client::new();
     if let Ok(profile_res) = http
@@ -1154,7 +1171,15 @@ pub async fn start_microsoft_oauth_flow(app_handle: tauri::AppHandle) -> Result<
     let account_id = email.clone();
     tracing::info!("Microsoft OAuth flow completed for {}", account_id);
 
-    crate::credentials::store_tokens(&account_id, &access_token, &refresh_token)?;
+    // Store tokens with timeout — keyring can hang if dbus is not responding
+    let aid = account_id.clone();
+    let at = access_token.clone();
+    let rt = refresh_token.clone();
+    match crate::credentials::with_keyring_timeout(move || crate::credentials::store_tokens(&aid, &at, &rt), "store_ms_tokens").await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(e),
+        Err(e) => return Err(e),
+    }
 
     let pool = app_handle.state::<sqlx::SqlitePool>();
     let _ = sqlx::query("UPDATE accounts SET is_active = 0")
@@ -1223,10 +1248,24 @@ async fn refresh_microsoft_token(
     let expires_in = body["expires_in"].as_i64().unwrap_or(3500);
     let new_expiry = chrono::Utc::now().timestamp() + expires_in;
 
-    crate::credentials::update_access_token(account_id, new_access_token)?;
+    // Store tokens with timeout — keyring can hang
+    let aid = account_id.to_string();
+    let nat = new_access_token.to_string();
+    match crate::credentials::with_keyring_timeout(move || crate::credentials::update_access_token(&aid, &nat), "update_ms_access_token").await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(e),
+        Err(e) => return Err(e),
+    }
     // Microsoft returns rotating refresh tokens
     if new_refresh_token != refresh_token {
-        crate::credentials::store_tokens(account_id, new_access_token, new_refresh_token)?;
+        let aid2 = account_id.to_string();
+        let nat2 = new_access_token.to_string();
+        let nrt = new_refresh_token.to_string();
+        match crate::credentials::with_keyring_timeout(move || crate::credentials::store_tokens(&aid2, &nat2, &nrt), "store_ms_refresh_tokens").await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(e),
+            Err(e) => return Err(e),
+        }
     }
 
     sqlx::query("UPDATE accounts SET token_expiry = ? WHERE id = ?")
@@ -1266,6 +1305,11 @@ pub async fn check_scopes_outdated(
     .map_err(|e| e.to_string())?;
 
     Ok(outdated)
+}
+
+#[tauri::command]
+pub fn check_keyring_health() -> crate::credentials::KeyringHealth {
+    crate::credentials::check_keyring_health()
 }
 
 #[cfg(test)]

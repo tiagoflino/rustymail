@@ -1921,6 +1921,7 @@
   </main>
 {:else if appState === "onboarding"}
   <main class="onboarding">
+    <div class="titlebar-spacer" data-tauri-drag-region></div>
     <div class="onboard-content slide-in">
       {#if onboardingView === 'providers'}
         <img src="/app-icon.png" alt="Rustymail" class="onboard-icon" />
@@ -2255,12 +2256,22 @@
 
   .onboarding {
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
     height: 100vh;
     width: 100vw;
     background: var(--bg-sidebar, #f5f5f7);
     font-family: var(--font-family, -apple-system, BlinkMacSystemFont, system-ui, sans-serif);
+    padding-top: 0;
+  }
+  .onboarding .titlebar-spacer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 32px;
+    -webkit-app-region: drag;
   }
   .onboard-content {
     text-align: center;

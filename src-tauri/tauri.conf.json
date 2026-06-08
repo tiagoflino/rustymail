@@ -14,7 +14,7 @@
       {
         "title": "Rustymail",
         "titleBarStyle": "Overlay",
-        "hiddenTitle": true,
+        "hiddenTitle": false,
         "width": 1100,
         "height": 800
       }
