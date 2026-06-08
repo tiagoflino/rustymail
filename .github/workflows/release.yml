@@ -44,23 +44,7 @@ jobs:
           targets: ${{ matrix.target }}
           
       - if: matrix.os == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf cmake libvulkan-dev
-          # Install LunarG Vulkan SDK for glslc (required by llama.cpp Vulkan builds)
-          curl -sL https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz -o /tmp/vulkan-sdk.tar.xz
-          sudo mkdir -p /opt/vulkan-sdk
-          sudo tar xf /tmp/vulkan-sdk.tar.xz -C /opt/vulkan-sdk --strip-components=1
-          echo "VULKAN_SDK=/opt/vulkan-sdk" >> $GITHUB_ENV
-          echo "/opt/vulkan-sdk/x86_64/bin" >> $GITHUB_PATH
-
-      - if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          # Install LunarG Vulkan SDK (required by llama.cpp Vulkan builds)
-          $installer = "$env:TEMP\vulkan-sdk.exe"
-          Invoke-WebRequest -Uri "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe" -OutFile $installer
-          Start-Process -FilePath $installer -ArgumentList "/S" -Wait
-          echo "VULKAN_SDK=C:\VulkanSDK\latest" >> $env:GITHUB_ENV
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf cmake
 
       - if: contains(matrix.os, 'macos')
         run: |
