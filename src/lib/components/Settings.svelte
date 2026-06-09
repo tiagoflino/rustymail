@@ -1109,7 +1109,7 @@
                         onclick={() => saveSetting("ai_backend", "gpu")}
                       >GPU</button>
                       <button
-                        class="option-btn {(settings.ai_backend || 'gpu') === 'cpu' || (!hasGpuDevice && (settings.ai_backend || 'gpu') === 'gpu') ? 'selected' : ''}"
+                        class="option-btn {(settings.ai_backend || 'gpu') === 'cpu' ? 'selected' : ''}"
                         onclick={() => saveSetting("ai_backend", "cpu")}
                       >CPU</button>
                     </div>
