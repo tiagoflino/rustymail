@@ -78,6 +78,7 @@
   let aiModelDownloaded = $state(false);
   let aiModelSize = $state('');
   let aiDevices: Array<{name: string, description: string, backend: string, is_gpu?: boolean}> = $state([]);
+  let hardwareScanDone = $state(false);
   let hasGpuDevice = $derived(aiDevices.some(d => d.is_gpu));
   let settingsTemplates = $state<Array<{id: string, name: string, subject: string, body_html: string}>>([]);
   let editingTemplateId = $state<string | null>(null);
@@ -130,6 +131,7 @@
       } catch {
         aiDevices = [];
       }
+      hardwareScanDone = true;
       try { logPath = await invoke("get_log_path") as string; } catch {}
       try { settingsTemplates = await invoke("get_templates") as typeof settingsTemplates; } catch {}
     } catch (e) {
@@ -1093,7 +1095,9 @@
                     <div class="setting-label">
                       <span class="setting-name">Inference Backend</span>
                       <span class="setting-hint">
-                        {#if hasGpuDevice}
+                        {#if !hardwareScanDone}
+                          Detecting hardware…
+                        {:else if hasGpuDevice}
                           GPU acceleration significantly improves AI response speed.
                           Switch to CPU to save power or if you experience instability.
                         {:else}
@@ -1104,8 +1108,8 @@
                     </div>
                     <div class="option-group">
                       <button
-                        class="option-btn {(settings.ai_backend || 'gpu') === 'gpu' ? 'selected' : ''} {!hasGpuDevice ? 'option-btn-disabled' : ''}"
-                        disabled={!hasGpuDevice}
+                        class="option-btn {(settings.ai_backend || 'gpu') === 'gpu' ? 'selected' : ''} {!hasGpuDevice && hardwareScanDone ? 'option-btn-disabled' : ''}"
+                        disabled={!hasGpuDevice && hardwareScanDone}
                         onclick={() => saveSetting("ai_backend", "gpu")}
                       >GPU</button>
                       <button
