@@ -9,6 +9,7 @@ on:
 jobs:
   build-and-release:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-22.04
@@ -83,4 +84,4 @@ jobs:
           updaterJsonPreferNsis: true
           releaseDraft: false
           prerelease: false
-          args: --features ${{ contains(matrix.os, 'macos') && 'premium-metal' || 'premium-cpu' }}
+          args: --features ${{ contains(matrix.os, 'macos') && 'premium-metal' || 'premium-vulkan' }}
