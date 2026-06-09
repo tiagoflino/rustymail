@@ -90,4 +90,4 @@ jobs:
           updaterJsonPreferNsis: true
           releaseDraft: false
           prerelease: false
-          args: --features ${{ contains(matrix.os, 'macos') && 'premium-metal' || 'premium-cpu' }}
+          args: --features ${{ contains(matrix.os, 'macos') && 'premium,rustymail-premium/metal' || 'premium,rustymail-premium/vulkan' }}
