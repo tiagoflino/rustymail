@@ -45,13 +45,7 @@ jobs:
           targets: ${{ matrix.target }}
           
       - if: matrix.os == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf cmake libvulkan-dev
-          # glslc may not be available; download pre-built binary from Google shaderc
-          if ! command -v glslc &>/dev/null; then
-            curl -sL "https://storage.googleapis.com/shaderc/artifacts/prod/graphics_shader_compiler/shaderc/linux/stable/glslc" -o /usr/local/bin/glslc
-            chmod +x /usr/local/bin/glslc
-          fi
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf cmake
 
       - if: contains(matrix.os, 'macos')
         run: |
@@ -90,4 +84,4 @@ jobs:
           updaterJsonPreferNsis: true
           releaseDraft: false
           prerelease: false
-          args: --features ${{ contains(matrix.os, 'macos') && 'premium,rustymail-premium/metal' || 'premium,rustymail-premium/vulkan' }}
+          args: --features ${{ contains(matrix.os, 'macos') && 'premium,rustymail-premium/metal' || 'premium' }}
