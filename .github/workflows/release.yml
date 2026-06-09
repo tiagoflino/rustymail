@@ -53,19 +53,6 @@ jobs:
             chmod +x /usr/local/bin/glslc
           fi
 
-      - if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          # GitHub Actions windows-latest includes Vulkan SDK at C:\VulkanSDK
-          $sdk = Get-ChildItem "C:\VulkanSDK" -Directory -ErrorAction SilentlyContinue |
-                 Sort-Object Name -Descending | Select-Object -First 1
-          if ($sdk) {
-            echo "VULKAN_SDK=$($sdk.FullName)" >> $env:GITHUB_ENV
-          } else {
-            Write-Error "Vulkan SDK not found"
-            exit 1
-          }
-
       - if: contains(matrix.os, 'macos')
         run: |
           brew install cmake
@@ -103,4 +90,4 @@ jobs:
           updaterJsonPreferNsis: true
           releaseDraft: false
           prerelease: false
-          args: --features ${{ contains(matrix.os, 'macos') && 'premium-metal' || (contains(matrix.os, 'windows') && 'premium-vulkan' || 'premium-cpu') }}
+          args: --features ${{ contains(matrix.os, 'macos') && 'premium-metal' || 'premium-cpu' }}
