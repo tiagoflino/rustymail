@@ -1,6 +1,6 @@
 [package]
 name = "rustymail"
-version = "0.16.5"
+version = "0.16.6"
 description = "Rustymail"
 authors = ["you"]
 edition = "2021"
@@ -60,11 +60,11 @@ rustymail-premium = { path = "crates/rustymail-premium", optional = true }
 
 [features]
 default = []
-premium = ["dep:rustymail-premium", "rustymail-premium/vulkan"]
-premium-cpu = ["dep:rustymail-premium"]
-premium-cuda = ["dep:rustymail-premium", "rustymail-premium/cuda"]
-premium-metal = ["dep:rustymail-premium", "rustymail-premium/metal"]
-premium-vulkan = ["dep:rustymail-premium", "rustymail-premium/vulkan"]
+premium = ["dep:rustymail-premium"]
+premium-metal = ["premium", "rustymail-premium/metal"]
+premium-vulkan = ["premium", "rustymail-premium/vulkan"]
+premium-cuda = ["premium", "rustymail-premium/cuda"]
+premium-cpu = ["premium"]
 
 [dev-dependencies]
 mockall = "0.13"
