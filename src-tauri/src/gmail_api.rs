@@ -573,6 +573,44 @@ async fn store_thread_messages(
                         .execute(&mut *tx)
                         .await;
                     }
+
+                    let tracker_types = crate::subscription_detector::classify_trackers(Some(body_html.as_str()));
+                    if !tracker_types.is_empty() {
+                        let already: i64 = sqlx::query_scalar(
+                            "SELECT COUNT(*) FROM tracking_events WHERE account_id = ? AND message_id = ?",
+                        )
+                        .bind(account_id)
+                        .bind(&msg.id)
+                        .fetch_one(&mut *tx)
+                        .await
+                        .unwrap_or(0);
+                        if already == 0 {
+                            let blocked = sqlx::query_scalar::<_, String>(
+                                "SELECT value FROM settings WHERE key = 'block_tracking_pixels'",
+                            )
+                            .fetch_optional(&mut *tx)
+                            .await
+                            .ok()
+                            .flatten()
+                            .map(|v| v == "true")
+                            .unwrap_or(true);
+                            let blocked_val = if blocked { 1 } else { 0 };
+                            for tracker_type in &tracker_types {
+                                let _ = sqlx::query(
+                                    "INSERT INTO tracking_events (account_id, message_id, sender_email, tracker_type, blocked, detected_at)
+                                     VALUES (?, ?, ?, ?, ?, ?)",
+                                )
+                                .bind(account_id)
+                                .bind(&msg.id)
+                                .bind(&result.sender_email)
+                                .bind(tracker_type)
+                                .bind(blocked_val)
+                                .bind(internal_date)
+                                .execute(&mut *tx)
+                                .await;
+                            }
+                        }
+                    }
                 }
             }
         }

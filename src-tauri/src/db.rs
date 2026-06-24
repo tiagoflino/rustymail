@@ -205,6 +205,7 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<()> {
     CREATE INDEX IF NOT EXISTS idx_labels_account ON labels(account_id);
     CREATE INDEX IF NOT EXISTS idx_snoozed_account_until ON snoozed_threads(account_id, snoozed_until);
     CREATE INDEX IF NOT EXISTS idx_tracking_events_account ON tracking_events(account_id, detected_at);
+    CREATE INDEX IF NOT EXISTS idx_tracking_events_sender ON tracking_events(account_id, blocked, sender_email);
     CREATE INDEX IF NOT EXISTS idx_subscriptions_account ON subscriptions(account_id);
     CREATE INDEX IF NOT EXISTS idx_subscriptions_sender ON subscriptions(sender_email);
     CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions(account_id, status);
@@ -708,6 +709,12 @@ async fn m020_add_discovery_columns(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+// MERGE-TRAIN NOTE: version 22 is also claimed by the action-items feature and PR #33
+// (tracking-content scanner). This migration is intentionally idempotent (has_table guard +
+// IF NOT EXISTS) so it cannot double-create the table. On merge it MUST be renumbered to the
+// next free version; do not pick a number unilaterally. PR #33 owns the canonical WRITE path
+// (scan_tracking_content); this branch ships a minimal self-contained writer in gmail sync so
+// the dashboard is functional standalone. Schema columns are kept compatible with #33.
 async fn m022_create_tracking_events(pool: &SqlitePool) -> Result<()> {
     if !has_table(pool, "tracking_events").await {
         sqlx::query(
@@ -726,6 +733,8 @@ async fn m022_create_tracking_events(pool: &SqlitePool) -> Result<()> {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_tracking_events_account ON tracking_events(account_id, detected_at)")
             .execute(pool).await?;
     }
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_tracking_events_sender ON tracking_events(account_id, blocked, sender_email)")
+        .execute(pool).await?;
     sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES ('block_tracking_pixels', 'true')")
         .execute(pool).await?;
     Ok(())
@@ -1031,7 +1040,7 @@ mod tests {
             "idx_contact_emails_contact", "idx_contact_emails_email", "idx_contacts_account",
             "idx_labels_account", "idx_message_labels_label",
             "idx_messages_account", "idx_messages_internal_date", "idx_messages_thread",
-            "idx_snoozed_account_until", "idx_tracking_events_account",
+            "idx_snoozed_account_until", "idx_tracking_events_account", "idx_tracking_events_sender",
             "idx_thread_labels_label", "idx_thread_labels_thread", "idx_threads_account",
         ] {
             assert!(names.contains(expected), "Missing index: {expected}");

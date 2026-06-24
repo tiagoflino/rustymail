@@ -9,11 +9,17 @@
     tracker_types: string;
   }
 
+  interface TrendPoint {
+    day: string;
+    count: number;
+  }
+
   interface PrivacyReportData {
     total_blocked: number;
     unique_senders_tracked: number;
     blocked_this_week: number;
     top_trackers: TrackerSender[];
+    trend: TrendPoint[];
   }
 
   interface Props {
@@ -29,8 +35,14 @@
   onMount(async () => {
     try {
       report = await invoke<PrivacyReportData>("get_privacy_report");
-    } catch (e: any) {
-      error = String(e);
+    } catch (e: unknown) {
+      const msg = String(e);
+      if (msg.includes("No active account found")) {
+        report = null;
+        error = null;
+      } else {
+        error = msg;
+      }
     } finally {
       loading = false;
     }
@@ -39,6 +51,19 @@
   function formatCount(n: number): string {
     if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
     return n.toString();
+  }
+
+  let maxTrend = $derived(
+    report ? Math.max(1, ...report.trend.map((p) => p.count)) : 1,
+  );
+
+  function barHeight(count: number): number {
+    return Math.max(4, Math.round((count / maxTrend) * 100));
+  }
+
+  function shortDay(day: string): string {
+    const parts = day.split("-");
+    return parts.length === 3 ? `${parts[1]}/${parts[2]}` : day;
   }
 
   function trackerTypeLabel(types: string): string {
@@ -75,10 +100,15 @@
         <p>Loading report…</p>
       </div>
     {:else if error}
-      <div class="privacy-error">
+      <div class="privacy-error" role="alert">
+        <p class="privacy-error-title">Couldn't load your privacy report</p>
+        <p class="privacy-error-detail">{error}</p>
+      </div>
+    {:else if !report || (report.total_blocked === 0 && report.unique_senders_tracked === 0)}
+      <div class="privacy-empty">
         <p>No tracking data yet. Trackers are detected and blocked as emails arrive.</p>
       </div>
-    {:else if report}
+    {:else}
       <div class="privacy-stats">
         <div class="stat-card">
           <span class="stat-value">{formatCount(report.total_blocked)}</span>
@@ -91,11 +121,33 @@
           <span class="stat-desc">Last 7 days</span>
         </div>
         <div class="stat-card">
-          <span class="stat-value">{report.unique_senders_tracked}</span>
+          <span class="stat-value">{formatCount(report.unique_senders_tracked)}</span>
           <span class="stat-label">Senders Tracking You</span>
           <span class="stat-desc">Unique senders</span>
         </div>
       </div>
+
+      {#if report.trend.length > 0}
+        <div class="privacy-trend">
+          <h3 class="section-label">Blocked Over Time</h3>
+          <ul class="trend-chart" aria-label="Trackers blocked per day, last 30 days">
+            {#each report.trend as point}
+              <li
+                class="trend-bar-wrap"
+                title="{point.day}: {point.count} blocked"
+              >
+                <span
+                  class="trend-bar"
+                  style="height: {barHeight(point.count)}%"
+                  aria-hidden="true"
+                ></span>
+                <span class="trend-day-label">{shortDay(point.day)}</span>
+                <span class="visually-hidden">{point.count} blocked on {point.day}</span>
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
 
       {#if report.top_trackers.length > 0}
         <div class="privacy-trackers">
@@ -271,10 +323,73 @@
     margin: 0;
   }
   .privacy-loading,
-  .privacy-error {
+  .privacy-empty {
     text-align: center;
     padding: 24px;
     color: var(--text-secondary);
     font-size: 13px;
+  }
+  .privacy-error {
+    text-align: center;
+    padding: 24px;
+    font-size: 13px;
+  }
+  .privacy-error-title {
+    color: var(--text-primary);
+    font-weight: 600;
+    margin: 0 0 6px;
+  }
+  .privacy-error-detail {
+    color: var(--text-secondary);
+    margin: 0;
+    word-break: break-word;
+  }
+  .privacy-trend {
+    margin-bottom: 24px;
+  }
+  .trend-chart {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 80px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .trend-bar-wrap {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    height: 100%;
+    min-width: 0;
+  }
+  .trend-bar {
+    width: 100%;
+    max-width: 14px;
+    background: var(--accent-color, #4a7dff);
+    border-radius: 2px 2px 0 0;
+    display: block;
+  }
+  .trend-day-label {
+    font-size: 9px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 </style>

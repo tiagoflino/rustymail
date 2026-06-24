@@ -247,6 +247,44 @@ pub fn detect(input: &DetectionInput) -> DetectionResult {
     }
 }
 
+pub fn classify_trackers(body_html: Option<&str>) -> Vec<&'static str> {
+    let mut types = Vec::new();
+    let body = match body_html {
+        Some(b) => b,
+        None => return types,
+    };
+
+    let pixel_re = Regex::new(r#"(?is)<img[^>]+(?:width|height)\s*=\s*['"]?[01]['"]?[^>]*>"#).ok();
+    if let Some(re) = &pixel_re {
+        if re.is_match(body) {
+            types.push("tracking_pixel");
+        }
+    }
+
+    let hidden_re = Regex::new(r#"(?is)<img[^>]+style\s*=\s*['"][^'"]*display\s*:\s*none[^'"]*['"][^>]*>"#).ok();
+    if let Some(re) = &hidden_re {
+        if re.is_match(body) && !types.contains(&"tracking_pixel") {
+            types.push("tracking_pixel");
+        }
+    }
+
+    let remote_img_re = Regex::new(r#"(?is)<img[^>]+src\s*=\s*['"]?https?://"#).ok();
+    if let Some(re) = &remote_img_re {
+        if re.is_match(body) && !types.contains(&"tracking_pixel") {
+            types.push("remote_image");
+        }
+    }
+
+    let track_link_re = Regex::new(r#"(?is)<a[^>]+href\s*=\s*['"]?https?://[^'"\s>]*(?:track|click|redir|utm_|/r/|/c/|email\.|mailtrack)"#).ok();
+    if let Some(re) = &track_link_re {
+        if re.is_match(body) {
+            types.push("tracking_link");
+        }
+    }
+
+    types
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,5 +497,52 @@ mod tests {
         let result = detect(&input);
         assert_eq!(result.sender_email, "john@example.com");
         assert_eq!(result.sender_name, None);
+    }
+
+    #[test]
+    fn test_classify_trackers_none_for_empty_body() {
+        assert!(classify_trackers(None).is_empty());
+        assert!(classify_trackers(Some("<p>plain text email</p>")).is_empty());
+    }
+
+    #[test]
+    fn test_classify_trackers_detects_pixel_by_width() {
+        let body = r#"<img src="https://t.example.com/o.gif" width="1" height="1">"#;
+        let types = classify_trackers(Some(body));
+        assert!(types.contains(&"tracking_pixel"), "got {:?}", types);
+    }
+
+    #[test]
+    fn test_classify_trackers_detects_pixel_by_zero_height() {
+        let body = r#"<img height="0" src="https://t.example.com/beacon.png">"#;
+        assert!(classify_trackers(Some(body)).contains(&"tracking_pixel"));
+    }
+
+    #[test]
+    fn test_classify_trackers_pixel_takes_precedence_over_remote_image() {
+        let body = r#"<img src="https://cdn.example.com/spy.gif" width="1" height="1">"#;
+        let types = classify_trackers(Some(body));
+        assert!(types.contains(&"tracking_pixel"));
+        assert!(!types.contains(&"remote_image"));
+    }
+
+    #[test]
+    fn test_classify_trackers_detects_remote_image() {
+        let body = r#"<img src="https://cdn.example.com/banner.jpg" width="600">"#;
+        let types = classify_trackers(Some(body));
+        assert!(types.contains(&"remote_image"));
+        assert!(!types.contains(&"tracking_pixel"));
+    }
+
+    #[test]
+    fn test_classify_trackers_detects_tracking_link() {
+        let body = r#"<a href="https://click.example.com/track?utm_source=x">Read</a>"#;
+        assert!(classify_trackers(Some(body)).contains(&"tracking_link"));
+    }
+
+    #[test]
+    fn test_classify_trackers_plain_local_image_not_tracker() {
+        let body = r#"<img src="cid:logo">"#;
+        assert!(classify_trackers(Some(body)).is_empty());
     }
 }
