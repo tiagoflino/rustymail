@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import SenderRoutingManager from "$lib/components/SenderRoutingManager.svelte";
   import { getVersion } from "@tauri-apps/api/app";
   import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
   import {
@@ -616,6 +617,30 @@
                 </div>
               </div>
             </div>
+            <div class="section">
+              <div class="section-title">Smart Routing</div>
+              <p class="section-desc">Control how new senders are handled when they first email you.</p>
+              <div class="setting-card">
+                <div class="card-row last">
+                  <label class="toggle-row">
+                    <div class="toggle-label">
+                      <span class="setting-name">Smart Routing</span>
+                      <span class="setting-hint">Prompt when a new sender emails you for the first time. Choose: Inbox, Feed, Auto-archive, or Block. All decisions made locally on your device.</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      class="toggle"
+                      checked={settings.smart_routing_enabled === "true"}
+                      onchange={(e) => saveSetting("smart_routing_enabled", e.currentTarget.checked ? "true" : "false")}
+                    />
+                  </label>
+                </div>
+              </div>
+              <div class="section-title" style="margin-top: 20px;">Manage Routing</div>
+              <p class="section-desc">Review and change where future emails from each sender are delivered.</p>
+              <SenderRoutingManager />
+            </div>
+
           {:else if activeTab === "reading"}
             <div class="section">
               <div class="section-title">Reading Preferences</div>

@@ -71,6 +71,22 @@ Object.defineProperty(window, 'matchMedia', {
 if (typeof window !== 'undefined') {
     Element.prototype.getAnimations = vi.fn().mockReturnValue([]);
 
+    // jsdom lacks the Web Animations API used by Svelte fly/fade transitions.
+    Element.prototype.animate = vi.fn().mockImplementation(() => ({
+        cancel: vi.fn(),
+        finish: vi.fn(),
+        play: vi.fn(),
+        pause: vi.fn(),
+        reverse: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        onfinish: null,
+        oncancel: null,
+        finished: Promise.resolve(),
+        currentTime: 0,
+        playState: 'finished',
+    }));
+
     // Mock IntersectionObserver
     window.IntersectionObserver = vi.fn().mockImplementation((callback) => ({
         observe: vi.fn(),
