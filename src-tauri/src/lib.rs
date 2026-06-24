@@ -69,8 +69,9 @@ pub fn run() {
                 let engine = rustymail_premium::llm::engine::LlmEngine::new(
                     app_data_dir.clone()
                 );
-                engine.start_auto_unload_timer(pool_clone);
+                engine.start_auto_unload_timer(pool_clone.clone());
                 handle.manage(engine);
+                embedding_scheduler::spawn_scheduler(handle.clone(), pool_clone);
             }
             tray::setup_tray(app)?;
             tracing::info!("Database initialized, tray setup complete");

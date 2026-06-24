@@ -1,16 +1,22 @@
-/// Opportunistic embedding scheduler with resource guardrails.
-///
-/// Three modes:
-/// 1. OPPORTUNISTIC: model already warm from user interaction, process pending
-/// 2. POST_SYNC: just synced new mail, process if resources allow
-/// 3. MAINTENANCE: user explicitly requested backfill, on AC power
-///
-/// Resource guardrails:
-/// - Battery threshold (default: 50%, don't process below)
-/// - AC power preferred for backfill
-/// - Cooldown between batches (30s default)
-/// - Max total indexed (5000 default)
-/// - Batch size (20 default)
+//! Opportunistic embedding scheduler with resource guardrails.
+//!
+//! Three modes:
+//! 1. OPPORTUNISTIC: model already warm from user interaction, process pending
+//! 2. POST_SYNC: just synced new mail, process if resources allow
+//! 3. MAINTENANCE: user explicitly requested backfill, on AC power
+//!
+//! Resource guardrails:
+//! - Battery threshold (default: 50%, don't process below)
+//! - AC power preferred for backfill
+//! - Cooldown between batches (30s default)
+//! - Max total indexed (5000 default)
+//! - Batch size (20 default)
+//!
+//! The decision logic and power detection are exercised by unit tests; the
+//! live loop (`spawn_scheduler`) only exists on the premium build, since it
+//! needs the local LLM engine to produce embeddings. On a non-premium,
+//! non-test build the machinery is intentionally inert.
+#![cfg_attr(not(feature = "premium"), allow(dead_code))]
 
 use sqlx::SqlitePool;
 
@@ -38,6 +44,7 @@ impl Default for EmbeddingConfig {
 }
 
 impl EmbeddingConfig {
+    #[cfg_attr(not(feature = "premium"), allow(dead_code))]
     pub async fn from_db(pool: &SqlitePool) -> Self {
         let mut config = Self::default();
         if let Ok(v) = get_setting(pool, "embedding_auto_index").await {
@@ -56,6 +63,7 @@ impl EmbeddingConfig {
     }
 }
 
+#[cfg_attr(not(feature = "premium"), allow(dead_code))]
 async fn get_setting(pool: &SqlitePool, key: &str) -> Result<String, ()> {
     sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
         .bind(key)
@@ -148,6 +156,7 @@ impl EmbeddingScheduler {
         self.total_processed += processed;
     }
 
+    #[allow(dead_code)]
     pub fn is_processing(&self) -> bool {
         self.is_processing
     }
@@ -156,8 +165,75 @@ impl EmbeddingScheduler {
         &self.config
     }
 
+    pub fn config_mut(&mut self) -> &mut EmbeddingConfig {
+        &mut self.config
+    }
+
+    #[allow(dead_code)]
     pub fn remaining_capacity(&self) -> usize {
         self.config.max_messages.saturating_sub(self.total_processed)
+    }
+}
+
+/// Snapshot of host power state used by the scheduler guardrails.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PowerState {
+    pub on_ac_power: bool,
+    /// Fraction in [0.0, 1.0]. 1.0 when on AC with no battery info.
+    pub battery_pct: f32,
+}
+
+impl Default for PowerState {
+    fn default() -> Self {
+        // Safe default: assume plugged in and full (do not block on unknown).
+        Self { on_ac_power: true, battery_pct: 1.0 }
+    }
+}
+
+/// Read host power state via `starship-battery` (the maintained successor to
+/// the `battery` crate). Degrades safely to "on AC, full" on any platform
+/// without battery support or on error — we never want a detection failure to
+/// permanently stall indexing.
+///
+/// A machine is considered "on AC" when it has no batteries (desktop/server)
+/// or when no battery is actively discharging.
+pub fn read_power_state() -> PowerState {
+    use starship_battery::units::ratio::percent;
+    use starship_battery::{Manager, State};
+
+    let manager = match Manager::new() {
+        Ok(m) => m,
+        Err(_) => return PowerState::default(),
+    };
+    let batteries = match manager.batteries() {
+        Ok(b) => b,
+        Err(_) => return PowerState::default(),
+    };
+
+    let mut any_discharging = false;
+    let mut any_battery = false;
+    let mut min_pct: f32 = 1.0;
+    for maybe_bat in batteries {
+        let bat = match maybe_bat {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        any_battery = true;
+        let pct = (bat.state_of_charge().get::<percent>() / 100.0).clamp(0.0, 1.0);
+        if pct < min_pct {
+            min_pct = pct;
+        }
+        if matches!(bat.state(), State::Discharging) {
+            any_discharging = true;
+        }
+    }
+
+    if !any_battery {
+        return PowerState::default();
+    }
+    PowerState {
+        on_ac_power: !any_discharging,
+        battery_pct: min_pct,
     }
 }
 
@@ -188,6 +264,89 @@ impl ProcessDecision {
             ProcessDecision::Skipped(msg) => msg.clone(),
         }
     }
+}
+
+/// Spawn the background opportunistic indexing loop. Premium-only: it needs
+/// the local LLM engine to produce embeddings. The loop wakes periodically,
+/// reads host power state, consults `should_process`, and runs a batch when the
+/// guardrails allow. Runs on the active account.
+#[cfg(feature = "premium")]
+pub fn spawn_scheduler(app_handle: tauri::AppHandle, pool: sqlx::SqlitePool) {
+    use tauri::Manager;
+
+    tauri::async_runtime::spawn(async move {
+        // Repair any flag/table divergence left by a previous crash before we
+        // start, so status and search agree.
+        if let Err(e) = crate::semantic_search::backfill_embedded_flag(&pool).await {
+            tracing::warn!("embedding backfill reconcile failed: {e}");
+        }
+
+        let tick = std::time::Duration::from_secs(60);
+        let mut scheduler = EmbeddingScheduler::new(EmbeddingConfig::from_db(&pool).await);
+
+        loop {
+            tokio::time::sleep(tick).await;
+
+            // Refresh config each tick so settings changes take effect live.
+            let config = EmbeddingConfig::from_db(&pool).await;
+            if !config.auto_index {
+                continue;
+            }
+            // Rebuild only if the config changed in a way that matters.
+            *scheduler.config_mut() = config;
+
+            let account_id = match crate::commands::accounts::get_active_account(&pool).await {
+                Ok(a) => a.id,
+                Err(_) => continue, // No active account yet.
+            };
+
+            // Nothing pending => skip cheaply.
+            match crate::semantic_search::count_pending(&pool, &account_id).await {
+                Ok(0) | Err(_) => continue,
+                Ok(_) => {}
+            }
+
+            let engine = app_handle.state::<rustymail_premium::llm::engine::LlmEngine>();
+            let model_loaded = matches!(
+                engine.get_status().await,
+                rustymail_premium::llm::engine::AiStatus::Ready { .. }
+            );
+            let power = read_power_state();
+
+            let decision = scheduler.should_process(model_loaded, power.on_ac_power, power.battery_pct);
+            if !decision.should_process() {
+                tracing::debug!("embedding scheduler skip: {}", decision.reason());
+                continue;
+            }
+
+            // Cold start needs the model; warm it only when guards already
+            // approved loading it.
+            if !model_loaded {
+                if let Err(e) = engine.ensure_ready().await {
+                    tracing::warn!("embedding scheduler: engine not ready: {e}");
+                    continue;
+                }
+            }
+
+            scheduler.mark_batch_start();
+            let batch_size = scheduler.config().batch_size as i64;
+            let processed = match crate::commands::semantic::run_embedding_batch(
+                &pool, &engine, &account_id, batch_size,
+            )
+            .await
+            {
+                Ok(n) => n,
+                Err(e) => {
+                    tracing::warn!("embedding batch failed: {e}");
+                    0
+                }
+            };
+            scheduler.mark_batch_done(processed);
+            if processed > 0 {
+                tracing::info!("embedded {processed} message(s)");
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -281,5 +440,49 @@ mod tests {
         assert!(ProcessDecision::Process { reason: "test".into() }.reason().contains("test"));
         assert!(ProcessDecision::AlreadyProcessing.reason().contains("Already processing"));
         assert!(ProcessDecision::NeedsAcPower.reason().contains("AC power"));
+    }
+
+    #[test]
+    fn test_read_power_state_never_panics_and_is_sane() {
+        // On CI/desktop with no battery this returns the safe default; on a
+        // laptop it returns real values. Either way it must be in-range and
+        // must not panic.
+        let ps = read_power_state();
+        assert!(ps.battery_pct >= 0.0 && ps.battery_pct <= 1.0);
+    }
+
+    #[test]
+    fn test_power_state_default_is_ac_full() {
+        let ps = PowerState::default();
+        assert!(ps.on_ac_power);
+        assert_eq!(ps.battery_pct, 1.0);
+    }
+
+    /// Integration-style test of the run-loop decision: a fresh scheduler with
+    /// pending work, model cold, on battery with auto-index off must refuse;
+    /// once on AC it must proceed; after a batch it must cool down.
+    #[test]
+    fn test_run_loop_decision_sequence() {
+        let mut scheduler = EmbeddingScheduler::new(EmbeddingConfig::default());
+
+        // Cold + on battery (discharging) + index_on_battery=false => refuse.
+        let on_battery = PowerState { on_ac_power: false, battery_pct: 0.8 };
+        let d1 = scheduler.should_process(false, on_battery.on_ac_power, on_battery.battery_pct);
+        assert!(!d1.should_process(), "Should refuse on battery when index_on_battery=false");
+
+        // Plug into AC => proceed.
+        let on_ac = PowerState::default();
+        let d2 = scheduler.should_process(false, on_ac.on_ac_power, on_ac.battery_pct);
+        assert!(d2.should_process(), "Should proceed on AC power");
+
+        // Simulate running the batch.
+        scheduler.mark_batch_start();
+        assert!(scheduler.is_processing());
+        scheduler.mark_batch_done(20);
+        assert!(!scheduler.is_processing());
+
+        // Immediately after => cooldown even on AC.
+        let d3 = scheduler.should_process(false, on_ac.on_ac_power, on_ac.battery_pct);
+        assert!(matches!(d3, ProcessDecision::Cooldown { .. }), "Should cooldown right after a batch");
     }
 }

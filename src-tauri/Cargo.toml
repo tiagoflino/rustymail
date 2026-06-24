@@ -56,6 +56,7 @@ tauri-plugin-notification = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2"
+starship-battery = "0.11"
 rustymail-premium = { path = "crates/rustymail-premium", optional = true }
 
 [features]
