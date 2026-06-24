@@ -382,6 +382,7 @@
 
     try {
       await checkSnoozedThreads();
+      await checkMutedThreads();
       await checkScheduledSends();
       await refreshScheduledCount();
       await loadSubscriptionCount();
@@ -1391,8 +1392,11 @@
           }
           break;
         case "mute":
-          result = await invoke("batch_snooze_threads", { threadIds: ids, snoozedUntil: extraArgs });
-          if (result.succeeded > 0) addToast(`${result.succeeded} thread${result.succeeded > 1 ? 's' : ''} muted`, "info");
+          result = await invoke("batch_mute_threads", { threadIds: ids, mutedUntil: extraArgs ?? null });
+          if (result.succeeded > 0) {
+            mutedCount += result.succeeded;
+            addToast(`${result.succeeded} thread${result.succeeded > 1 ? 's' : ''} muted`, "info");
+          }
           break;
         case "unmute":
           let unmuteSucceeded = 0;
@@ -1405,6 +1409,7 @@
           }
           result = { succeeded: unmuteSucceeded, failed_ids: unmuteFailed };
           if (unmuteSucceeded > 0) {
+            mutedCount = Math.max(0, mutedCount - unmuteSucceeded);
             addToast(`${unmuteSucceeded} thread${unmuteSucceeded > 1 ? 's' : ''} unmuted`, "info");
             delete labelLastSyncMap["INBOX"];
             delete labelLastSyncMap["UNIFIED_INBOX"];
@@ -1437,6 +1442,17 @@
       }
     } catch (e) {
       console.error("[Snooze] check failed:", e);
+    }
+  }
+
+  async function checkMutedThreads() {
+    try {
+      const unmuted: string[] = await invoke("check_muted_threads");
+      if (unmuted.length > 0) {
+        mutedCount = Math.max(0, mutedCount - unmuted.length);
+      }
+    } catch (e) {
+      console.error("[Mute] check failed:", e);
     }
   }
 
@@ -2202,7 +2218,7 @@
         onbatchsnooze={() => { batchSnoozeOpen = true; }}
         onbatchunsnooze={(ids) => executeBatchAction("unsnooze")}
         onbatchmute={() => { batchMuteOpen = true; }}
-        onbatchunmute={(ids) => executeBatchAction("unmute")}
+        onbatchunmute={() => executeBatchAction("unmute")}
         onbatchmovetolabel={() => { labelPickerOpen = true; }}
         isSnoozedView={$selectedLabelId === "SNOOZED" || $selectedLabelId === "UNIFIED_SNOOZED"}
         isMutedView={$selectedLabelId === "MUTED" || $selectedLabelId === "UNIFIED_MUTED"}

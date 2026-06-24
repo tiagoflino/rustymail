@@ -145,6 +145,7 @@ pub fn run() {
             commands::threads::batch_mark_read_status,
             commands::threads::batch_star_threads,
             commands::snooze::batch_snooze_threads,
+            commands::mute::batch_mute_threads,
             commands::schedule::schedule_send,
             commands::schedule::cancel_scheduled_send,
             commands::schedule::get_scheduled_sends,

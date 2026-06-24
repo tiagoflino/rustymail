@@ -48,11 +48,14 @@ describe("mute utilities", () => {
     });
 
     it("returns a formatted date string for a timestamp", () => {
-      // Use a fixed timestamp: 2026-06-08T12:00:00Z = 1759387200
+      // 1759387200 = 2025-10-02T06:40:00Z (unix seconds)
       const ts = 1759387200;
       const formatted = formatMuteExpiry(ts);
       expect(formatted).toBeTruthy();
       expect(formatted).not.toBe("Forever");
+      // The formatted output must round-trip to the same calendar day as the input
+      const expected = new Date(ts * 1000);
+      expect(formatted).toContain(String(expected.getDate()));
     });
   });
 

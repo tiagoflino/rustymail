@@ -136,6 +136,7 @@
     onbatchunmute,
     onbatchmovetolabel,
     isSnoozedView = false,
+    isMutedView = false,
     isTrashView = false,
     hasSuperstars = false,
     hasImportant = false,
