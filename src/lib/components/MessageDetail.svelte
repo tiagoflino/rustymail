@@ -25,6 +25,8 @@
     type LocalMessage,
   } from "$lib/stores/messages";
   import { formatTime, decodeEntities } from "$lib/utils/formatters.js";
+  import { threads } from "$lib/stores/threads";
+  import type { SentimentResult, Tone, Urgency } from "$lib/utils/sentiment";
 
   // AI Summary panel state
   let aiSummary = $state<string | null>(null);
@@ -34,8 +36,8 @@
   let aiPanelOpen = $state(false);
   let smartReplies = $state<string[]>([]);
   let smartRepliesLoading = $state(false);
-  let sentiment = $state<'urgent' | 'angry' | 'warning' | 'positive' | 'neutral' | 'inquisitive' | null>(null);
-  let urgency = $state<'high' | 'medium' | 'low' | null>(null);
+  let sentiment = $state<Tone | null>(null);
+  let urgency = $state<Urgency | null>(null);
 
   let expandedMessages = $state(new Set<string>());
   let lastExpandedThreadId: string | null = null;
@@ -274,15 +276,24 @@
   }
 
   async function handleSentimentAnalysis() {
-    if (!$selectedThreadId || !aiAvailable) return;
+    const tid = $selectedThreadId;
+    if (!tid || !aiAvailable) return;
     try {
       await invoke("ensure_ai_ready");
-      const result = await invoke("ai_analyze_sentiment", {
-        threadId: $selectedThreadId,
+      const result = await invoke<SentimentResult>("ai_analyze_sentiment", {
+        threadId: tid,
       });
-      sentiment = result.sentiment;
+      sentiment = result.tone;
       urgency = result.urgency;
-    } catch (_) { /* sentiment not critical — ignore */ }
+      threads.update((list) =>
+        list.map((t) =>
+          t.id === tid ? { ...t, sentiment: result.tone, urgency: result.urgency } : t,
+        ),
+      );
+    } catch (_) {
+      sentiment = null;
+      urgency = null;
+    }
   }
 
   $effect(() => {
@@ -760,6 +771,9 @@
             </div>
           {:else}
             <div class="ai-bar-actions">
+              {#if sentiment || urgency}
+                <SentimentBadge {sentiment} {urgency} showLabel={true} />
+              {/if}
               <button class="ai-bar-btn" onclick={handleSummarize} disabled={aiSummaryLoading}>
                 {#if aiSummaryLoading}
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="30 70" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/></circle></svg>

@@ -1,4 +1,5 @@
 import { writable } from 'svelte/store';
+import type { Tone, Urgency } from '$lib/utils/sentiment';
 
 export interface LocalThread {
     id: string;
@@ -12,8 +13,8 @@ export interface LocalThread {
     star_type?: string | null;
     has_attachments?: boolean;
     important?: boolean;
-    sentiment?: 'urgent' | 'angry' | 'warning' | 'positive' | 'neutral' | 'inquisitive' | null;
-    urgency?: 'high' | 'medium' | 'low' | null;
+    sentiment?: Tone | null;
+    urgency?: Urgency | null;
     account_id: string;
 }
 

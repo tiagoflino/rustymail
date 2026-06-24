@@ -16,6 +16,8 @@ pub struct LocalThread {
     pub star_type: Option<String>,
     pub has_attachments: bool,
     pub important: bool,
+    pub sentiment: Option<String>,
+    pub urgency: Option<String>,
     pub account_id: String,
 }
 
@@ -73,6 +75,8 @@ pub(crate) async fn get_threads_inner(
         star_type: Option<String>,
         has_attachments: Option<i32>,
         important: Option<i32>,
+        sentiment: Option<String>,
+        urgency: Option<String>,
         account_id: String,
     }
 
@@ -89,6 +93,8 @@ pub(crate) async fn get_threads_inner(
                  LIMIT 1) as star_type,
                 EXISTS (SELECT 1 FROM messages m6 WHERE m6.thread_id = t.id AND m6.has_attachments = 1) as has_attachments,
                 EXISTS (SELECT 1 FROM thread_labels tl2 WHERE tl2.thread_id = t.id AND tl2.label_id = 'IMPORTANT') as important,
+                t.sentiment as sentiment,
+                t.urgency as urgency,
                 t.account_id
          FROM threads t
     "#;
@@ -225,6 +231,8 @@ pub(crate) async fn get_threads_inner(
             star_type: r.star_type,
             has_attachments: r.has_attachments.unwrap_or(0) == 1,
             important: r.important.unwrap_or(0) == 1,
+            sentiment: r.sentiment,
+            urgency: r.urgency,
             account_id: r.account_id,
         })
         .collect())
@@ -422,6 +430,8 @@ pub(crate) async fn get_unified_threads_inner(
         star_type: Option<String>,
         has_attachments: Option<i32>,
         important: Option<i32>,
+        sentiment: Option<String>,
+        urgency: Option<String>,
         account_id: String,
     }
 
@@ -437,6 +447,8 @@ pub(crate) async fn get_unified_threads_inner(
                  LIMIT 1) as star_type,
                 EXISTS (SELECT 1 FROM messages m6 WHERE m6.thread_id = t.id AND m6.has_attachments = 1) as has_attachments,
                 EXISTS (SELECT 1 FROM thread_labels tl2 WHERE tl2.thread_id = t.id AND tl2.label_id = 'IMPORTANT') as important,
+                t.sentiment as sentiment,
+                t.urgency as urgency,
                 t.account_id
          FROM threads t
     "#;
@@ -577,6 +589,8 @@ pub(crate) async fn get_unified_threads_inner(
             star_type: r.star_type,
             has_attachments: r.has_attachments.unwrap_or(0) == 1,
             important: r.important.unwrap_or(0) == 1,
+            sentiment: r.sentiment,
+            urgency: r.urgency,
             account_id: r.account_id,
         })
         .collect())
@@ -907,6 +921,8 @@ pub(crate) async fn fetch_threads_by_ids(
                  LIMIT 1) as star_type,
                 EXISTS (SELECT 1 FROM messages m6 WHERE m6.thread_id = t.id AND m6.has_attachments = 1) as has_attachments,
                 EXISTS (SELECT 1 FROM thread_labels tl2 WHERE tl2.thread_id = t.id AND tl2.label_id = 'IMPORTANT') as important,
+                t.sentiment as sentiment,
+                t.urgency as urgency,
                 t.account_id
          FROM threads t
          WHERE t.id IN ({}) AND t.account_id = ?
@@ -927,6 +943,8 @@ pub(crate) async fn fetch_threads_by_ids(
         star_type: Option<String>,
         has_attachments: Option<i32>,
         important: Option<i32>,
+        sentiment: Option<String>,
+        urgency: Option<String>,
         account_id: String,
     }
 
@@ -951,6 +969,8 @@ pub(crate) async fn fetch_threads_by_ids(
             star_type: r.star_type,
             has_attachments: r.has_attachments.unwrap_or(0) == 1,
             important: r.important.unwrap_or(0) == 1,
+            sentiment: r.sentiment,
+            urgency: r.urgency,
             account_id: r.account_id,
         })
         .collect())
