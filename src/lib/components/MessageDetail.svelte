@@ -24,6 +24,7 @@
     type LocalMessage,
   } from "$lib/stores/messages";
   import { formatTime, decodeEntities } from "$lib/utils/formatters.js";
+  import { scanForDisplay } from "$lib/utils/trackingScan";
 
   // AI Summary panel state
   let aiSummary = $state<string | null>(null);
@@ -632,17 +633,12 @@
                         doc.open();
 
                         let displayHtml = msg.body_html;
-                        try {
-                          const blockPixels = await invoke("get_setting", { key: "block_tracking_pixels" });
-                          if (blockPixels === "true") {
-                            const scanResult = await invoke("scan_tracking_content", { html: displayHtml });
-                            displayHtml = scanResult.cleaned_html;
-                          }
-                          const imageMode = await invoke("get_setting", { key: "image_load_mode" });
-                          if (imageMode === "ask" || imageMode === "never") {
-                            displayHtml = await invoke("proxy_remote_images", { html: displayHtml });
-                          }
-                        } catch (_) { /* commands may not be on this branch — render as-is */ }
+                        const scan = await scanForDisplay(invoke, displayHtml, msg.sender ?? null, msg.id ?? null);
+                        displayHtml = scan.html;
+                        if (scan.scanFailed) {
+                          console.warn('[EmailBody] tracker scan failed; remote content may not be blocked', msg.id);
+                          displayHtml = '<div style="margin:0 0 10px;padding:8px 12px;border-radius:6px;background:#fff4e5;color:#8a5300;font:13px -apple-system,sans-serif;">Tracker blocking could not run for this message. Remote images may load.</div>' + displayHtml;
+                        }
 
                         doc.write('<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light only"><style>body{margin:0;padding:0;background:#f5f5f5;overflow:hidden}html,body{height:auto!important;min-height:0!important}.quote-toggle{display:inline-block;cursor:pointer;padding:2px 8px;margin:4px 0;border-radius:4px;background:rgba(0,0,0,0.06);color:#666;font-size:12px;border:none;line-height:1;font-family:-apple-system,sans-serif}.quote-toggle:hover{background:rgba(0,0,0,0.1)}.quote-hidden{display:none}</style></head><body><div style="max-width:680px;margin:0 auto;padding:12px;">' + displayHtml + '</div></body></html>');
                         doc.close();

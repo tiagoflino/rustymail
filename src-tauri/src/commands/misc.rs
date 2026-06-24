@@ -102,14 +102,65 @@ pub struct TrackingScanResult {
     pub tracker_details: Vec<crate::tracking_detector::DetectedTracker>,
 }
 
-#[tauri::command]
-pub async fn scan_tracking_content(html: String) -> Result<TrackingScanResult, String> {
-    let mut trackers = crate::tracking_detector::detect_trackers(&html);
-    let found = trackers.len();
-    let (cleaned_html, blocked) = crate::tracking_detector::block_trackers(&html);
-    for t in &mut trackers {
-        t.blocked = true;
+async fn persist_tracking_events(
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
+    message_id: Option<&str>,
+    sender_email: &str,
+    trackers: &[crate::tracking_detector::DetectedTracker],
+) -> Result<(), sqlx::Error> {
+    if trackers.is_empty() {
+        return Ok(());
     }
+    let detected_at = chrono::Utc::now().timestamp();
+    let mut tx = pool.begin().await?;
+    for t in trackers {
+        sqlx::query(
+            "INSERT INTO tracking_events (account_id, message_id, sender_email, tracker_type, details, url_snippet, blocked, detected_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(account_id)
+        .bind(message_id)
+        .bind(sender_email)
+        .bind(t.tracker_type.as_str())
+        .bind(&t.details)
+        .bind(&t.url_snippet)
+        .bind(t.blocked as i64)
+        .bind(detected_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await
+}
+
+#[tauri::command]
+pub async fn scan_tracking_content(
+    app_handle: tauri::AppHandle,
+    html: String,
+    sender: Option<String>,
+    message_id: Option<String>,
+) -> Result<TrackingScanResult, String> {
+    let (trackers, cleaned_html, blocked) =
+        crate::tracking_detector::scan_and_block(&html);
+    let found = trackers.len();
+
+    if found > 0 {
+        let pool = app_handle.state::<sqlx::SqlitePool>();
+        if let Ok(account) = get_active_account(pool.inner()).await {
+            if let Err(e) = persist_tracking_events(
+                pool.inner(),
+                &account.id,
+                message_id.as_deref(),
+                sender.as_deref().unwrap_or("unknown"),
+                &trackers,
+            )
+            .await
+            {
+                tracing::warn!("Failed to persist tracking events: {}", e);
+            }
+        }
+    }
+
     Ok(TrackingScanResult {
         trackers_found: found,
         trackers_blocked: blocked,
@@ -156,5 +207,58 @@ mod tests {
     #[test]
     fn test_validate_url_https_accepted() {
         assert!(validate_external_url("https://example.com").is_ok());
+    }
+
+    async fn test_pool() -> sqlx::SqlitePool {
+        use std::str::FromStr;
+        let options = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .create_if_missing(true);
+        let pool = sqlx::SqlitePool::connect_with(options).await.unwrap();
+        crate::db::apply_schema(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn test_persist_tracking_events_inserts_rows() {
+        let pool = test_pool().await;
+        let (trackers, _cleaned, _blocked) = crate::tracking_detector::scan_and_block(
+            r#"<img src="https://track.com/pixel.gif" width="1" height="1">"#,
+        );
+        assert!(!trackers.is_empty());
+
+        persist_tracking_events(&pool, "acct-1", Some("msg-1"), "spy@example.com", &trackers)
+            .await
+            .unwrap();
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM tracking_events")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count.0, trackers.len() as i64, "one row per detected tracker");
+
+        let row: (String, String, String, i64) = sqlx::query_as(
+            "SELECT account_id, sender_email, tracker_type, blocked FROM tracking_events LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "acct-1");
+        assert_eq!(row.1, "spy@example.com");
+        assert_eq!(row.2, "tracking_pixel");
+        assert_eq!(row.3, 1, "blocked 1x1 pixel persisted as blocked=1");
+    }
+
+    #[tokio::test]
+    async fn test_persist_tracking_events_empty_noop() {
+        let pool = test_pool().await;
+        persist_tracking_events(&pool, "acct-1", None, "x@y.com", &[])
+            .await
+            .unwrap();
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM tracking_events")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count.0, 0);
     }
 }
