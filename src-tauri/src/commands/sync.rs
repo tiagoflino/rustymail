@@ -53,6 +53,8 @@ pub async fn sync_gmail_data(
             }
         });
 
+        apply_smart_routing(pool.inner(), &account.id, &result.updated_thread_ids).await;
+
         return Ok(SyncResult {
             new_message_ids: vec![],
             new_thread_ids: result.updated_thread_ids,
@@ -87,6 +89,8 @@ pub async fn sync_gmail_data(
                 }
             }
         });
+
+        apply_smart_routing(pool.inner(), &account.id, &delta.new_thread_ids).await;
 
         return Ok(SyncResult {
             new_message_ids: vec![],
@@ -184,9 +188,37 @@ pub async fn sync_gmail_data(
         }
     });
 
+    apply_smart_routing(pool.inner(), &account.id, &new_thread_ids).await;
+
     spawn_background_cleanup(pool.inner(), &account, &app_handle);
 
     Ok(SyncResult { new_message_ids, new_thread_ids })
+}
+
+/// Apply stored sender-routing decisions to newly-synced threads, gated on the
+/// `smart_routing_enabled` setting. Failures are logged and never block sync.
+async fn apply_smart_routing(pool: &sqlx::SqlitePool, account_id: &str, thread_ids: &[String]) {
+    if thread_ids.is_empty() {
+        return;
+    }
+    let enabled: bool = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM settings WHERE key = 'smart_routing_enabled'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .map(|v| v != "false")
+    .unwrap_or(true);
+    if !enabled {
+        return;
+    }
+
+    match crate::sender_routing::apply_routing_to_threads(pool, account_id, thread_ids).await {
+        Ok(n) if n > 0 => tracing::info!("[SmartRouting] Routed {} thread(s) out of inbox", n),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("[SmartRouting] Failed to apply routing: {}", e),
+    }
 }
 
 async fn full_sync(

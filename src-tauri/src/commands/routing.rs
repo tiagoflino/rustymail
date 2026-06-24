@@ -12,6 +12,31 @@ pub async fn check_new_sender(
     crate::sender_routing::is_new_sender(pool.inner(), &account.id, &sender_email).await
 }
 
+#[derive(serde::Serialize)]
+pub struct NewSenderCheck {
+    pub sender_email: String,
+    pub is_new: bool,
+}
+
+/// Batched new-sender check — one IPC round-trip for many senders, replacing the
+/// per-sender N+1 calls on the sync hot path.
+#[tauri::command]
+pub async fn check_new_senders(
+    app_handle: tauri::AppHandle,
+    sender_emails: Vec<String>,
+) -> Result<Vec<NewSenderCheck>, String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+
+    let mut out = Vec::with_capacity(sender_emails.len());
+    for sender_email in sender_emails {
+        let is_new =
+            crate::sender_routing::is_new_sender(pool.inner(), &account.id, &sender_email).await?;
+        out.push(NewSenderCheck { sender_email, is_new });
+    }
+    Ok(out)
+}
+
 #[tauri::command]
 pub async fn set_sender_routing(
     app_handle: tauri::AppHandle,
@@ -23,15 +48,18 @@ pub async fn set_sender_routing(
     let account = get_active_account(pool.inner()).await?;
     let now = chrono::Utc::now().timestamp();
 
-    // Validate routing value
-    let _routing = Routing::parse(&routing);
+    // Normalize the routing string (unknown -> inbox) and store the canonical
+    // value, and normalize the email so reads/lookups match exactly.
+    let routing = Routing::parse(&routing).as_str().to_string();
+    let sender_email = crate::sender_routing::normalize_email(&sender_email);
 
     sqlx::query(
-        "INSERT OR REPLACE INTO sender_routing (sender_email, account_id, routing, created_at, updated_at)
-         VALUES (?, ?, ?, COALESCE((SELECT created_at FROM sender_routing WHERE sender_email = ? AND account_id = ?), ?), ?)"
+        "INSERT OR REPLACE INTO sender_routing (sender_email, account_id, sender_name, routing, created_at, updated_at)
+         VALUES (?, ?, ?, ?, COALESCE((SELECT created_at FROM sender_routing WHERE sender_email = ? AND account_id = ?), ?), ?)"
     )
     .bind(&sender_email)
     .bind(&account.id)
+    .bind(&sender_name)
     .bind(&routing)
     .bind(&sender_email)
     .bind(&account.id)
@@ -57,13 +85,15 @@ pub async fn get_sender_routing(
     #[derive(sqlx::FromRow)]
     struct RoutingRow {
         sender_email: String,
+        sender_name: Option<String>,
         routing: String,
         created_at: i64,
         updated_at: i64,
     }
 
+    let sender_email = crate::sender_routing::normalize_email(&sender_email);
     let row: Option<RoutingRow> = sqlx::query_as(
-        "SELECT sender_email, routing, created_at, updated_at FROM sender_routing WHERE sender_email = ? AND account_id = ?"
+        "SELECT sender_email, sender_name, routing, created_at, updated_at FROM sender_routing WHERE sender_email = ? AND account_id = ?"
     )
     .bind(&sender_email)
     .bind(&account.id)
@@ -73,7 +103,7 @@ pub async fn get_sender_routing(
 
     Ok(row.map(|r| SenderRoutingInfo {
         sender_email: r.sender_email,
-        sender_name: None,
+        sender_name: r.sender_name,
         routing: r.routing,
         created_at: r.created_at,
         updated_at: r.updated_at,
@@ -90,13 +120,14 @@ pub async fn get_all_sender_routings(
     #[derive(sqlx::FromRow)]
     struct RoutingRow {
         sender_email: String,
+        sender_name: Option<String>,
         routing: String,
         created_at: i64,
         updated_at: i64,
     }
 
     let rows: Vec<RoutingRow> = sqlx::query_as(
-        "SELECT sender_email, routing, created_at, updated_at FROM sender_routing WHERE account_id = ? ORDER BY updated_at DESC"
+        "SELECT sender_email, sender_name, routing, created_at, updated_at FROM sender_routing WHERE account_id = ? ORDER BY updated_at DESC"
     )
     .bind(&account.id)
     .fetch_all(pool.inner())
@@ -105,11 +136,30 @@ pub async fn get_all_sender_routings(
 
     Ok(rows.into_iter().map(|r| SenderRoutingInfo {
         sender_email: r.sender_email,
-        sender_name: None,
+        sender_name: r.sender_name,
         routing: r.routing,
         created_at: r.created_at,
         updated_at: r.updated_at,
     }).collect())
+}
+
+/// Remove a routing decision so the sender returns to default (inbox) handling.
+#[tauri::command]
+pub async fn delete_sender_routing(
+    app_handle: tauri::AppHandle,
+    sender_email: String,
+) -> Result<(), String> {
+    let pool = app_handle.state::<sqlx::SqlitePool>();
+    let account = get_active_account(pool.inner()).await?;
+    let sender_email = crate::sender_routing::normalize_email(&sender_email);
+
+    sqlx::query("DELETE FROM sender_routing WHERE sender_email = ? AND account_id = ?")
+        .bind(&sender_email)
+        .bind(&account.id)
+        .execute(pool.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -244,6 +294,38 @@ mod tests {
         assert_eq!(rows.len(), 3);
         // Most recently updated first
         assert_eq!(rows[0].0, "c@test.com");
+    }
+
+    #[tokio::test]
+    async fn test_sender_routing_persists_sender_name() {
+        let pool = setup_test_db().await;
+        insert_account(&pool, "acc1", "test@test.com", "Test User", 1, 1000).await;
+
+        let now = chrono::Utc::now().timestamp();
+        sqlx::query(
+            "INSERT INTO sender_routing (sender_email, account_id, sender_name, routing, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+        )
+        .bind("named@example.com")
+        .bind("acc1")
+        .bind("Named Sender")
+        .bind("feed")
+        .bind(now)
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let row: (Option<String>, String) = sqlx::query_as(
+            "SELECT sender_name, routing FROM sender_routing WHERE sender_email = ? AND account_id = ?"
+        )
+        .bind("named@example.com")
+        .bind("acc1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(row.0.as_deref(), Some("Named Sender"));
+        assert_eq!(row.1, "feed");
     }
 
     #[tokio::test]

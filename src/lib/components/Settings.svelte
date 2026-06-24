@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import SenderRoutingManager from "$lib/components/SenderRoutingManager.svelte";
   import { getVersion } from "@tauri-apps/api/app";
   import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
   import {
@@ -635,6 +636,9 @@
                   </label>
                 </div>
               </div>
+              <div class="section-title" style="margin-top: 20px;">Manage Routing</div>
+              <p class="section-desc">Review and change where future emails from each sender are delivered.</p>
+              <SenderRoutingManager />
             </div>
 
           {:else if activeTab === "reading"}

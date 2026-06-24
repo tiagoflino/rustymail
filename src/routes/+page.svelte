@@ -56,6 +56,7 @@
     prepareQuotedHtml,
   } from "$lib/utils/formatters.js";
   import { snoozeOptions } from "$lib/utils/snooze";
+  import { collectSenderCandidates, firstNewSender } from "$lib/utils/email";
 
   interface LocalLabel {
     id: string;
@@ -1066,24 +1067,24 @@
   }
 
   async function checkNewSenders() {
-    if (!newSenderPrompt) {
-      try {
-        const enabled = await invoke("get_setting", { key: "smart_routing_enabled" });
-        if (enabled !== "true") return;
-        const currentThreads = get(threads);
-        // Check up to 5 most recent senders
-        const checked = new Set<string>();
-        for (const t of currentThreads.slice(0, 5)) {
-          const sender = t.sender?.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/)?.[0];
-          if (!sender || checked.has(sender)) continue;
-          checked.add(sender);
-          const isNew = await invoke("check_new_sender", { senderEmail: sender });
-          if (isNew) {
-            newSenderPrompt = { email: sender, name: t.sender };
-            break; // Show one at a time
-          }
-        }
-      } catch (_) { /* routing not available */ }
+    if (newSenderPrompt) return;
+    try {
+      const enabled = await invoke("get_setting", { key: "smart_routing_enabled" });
+      if (enabled !== "true") return;
+
+      const candidates = collectSenderCandidates(get(threads), 5);
+      if (candidates.length === 0) return;
+
+      const results: { sender_email: string; is_new: boolean }[] = await invoke(
+        "check_new_senders",
+        { senderEmails: candidates.map((c) => c.email) },
+      );
+      const firstNew = firstNewSender(candidates, results);
+      if (firstNew) {
+        newSenderPrompt = { email: firstNew.email, name: firstNew.name };
+      }
+    } catch (e) {
+      console.warn("checkNewSenders failed", e);
     }
   }
 
@@ -2173,8 +2174,9 @@
           senderEmail={newSenderPrompt.email}
           senderName={newSenderPrompt.name}
           onroute={async (routing) => {
-            const email = newSenderPrompt.email;
-            const name = newSenderPrompt.name;
+            const target = newSenderPrompt;
+            if (!target) return;
+            const { email, name } = target;
             newSenderPrompt = null;
             try {
               await invoke("set_sender_routing", { senderEmail: email, senderName: name, routing });
@@ -2183,7 +2185,17 @@
               addToast(`Failed to set routing: ${e}`, "error", 5000);
             }
           }}
-          onclose={() => { newSenderPrompt = null; }}
+          onclose={async () => {
+            const target = newSenderPrompt;
+            if (!target) return;
+            const { email, name } = target;
+            newSenderPrompt = null;
+            try {
+              await invoke("set_sender_routing", { senderEmail: email, senderName: name, routing: "inbox" });
+            } catch (e) {
+              console.warn("Failed to record inbox routing", e);
+            }
+          }}
         />
       {/if}
     {:else if viewMode === "calendar"}
