@@ -24,6 +24,12 @@
     type LocalMessage,
   } from "$lib/stores/messages";
   import { formatTime, decodeEntities } from "$lib/utils/formatters.js";
+  import {
+    shouldBlockRemoteImages,
+    allowsImageRestore,
+    hasBlockedImages,
+    restoreBlockedImages,
+  } from "$lib/utils/imageBlocking";
 
   // AI Summary panel state
   let aiSummary = $state<string | null>(null);
@@ -37,6 +43,10 @@
   let expandedMessages = $state(new Set<string>());
   let lastExpandedThreadId: string | null = null;
   let lastExpandedMsgIds: string | null = null;
+
+  // Per-message "Load Images" affordance (Ask First mode). Keyed by message id.
+  let blockedImageMessages = $state(new Set<string>());
+  const iframesByMessage = new Map<string, HTMLIFrameElement>();
 
   $effect(() => {
     const msgs = $currentMessages;
@@ -312,6 +322,19 @@
 
   function expandAll() {
     expandedMessages = new Set($currentMessages.map(m => m.id));
+  }
+
+  // "Load Images" affordance: restore the data-blocked-* placeholders the backend
+  // emitted, re-enabling remote content for this single message (Ask First mode).
+  function loadImagesFor(msgId: string) {
+    const iframe = iframesByMessage.get(msgId);
+    const doc = iframe?.contentDocument;
+    if (!doc) return;
+    restoreBlockedImages(doc);
+    const next = new Set(blockedImageMessages);
+    next.delete(msgId);
+    blockedImageMessages = next;
+    if (iframe) resizeIframe(iframe);
   }
 
   interface Props {
@@ -622,31 +645,61 @@
                 {#if msg.body_html}
                   <iframe
                     title="Email Body"
+                    sandbox="allow-same-origin"
                     style="width:100%;height:0;border:none;overflow:hidden;background:#f5f5f5;border-radius:6px;opacity:0;transition:opacity .15s;"
                     onload={async (e) => {
                       const iframe = e.currentTarget as HTMLIFrameElement;
                       oniframeload(iframe);
+                      iframesByMessage.set(msg.id, iframe);
                       try {
                         const doc = iframe.contentDocument;
                         if (!doc) return;
                         doc.open();
 
-                        // Apply privacy protections before rendering HTML
+                        // Apply privacy protections before rendering HTML. The
+                        // backend rewriter strips every remote-content vector into
+                        // recoverable data-blocked-* attributes; the iframe sandbox
+                        // (no allow-scripts) plus CSP below are the XSS/exfiltration
+                        // defense for attacker-controlled email HTML.
                         let displayHtml = msg.body_html;
+                        let imageMode: string | null = null;
                         try {
-                          const imageMode = await invoke("get_setting", { key: "image_load_mode" });
-                          if (imageMode === "ask" || imageMode === "never") {
-                            displayHtml = await invoke("proxy_remote_images", { html: displayHtml });
+                          imageMode = (await invoke("get_setting", { key: "image_load_mode" })) as string;
+                        } catch (err) {
+                          console.warn('[EmailBody] could not read image_load_mode, defaulting to block', err);
+                          imageMode = 'ask';
+                        }
+                        // NOTE: tracking-pixel detection beyond remote-image blocking
+                        // (the "Block Tracking Pixels" toggle) depends on the
+                        // scan_tracking_content command from PR #33 (FOR-189), which
+                        // is not on this branch. Remote-image blocking below already
+                        // neutralizes the most common tracking-pixel vector; richer
+                        // beacon detection is wired once #33 lands.
+                        if (shouldBlockRemoteImages(imageMode)) {
+                          try {
+                            displayHtml = (await invoke("proxy_remote_images", { html: displayHtml, mode: imageMode })) as string;
+                          } catch (err) {
+                            // Fail closed for a privacy feature: if blocking cannot
+                            // run, strip remote http(s) image sources rather than
+                            // silently loading them.
+                            console.error('[EmailBody] proxy_remote_images failed, stripping remote img src', err);
+                            displayHtml = displayHtml.replace(/(<img\b[^>]*?\b)src\s*=\s*(["'])\s*https?:\/\/[^"']*\2/gi, '$1data-blocked-src=$2$2');
                           }
-                          const blockPixels = await invoke("get_setting", { key: "block_tracking_pixels" });
-                          if (blockPixels === "true") {
-                            const scanResult = await invoke("scan_tracking_content", { html: displayHtml });
-                            displayHtml = scanResult.cleaned_html;
-                          }
-                        } catch (_) { /* if commands not available, render as-is */ }
+                        }
 
-                        doc.write('<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light only"><style>body{margin:0;padding:0;background:#f5f5f5;overflow:hidden}html,body{height:auto!important;min-height:0!important}.quote-toggle{display:inline-block;cursor:pointer;padding:2px 8px;margin:4px 0;border-radius:4px;background:rgba(0,0,0,0.06);color:#666;font-size:12px;border:none;line-height:1;font-family:-apple-system,sans-serif}.quote-toggle:hover{background:rgba(0,0,0,0.1)}.quote-hidden{display:none}</style></head><body><div style="max-width:680px;margin:0 auto;padding:12px;">' + displayHtml + '</div></body></html>');
+                        const csp = "default-src 'none'; img-src http: https: data: cid:; style-src 'unsafe-inline'; font-src http: https: data:; media-src http: https: cid:; script-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'";
+                        doc.write('<html><head><meta http-equiv="Content-Security-Policy" content="' + csp + '"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light only"><style>body{margin:0;padding:0;background:#f5f5f5;overflow:hidden}html,body{height:auto!important;min-height:0!important}.quote-toggle{display:inline-block;cursor:pointer;padding:2px 8px;margin:4px 0;border-radius:4px;background:rgba(0,0,0,0.06);color:#666;font-size:12px;border:none;line-height:1;font-family:-apple-system,sans-serif}.quote-toggle:hover{background:rgba(0,0,0,0.1)}.quote-hidden{display:none}</style></head><body><div style="max-width:680px;margin:0 auto;padding:12px;">' + displayHtml + '</div></body></html>');
                         doc.close();
+
+                        // Track whether this message still has blocked remote content
+                        // so the "Load Images" affordance can be shown (Ask First only).
+                        const next = new Set(blockedImageMessages);
+                        if (allowsImageRestore(imageMode) && hasBlockedImages(doc)) {
+                          next.add(msg.id);
+                        } else {
+                          next.delete(msg.id);
+                        }
+                        blockedImageMessages = next;
                         doc.querySelectorAll('.gmail_quote,blockquote').forEach((q: Element) => {
                           if (q.closest('.quote-hidden')) return;
                           q.classList.add('quote-hidden');
@@ -679,6 +732,13 @@
                       }
                     }}
                   ></iframe>
+                  {#if blockedImageMessages.has(msg.id)}
+                    <div class="load-images-bar">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                      <span class="load-images-text">Remote images blocked for your privacy</span>
+                      <button class="load-images-btn" onclick={() => loadImagesFor(msg.id)}>Load Images</button>
+                    </div>
+                  {/if}
                 {:else if msg.body_plain}
                   {@const parts = msg.is_draft ? { main: msg.body_plain, quoted: null } : splitPlainTextQuote(msg.body_plain)}
                   <pre class="plain-body">{parts.main}</pre>
@@ -1133,6 +1193,40 @@
     line-height: 1.6;
     color: var(--text-primary);
     overflow-x: hidden;
+  }
+  .load-images-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-sidebar, rgba(0, 0, 0, 0.03));
+    color: var(--text-secondary);
+    font-size: var(--font-size-toolbar);
+    line-height: 15px;
+  }
+  .load-images-text {
+    flex: 1;
+    min-width: 0;
+  }
+  .load-images-btn {
+    flex-shrink: 0;
+    padding: 5px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-standard);
+    background: transparent;
+    color: var(--text-primary);
+    font-size: var(--font-size-small);
+    font-weight: 500;
+    font-family: var(--font-family);
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+  }
+  .load-images-btn:hover {
+    background: var(--sidebar-hover);
+    color: var(--text-primary);
   }
   .plain-body {
     white-space: pre-wrap;

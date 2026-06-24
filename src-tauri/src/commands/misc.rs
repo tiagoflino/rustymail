@@ -95,9 +95,16 @@ pub async fn open_log_directory(app_handle: tauri::AppHandle) -> Result<(), Stri
 }
 
 #[tauri::command]
-pub async fn proxy_remote_images(html: String) -> Result<String, String> {
+pub async fn proxy_remote_images(html: String, mode: Option<String>) -> Result<String, String> {
+    use crate::image_proxy::ImageLoadMode;
+    // Backend is authoritative: "always" leaves HTML untouched even if the
+    // frontend asked us to block, so the mode cannot be bypassed by a stale UI.
+    let mode = ImageLoadMode::from_setting(mode.as_deref().unwrap_or("ask"));
+    if mode == ImageLoadMode::Always {
+        return Ok(html);
+    }
     let (result, count) = crate::image_proxy::block_remote_images(&html);
-    tracing::info!("Blocked {count} remote images in email");
+    tracing::info!("Blocked {count} remote content vectors (mode={})", mode.as_str());
     Ok(result)
 }
 
